@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+:root {
+	color-scheme: light;
+	--background: #edf2ff;
+	--foreground: #101528;
+	--surface: rgba(255, 255, 255, 0.82);
+	--surface-strong: rgba(255, 255, 255, 0.94);
+	--surface-muted: rgba(238, 244, 255, 0.92);
+	--border-soft: rgba(84, 98, 130, 0.25);
+	--border-strong: rgba(57, 70, 99, 0.45);
+	--text-primary: #131a2e;
+	--text-secondary: #2f3f62;
+	--text-muted: #536482;
+	--field-text: #0f172a;
+	--field-placeholder: #64748b;
+	--field-bg: #ffffff;
+	--field-border: #9fd7e9;
+	--brand: #1d6ff2;
+	--brand-strong: #0c4fb9;
+	--shadow-soft: 0 24px 56px rgba(15, 30, 73, 0.14);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-surface: var(--surface);
+	--font-sans: var(--font-jakarta);
+	--font-mono: var(--font-space);
+}
+
+body {
+	min-height: 100vh;
+	background: var(--background);
+	background-image: radial-gradient(circle at 8% 9%, rgba(58, 118, 255, 0.22), transparent 45%), radial-gradient(circle at 90% 0%, rgba(30, 167, 255, 0.18), transparent 40%), radial-gradient(circle at 70% 83%, rgba(28, 205, 162, 0.14), transparent 42%), linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0));
+	color: var(--text-primary);
+	font-family: var(--font-jakarta), 'Segoe UI', sans-serif;
+}
+
+body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	background-image: linear-gradient(115deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 42%, rgba(255, 255, 255, 0.2) 100%);
+	opacity: 0.75;
+}
+
+h1,
+h2,
+h3,
+h4 {
+	font-family: var(--font-space), 'Segoe UI', sans-serif;
+	letter-spacing: -0.01em;
+}
+
+input,
+select,
+textarea {
+	background-color: var(--field-bg) !important;
+	color: var(--field-text) !important;
+	-webkit-text-fill-color: var(--field-text) !important;
+	caret-color: var(--field-text);
+	border-color: var(--field-border);
+	opacity: 1;
+}
+
+label {
+	color: var(--text-primary);
+	font-weight: 500;
+}
+
+input::placeholder,
+textarea::placeholder {
+	color: var(--field-placeholder) !important;
+	-webkit-text-fill-color: var(--field-placeholder) !important;
+	opacity: 1;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+	color: var(--field-text) !important;
+	-webkit-text-fill-color: var(--field-text) !important;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+select:-webkit-autofill,
+select:-webkit-autofill:hover,
+select:-webkit-autofill:focus {
+	-webkit-text-fill-color: var(--field-text) !important;
+	box-shadow: 0 0 0px 1000px var(--field-bg) inset !important;
+	transition: background-color 9999s ease-in-out 0s;
+}
+
+::selection {
+	background: color-mix(in srgb, var(--brand) 35%, transparent);
+	color: var(--text-primary);
+}
