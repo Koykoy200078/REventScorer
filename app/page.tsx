@@ -49,7 +49,7 @@ export default async function HomePage() {
 												Contestants: {event.contestantCount} | Judges: {event.judgeCount} | Submitted: {event.submittedJudgeCount}
 											</p>
 										</div>
-										<Link href={`/admin/${event.id}`} className='inline-flex items-center rounded-full border border-transparent bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--shadow-soft)] transition hover:bg-[var(--brand-strong)]'>
+										<Link href={`/admin/${event.id}`} className='inline-flex items-center self-center sm:self-auto rounded-full border border-transparent bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--shadow-soft)] transition hover:bg-[var(--brand-strong)]'>
 											Open Admin Results
 										</Link>
 									</div>

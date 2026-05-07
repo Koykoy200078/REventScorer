@@ -17,7 +17,13 @@ export async function POST(request: Request): Promise<Response> {
 	try {
 		const body = (await request.json()) as CreateEventInput
 		const event = await createEvent(body)
-		const origin = new URL(request.url).origin
+		
+		const url = new URL(request.url)
+		const hostHeader = request.headers.get('host') || request.headers.get('x-forwarded-host')
+		if (hostHeader) {
+			url.host = hostHeader
+		}
+		const origin = url.origin
 
 		const responsePayload: CreateEventResponse = {
 			eventId: event.id,

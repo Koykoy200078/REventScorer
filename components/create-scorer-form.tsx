@@ -178,12 +178,27 @@ export function CreateScorerForm() {
 
 	async function copyLink(value: string): Promise<void> {
 		try {
-			await navigator.clipboard.writeText(value)
+			if (navigator.clipboard && window.isSecureContext) {
+				await navigator.clipboard.writeText(value)
+			} else {
+				const textArea = document.createElement('textarea')
+				textArea.value = value
+				textArea.style.position = 'fixed'
+				textArea.style.left = '-999999px'
+				textArea.style.top = '-999999px'
+				document.body.appendChild(textArea)
+				textArea.focus()
+				textArea.select()
+				const success = document.execCommand('copy')
+				textArea.remove()
+				if (!success) throw new Error('Copy command failed')
+			}
 			setCopiedValue(value)
 			window.setTimeout(() => {
 				setCopiedValue((currentValue) => (currentValue === value ? null : currentValue))
 			}, 1800)
-		} catch {
+		} catch (err) {
+			console.error('Clipboard copy failed:', err)
 			setCopiedValue(null)
 		}
 	}
