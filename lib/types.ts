@@ -53,6 +53,7 @@ export interface JudgeSubmission {
 	judgeId: string
 	submittedAt: string
 	scores: ScoreMatrix
+	savedContestantIds?: string[]
 }
 
 export interface EventScorer {

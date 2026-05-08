@@ -13,6 +13,7 @@ interface JudgeScoringFormProps {
 	criteria: EventCriterion[]
 	judge: JudgeProfile
 	existingScores?: ScoreMatrix
+	existingSavedContestantIds?: string[]
 	submittedAt?: string
 }
 
@@ -74,7 +75,13 @@ function hasPositiveDraftScore(scores: InputScoreMatrix, contestantId: string, c
 	return false
 }
 
-function detectInitiallyScoredContestants(contestants: EventContestant[], criteria: EventCriterion[], existingScores?: ScoreMatrix): Set<string> {
+function detectInitiallyScoredContestants(contestants: EventContestant[], criteria: EventCriterion[], existingScores?: ScoreMatrix, existingSavedContestantIds?: string[]): Set<string> {
+	if (Array.isArray(existingSavedContestantIds) && existingSavedContestantIds.length > 0) {
+		const validContestantIds = new Set(contestants.map((contestant) => contestant.id))
+		const filteredSavedIds = existingSavedContestantIds.filter((contestantId) => validContestantIds.has(contestantId))
+		return new Set(filteredSavedIds)
+	}
+
 	if (!existingScores) {
 		return new Set<string>()
 	}
@@ -121,10 +128,10 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, existingScores, submittedAt }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, existingScores, existingSavedContestantIds, submittedAt }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
-	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores))
+	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores, existingSavedContestantIds))
 	const [activeContestantIndex, setActiveContestantIndex] = useState(0)
 	const [isSaving, setIsSaving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -233,7 +240,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			const response = await fetch(`/api/judge/${token}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ scores: payload }),
+				body: JSON.stringify({ scores: payload, contestantId: activeContestant.id }),
 			})
 
 			const responseBody = (await response.json()) as { error?: string; submittedAt?: string }

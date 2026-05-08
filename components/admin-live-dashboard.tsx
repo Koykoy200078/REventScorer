@@ -6,6 +6,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventCriterion, EventScorer } from '@/lib/types'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+type ProgramLabel = 'BSINT' | 'BSCS'
+
+interface ProgramTopTeam {
+	program: ProgramLabel
+	teamName: string
+	contestantName: string
+	rank: number
+	averageScore: number
+	totalScore: number
+	judgeCount: number
+}
 
 interface AdminLiveDashboardProps {
 	initialEvent: EventScorer
@@ -67,6 +78,73 @@ function connectionBadgeClass(state: ConnectionState): string {
 	return 'rounded-full border border-rose-300 bg-rose-600 px-3 py-1 text-xs font-semibold text-white shadow-sm'
 }
 
+function detectProgramLabel(contestantName: string): ProgramLabel | null {
+	const uppercaseName = contestantName.toUpperCase()
+
+	if (/\bBSINT\b/.test(uppercaseName)) {
+		return 'BSINT'
+	}
+
+	if (/\bBSCS\b/.test(uppercaseName)) {
+		return 'BSCS'
+	}
+
+	return null
+}
+
+function extractDynamicTeamName(contestantName: string): string {
+	const cleanedName = contestantName
+		.replace(/\bBSINT\b|\bBSCS\b/gi, ' ')
+		.replace(/[|_]+/g, ' ')
+		.replace(/\s{2,}/g, ' ')
+		.replace(/^[\s\-:|/\\]+|[\s\-:|/\\]+$/g, '')
+		.trim()
+
+	return cleanedName.length > 0 ? cleanedName : contestantName
+}
+
+function topTeamsByProgram(rankings: EventCompiledResults['rankings']): Record<ProgramLabel, ProgramTopTeam | null> {
+	const topByProgram: Record<ProgramLabel, ProgramTopTeam | null> = {
+		BSINT: null,
+		BSCS: null,
+	}
+
+	for (const result of rankings) {
+		const detectedProgram = detectProgramLabel(result.contestantName)
+		if (!detectedProgram) {
+			continue
+		}
+
+		const candidate: ProgramTopTeam = {
+			program: detectedProgram,
+			teamName: extractDynamicTeamName(result.contestantName),
+			contestantName: result.contestantName,
+			rank: result.rank,
+			averageScore: result.averageScore,
+			totalScore: result.totalScore,
+			judgeCount: result.judgeCount,
+		}
+
+		const existing = topByProgram[detectedProgram]
+
+		if (!existing) {
+			topByProgram[detectedProgram] = candidate
+			continue
+		}
+
+		if (candidate.rank < existing.rank) {
+			topByProgram[detectedProgram] = candidate
+			continue
+		}
+
+		if (candidate.rank === existing.rank && candidate.averageScore > existing.averageScore) {
+			topByProgram[detectedProgram] = candidate
+		}
+	}
+
+	return topByProgram
+}
+
 export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
@@ -78,6 +156,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const refreshInFlight = useRef(false)
 
 	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
+	const analyticsByProgram = useMemo(() => topTeamsByProgram(compiled.rankings), [compiled.rankings])
 
 	const copyLink = useCallback(async (value: string) => {
 		try {
@@ -142,56 +221,135 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 		let reconnectTimer: number | null = null
 		let isDisposed = false
 
+		const parsePort = (value: string | undefined, fallback: number) => {
+			const parsed = Number.parseInt(value || '', 10)
+			return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+		}
+
+		const backendPort = parsePort(process.env.NEXT_PUBLIC_BACKEND_PORT, 3007)
+		const backendHttpPort = parsePort(process.env.NEXT_PUBLIC_BACKEND_HTTP_PORT, backendPort)
+
+		function buildSocketCandidates(): string[] {
+			const host = window.location.hostname
+			const isSecurePage = window.location.protocol === 'https:'
+			const query = `?eventId=${encodeURIComponent(eventId)}`
+			const path = `/ws/admin-scores${query}`
+
+			const candidates: string[] = []
+			const pushUnique = (url: string) => {
+				if (!candidates.includes(url)) candidates.push(url)
+			}
+
+			if (isSecurePage) {
+				pushUnique(`wss://${host}:${backendPort}${path}`)
+				return candidates
+			}
+
+			const portCandidates = Array.from(new Set([backendHttpPort, backendPort]))
+
+			// On HTTP pages, prefer the backend's plain HTTP listener first.
+			for (const port of portCandidates) {
+				pushUnique(`ws://${host}:${port}${path}`)
+			}
+
+			return candidates
+		}
+
 		function connectSocket() {
 			if (isDisposed) {
 				return
 			}
 
 			setConnectionState((current) => (current === 'connected' ? 'reconnecting' : 'connecting'))
+			const candidates = buildSocketCandidates()
 
-			const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-			const backendPort = process.env.NEXT_PUBLIC_BACKEND_PORT || '3007'
-			const socketUrl = `${protocol}://${window.location.hostname}:${backendPort}/ws/admin-scores?eventId=${encodeURIComponent(eventId)}`
-			socket = new WebSocket(socketUrl)
-
-			socket.onopen = () => {
+			const openCandidate = (index: number) => {
 				if (isDisposed) {
 					return
 				}
 
-				setConnectionState('connected')
-			}
+				if (index >= candidates.length) {
+					setConnectionState('reconnecting')
+					reconnectTimer = window.setTimeout(connectSocket, 1700)
+					return
+				}
 
-			socket.onmessage = async (messageEvent) => {
-				try {
-					const decoded = JSON.parse(String(messageEvent.data)) as {
-						type?: string
-						data?: AdminScoreRealtimeUpdate
-					}
+				const socketUrl = candidates[index]
+				let opened = false
+				let advanced = false
 
-					if (decoded.type !== 'score:update' || !decoded.data) {
+				const advance = () => {
+					if (advanced || isDisposed) {
 						return
 					}
+					advanced = true
+					openCandidate(index + 1)
+				}
 
-					setLastSignalAt(decoded.data.submittedAt ?? new Date().toISOString())
-					await refreshDashboard()
+				try {
+					const currentSocket = new WebSocket(socketUrl)
+					socket = currentSocket
+
+					currentSocket.onopen = () => {
+						if (isDisposed) {
+							return
+						}
+
+						opened = true
+						setConnectionState('connected')
+					}
+
+					currentSocket.onmessage = async (messageEvent) => {
+						try {
+							const decoded = JSON.parse(String(messageEvent.data)) as {
+								type?: string
+								data?: AdminScoreRealtimeUpdate
+							}
+
+							if (decoded.type !== 'score:update' || !decoded.data) {
+								return
+							}
+
+							setLastSignalAt(decoded.data.submittedAt ?? new Date().toISOString())
+							await refreshDashboard()
+						} catch {
+							// Ignore malformed websocket frames and keep session alive.
+						}
+					}
+
+					currentSocket.onerror = () => {
+						if (!opened) {
+							try {
+								currentSocket.close()
+							} catch {
+								// ignore close failures
+							}
+							advance()
+							return
+						}
+
+						currentSocket.close()
+					}
+
+					currentSocket.onclose = () => {
+						if (isDisposed) {
+							return
+						}
+
+						if (!opened) {
+							advance()
+							return
+						}
+
+						setConnectionState('reconnecting')
+						reconnectTimer = window.setTimeout(connectSocket, 1700)
+					}
 				} catch {
-					// Ignore malformed websocket frames and keep session alive.
+					advance()
 				}
 			}
 
-			socket.onerror = () => {
-				socket?.close()
-			}
-
-			socket.onclose = () => {
-				if (isDisposed) {
-					return
-				}
-
-				setConnectionState('reconnecting')
-				reconnectTimer = window.setTimeout(connectSocket, 1700)
-			}
+			openCandidate(0)
 		}
 
 		connectSocket()
@@ -292,6 +450,40 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 						) : (
 							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
 						)}
+					</section>
+
+					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Program Analytics</h2>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams from Compiled Scores for BSINT and BSCS.</p>
+
+						<div className='mt-4 grid gap-3 sm:grid-cols-2'>
+							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
+								const topTeam = analyticsByProgram[program]
+
+								return (
+									<article key={program} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>{program}</p>
+										{topTeam ? (
+											<>
+												<p className='mt-1 text-lg font-semibold text-[var(--text-primary)]'>{topTeam.teamName}</p>
+												<p className='text-xs text-[var(--text-muted)]'>Source: {topTeam.contestantName}</p>
+												<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+													Rank: <span className='font-semibold'>#{topTeam.rank}</span>
+												</p>
+												<p className='text-sm text-[var(--text-secondary)]'>
+													Average: <span className='font-semibold'>{formatScore(topTeam.averageScore)}</span>
+												</p>
+												<p className='text-xs text-[var(--text-muted)]'>
+													Total: {formatScore(topTeam.totalScore)} | Judges Counted: {topTeam.judgeCount}
+												</p>
+											</>
+										) : (
+											<p className='mt-2 text-sm text-[var(--text-secondary)]'>No {program} team found in Compiled Scores.</p>
+										)}
+									</article>
+								)
+							})}
+						</div>
 					</section>
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
@@ -397,9 +589,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 					<thead>
 						<tr>
 							<th className='border border-black p-2 font-bold uppercase'>Contestant No. / Name</th>
-							{event.judges.map((j, i) => (
+							{event.judges.map((j) => (
 								<th key={j.id} className='whitespace-nowrap border border-black p-2 font-bold uppercase'>
-									Judge {i + 1}
+									{j.name}
 								</th>
 							))}
 							<th className='border border-black p-2 font-bold uppercase'>Total</th>

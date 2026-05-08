@@ -209,6 +209,69 @@ function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown): ScoreMatr
 	return normalized
 }
 
+function hasPositiveScoreForContestant(scores: ScoreMatrix, contestantId: string): boolean {
+	const contestantScores = scores[contestantId]
+
+	if (!contestantScores || typeof contestantScores !== 'object') {
+		return false
+	}
+
+	for (const rawScore of Object.values(contestantScores)) {
+		const numericScore = Number(rawScore)
+		if (Number.isFinite(numericScore) && numericScore > 0) {
+			return true
+		}
+	}
+
+	return false
+}
+
+function savedContestantIdsForSubmission(event: EventScorer, submission: EventScorer['submissions'][number]): Set<string> {
+	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
+
+	if (Array.isArray(submission.savedContestantIds) && submission.savedContestantIds.length > 0) {
+		return new Set(submission.savedContestantIds.filter((contestantId) => validContestantIds.has(contestantId)))
+	}
+
+	const inferredSavedIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission.scores, contestant.id)).map((contestant) => contestant.id)
+
+	return new Set(inferredSavedIds)
+}
+
+function countSubmittedJudges(event: EventScorer): number {
+	const submissionsByJudge = new Map(event.submissions.map((submission) => [submission.judgeId, submission]))
+
+	return event.judges.reduce((count, judge) => {
+		const submission = submissionsByJudge.get(judge.id)
+		if (!submission) {
+			return count
+		}
+
+		const savedContestantIds = savedContestantIdsForSubmission(event, submission)
+		return savedContestantIds.size > 0 ? count + 1 : count
+	}, 0)
+}
+
+function buildSavedContestantIds(event: EventScorer, previousSubmission: EventScorer['submissions'][number] | undefined, savedContestantId: string): string[] {
+	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
+
+	if (!validContestantIds.has(savedContestantId)) {
+		throw new Error('Contestant not found for this event.')
+	}
+
+	const savedIds = new Set<string>()
+
+	if (previousSubmission) {
+		for (const contestantId of savedContestantIdsForSubmission(event, previousSubmission)) {
+			savedIds.add(contestantId)
+		}
+	}
+
+	savedIds.add(savedContestantId)
+
+	return Array.from(savedIds)
+}
+
 export async function listEvents(): Promise<EventScorer[]> {
 	const store = await readStore()
 	return store.events.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -223,7 +286,7 @@ export async function listEventSummaries(): Promise<EventSummary[]> {
 		createdAt: event.createdAt,
 		contestantCount: event.contestants.length,
 		judgeCount: event.judges.length,
-		submittedJudgeCount: event.submissions.length,
+		submittedJudgeCount: countSubmittedJudges(event),
 	}))
 }
 
@@ -271,7 +334,7 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 	return undefined
 }
 
-export async function submitJudgeScoresByToken(token: string, rawScores: unknown): Promise<{ event: EventScorer; judge: EventJudge; submittedAt: string }> {
+export async function submitJudgeScoresByToken(token: string, rawScores: unknown, savedContestantId: string): Promise<{ event: EventScorer; judge: EventJudge; submittedAt: string }> {
 	const store = await readStore()
 
 	for (let index = 0; index < store.events.length; index += 1) {
@@ -285,15 +348,18 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 		const normalizedScores = normalizeScoreMatrix(event, rawScores)
 		const submittedAt = new Date().toISOString()
 		const submissionIndex = event.submissions.findIndex((submission) => submission.judgeId === judge.id)
+		const previousSubmission = submissionIndex >= 0 ? event.submissions[submissionIndex] : undefined
+		const savedContestantIds = buildSavedContestantIds(event, previousSubmission, savedContestantId)
 
 		if (submissionIndex >= 0) {
 			event.submissions[submissionIndex] = {
 				judgeId: judge.id,
 				scores: normalizedScores,
 				submittedAt,
+				savedContestantIds,
 			}
 		} else {
-			event.submissions.push({ judgeId: judge.id, scores: normalizedScores, submittedAt })
+			event.submissions.push({ judgeId: judge.id, scores: normalizedScores, submittedAt, savedContestantIds })
 		}
 
 		store.events[index] = event

@@ -42,6 +42,36 @@ function scoreJudgeSubmission(event: EventScorer, submission: JudgeSubmission): 
 	return totals
 }
 
+function hasPositiveScoreForContestant(submission: JudgeSubmission, contestantId: string): boolean {
+	const contestantScores = submission.scores[contestantId]
+
+	if (!contestantScores || typeof contestantScores !== 'object') {
+		return false
+	}
+
+	for (const rawScore of Object.values(contestantScores)) {
+		const numericScore = Number(rawScore)
+		if (Number.isFinite(numericScore) && numericScore > 0) {
+			return true
+		}
+	}
+
+	return false
+}
+
+function savedContestantIdsForSubmission(event: EventScorer, submission: JudgeSubmission): Set<string> {
+	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
+
+	if (Array.isArray(submission.savedContestantIds) && submission.savedContestantIds.length > 0) {
+		return new Set(submission.savedContestantIds.filter((contestantId) => validContestantIds.has(contestantId)))
+	}
+
+	// Backward compatibility for older submissions that do not yet track saved contestant IDs.
+	const inferredSavedContestantIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission, contestant.id)).map((contestant) => contestant.id)
+
+	return new Set(inferredSavedContestantIds)
+}
+
 function withRanks(sortedResults: CompiledContestantResult[]): CompiledContestantResult[] {
 	let lastAverageScore: number | null = null
 	let currentRank = 0
@@ -92,8 +122,25 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 		}
 
 		const judgeTotals = scoreJudgeSubmission(event, submission)
+		const savedContestantIds = savedContestantIdsForSubmission(event, submission)
+
+		if (savedContestantIds.size === 0) {
+			judgeBreakdown.push({
+				judgeId: judge.id,
+				judgeName: judge.name,
+				submitted: false,
+				totalsByContestant: {},
+			})
+			continue
+		}
+
+		const totalsByContestant = Object.fromEntries(Object.entries(judgeTotals).filter(([contestantId]) => savedContestantIds.has(contestantId)))
 
 		for (const contestant of event.contestants) {
+			if (!savedContestantIds.has(contestant.id)) {
+				continue
+			}
+
 			const aggregate = aggregateByContestant.get(contestant.id)
 			if (!aggregate) {
 				continue
@@ -110,7 +157,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			judgeName: judge.name,
 			submitted: true,
 			submittedAt: submission.submittedAt,
-			totalsByContestant: judgeTotals,
+			totalsByContestant,
 		})
 	}
 
@@ -150,9 +197,11 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			return left.contestantName.localeCompare(right.contestantName)
 		})
 
+	const submittedJudgeCount = judgeBreakdown.filter((judge) => judge.submitted).length
+
 	return {
 		maxPossibleScore,
-		submittedJudgeCount: event.submissions.length,
+		submittedJudgeCount,
 		totalJudgeCount: event.judges.length,
 		rankings: withRanks(results),
 		judgeBreakdown,
