@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { CreateEventInput, EventContestant, EventCriterion, EventJudge, EventScorer, EventSubCriterion, EventSummary, JudgeSessionData, ScoreMatrix } from '@/lib/types'
+import type { ContestantEntryType, CreateEventInput, EventContestant, EventCriterion, EventJudge, EventPresentationSlot, EventScorer, EventScoringType, EventSubCriterion, EventSummary, JudgeSessionData, ScoreMatrix } from '@/lib/types'
 
 interface StoreShape {
 	events: EventScorer[]
@@ -39,6 +39,50 @@ function uniqueCaseInsensitive(values: string[]): string[] {
 	return result
 }
 
+function parseEventScoringType(value: unknown): EventScoringType | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+
+	const normalized = compactWhitespace(value)
+		.toLowerCase()
+		.replace(/[_\s]+/g, '-')
+
+	if (normalized === 'final-oral-defense') {
+		return 'final-oral-defense'
+	}
+
+	if (normalized === 'standard') {
+		return 'standard'
+	}
+
+	return null
+}
+
+function inferEventScoringTypeFromCriteria(criteria: unknown): EventScoringType {
+	if (!Array.isArray(criteria)) {
+		return 'standard'
+	}
+
+	const normalizedNames = new Set(
+		criteria
+			.map((criterion) => {
+				if (!criterion || typeof criterion !== 'object') {
+					return ''
+				}
+
+				const rawName = (criterion as { name?: unknown }).name
+				return compactWhitespace(String(rawName ?? '')).toLowerCase()
+			})
+			.filter((name) => name.length > 0),
+	)
+
+	const hasGroupPresentation = normalizedNames.has('group presentation')
+	const hasIndividualPresentation = normalizedNames.has('individual presentation')
+
+	return hasGroupPresentation && hasIndividualPresentation ? 'final-oral-defense' : 'standard'
+}
+
 async function readStore(): Promise<StoreShape> {
 	try {
 		const raw = await readFile(DATA_FILE, 'utf8')
@@ -48,7 +92,35 @@ async function readStore(): Promise<StoreShape> {
 			return { events: [] }
 		}
 
-		return { events: parsed.events }
+		let didMigrateEvents = false
+		const migratedEvents = parsed.events.map((event) => {
+			if (!event || typeof event !== 'object') {
+				didMigrateEvents = true
+				return event as EventScorer
+			}
+
+			const typedEvent = event as EventScorer
+			const parsedType = parseEventScoringType(typedEvent.eventScoringType)
+			const nextType = parsedType ?? inferEventScoringTypeFromCriteria(typedEvent.criteria)
+
+			if (parsedType === nextType && typedEvent.eventScoringType === nextType) {
+				return typedEvent
+			}
+
+			didMigrateEvents = true
+			return {
+				...typedEvent,
+				eventScoringType: nextType,
+			}
+		})
+
+		if (didMigrateEvents) {
+			const migratedStore: StoreShape = { events: migratedEvents }
+			await writeStore(migratedStore)
+			return migratedStore
+		}
+
+		return { events: migratedEvents }
 	} catch (error) {
 		const maybeError = error as NodeJS.ErrnoException
 
@@ -68,15 +140,73 @@ async function writeStore(store: StoreShape): Promise<void> {
 	await writeFile(DATA_FILE, JSON.stringify(store, null, 2), 'utf8')
 }
 
-function normalizeContestants(contestants: string[]): EventContestant[] {
-	const cleaned = contestants.map((contestant) => compactWhitespace(contestant)).filter((contestant) => contestant.length > 0)
-	const unique = uniqueCaseInsensitive(cleaned)
+function normalizeContestantEntryType(value: unknown): ContestantEntryType {
+	return value === 'individual' ? 'individual' : 'group'
+}
+
+function normalizeEventScoringType(value: unknown): EventScoringType {
+	return parseEventScoringType(value) ?? 'standard'
+}
+
+function normalizeContestantParticipants(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return []
+	}
+
+	const cleaned = value.map((participant) => compactWhitespace(String(participant ?? ''))).filter((participant) => participant.length > 0)
+	return uniqueCaseInsensitive(cleaned)
+}
+
+function normalizeContestants(contestants: CreateEventInput['contestants']): EventContestant[] {
+	const cleaned = contestants
+		.map((contestant) => {
+			if (typeof contestant === 'string') {
+				return {
+					name: compactWhitespace(contestant),
+					entryType: 'group' as ContestantEntryType,
+					participants: [] as string[],
+				}
+			}
+
+			if (!contestant || typeof contestant !== 'object') {
+				return {
+					name: '',
+					entryType: 'group' as ContestantEntryType,
+					participants: [] as string[],
+				}
+			}
+
+			return {
+				name: compactWhitespace(contestant.name ?? ''),
+				entryType: normalizeContestantEntryType(contestant.entryType),
+				participants: normalizeContestantParticipants(contestant.participants),
+			}
+		})
+		.filter((contestant) => contestant.name.length > 0)
+
+	const seen = new Set<string>()
+	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[] }>
+
+	for (const contestant of cleaned) {
+		const key = `${contestant.entryType}|${contestant.name.toLowerCase()}`
+		if (seen.has(key)) {
+			continue
+		}
+
+		seen.add(key)
+		unique.push(contestant)
+	}
 
 	if (unique.length < 2) {
 		throw new Error('At least 2 contestants are required.')
 	}
 
-	return unique.map((name) => ({ id: randomUUID(), name }))
+	return unique.map((contestant) => ({
+		id: randomUUID(),
+		name: contestant.name,
+		entryType: contestant.entryType,
+		participants: contestant.entryType === 'group' && contestant.participants.length > 0 ? contestant.participants : undefined,
+	}))
 }
 
 function normalizeJudges(judges: CreateEventInput['judges']): EventJudge[] {
@@ -124,7 +254,82 @@ function normalizeSubCriteria(subCriteria: CreateEventInput['criteria'][number][
 	}))
 }
 
-function normalizeCriteria(criteria: CreateEventInput['criteria']): EventCriterion[] {
+function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
+	const separatorIndex = name.indexOf(' - ')
+	if (separatorIndex === -1) {
+		return { memberLabel: 'Individual', displayName: name }
+	}
+
+	const memberLabel = name.slice(0, separatorIndex).trim()
+	const displayName = name.slice(separatorIndex + 3).trim()
+	return {
+		memberLabel: memberLabel || 'Individual',
+		displayName: displayName || name,
+	}
+}
+
+function memberIndexFromLabel(memberLabel: string): number | null {
+	const match = memberLabel.match(/(\d+)\s*$/)
+	if (!match) {
+		return null
+	}
+
+	const index = Number.parseInt(match[1], 10)
+	return Number.isFinite(index) && index > 0 ? index : null
+}
+
+function isIndividualPresentationCriterionName(name: string): boolean {
+	return name.trim().toLowerCase() === 'individual presentation'
+}
+
+function expectedMemberCountForContestant(contestant: EventContestant): number {
+	if (contestant.entryType === 'individual') {
+		return 1
+	}
+
+	const participantCount = Array.isArray(contestant.participants) ? contestant.participants.length : 0
+	return participantCount > 0 ? participantCount : 1
+}
+
+function expandIndividualPresentationSubCriteriaIfNeeded(criterionName: string, subCriteria: CreateEventInput['criteria'][number]['subCriteria'], contestants: EventContestant[]): CreateEventInput['criteria'][number]['subCriteria'] {
+	if (!isIndividualPresentationCriterionName(criterionName)) {
+		return subCriteria
+	}
+
+	const hasExplicitMemberPrefix = subCriteria.some((subCriterion) => {
+		const normalizedName = compactWhitespace(String(subCriterion.name ?? ''))
+		const { memberLabel } = splitMemberCriterionName(normalizedName)
+		return memberIndexFromLabel(memberLabel) !== null
+	})
+
+	if (hasExplicitMemberPrefix) {
+		return subCriteria
+	}
+
+	const maxMemberCount = contestants.reduce((maxCount, contestant) => Math.max(maxCount, expectedMemberCountForContestant(contestant)), 1)
+
+	if (maxMemberCount <= 1) {
+		return subCriteria
+	}
+
+	const expanded: CreateEventInput['criteria'][number]['subCriteria'] = []
+
+	for (let memberIndex = 1; memberIndex <= maxMemberCount; memberIndex += 1) {
+		const memberLabel = `Student ${memberIndex}`
+
+		for (const subCriterion of subCriteria) {
+			const baseName = compactWhitespace(String(subCriterion.name ?? ''))
+			expanded.push({
+				name: `${memberLabel} - ${baseName}`,
+				maxScore: subCriterion.maxScore,
+			})
+		}
+	}
+
+	return expanded
+}
+
+function normalizeCriteria(criteria: CreateEventInput['criteria'], contestants: EventContestant[]): EventCriterion[] {
 	const cleaned = criteria
 		.map((criterion) => ({
 			name: compactWhitespace(criterion.name),
@@ -137,7 +342,8 @@ function normalizeCriteria(criteria: CreateEventInput['criteria']): EventCriteri
 	}
 
 	return cleaned.map((criterion) => {
-		const normalizedSubCriteria = normalizeSubCriteria(criterion.subCriteria, criterion.name)
+		const expandedSubCriteria = expandIndividualPresentationSubCriteriaIfNeeded(criterion.name, criterion.subCriteria, contestants)
+		const normalizedSubCriteria = normalizeSubCriteria(expandedSubCriteria, criterion.name)
 		const maxScore = Math.round(normalizedSubCriteria.reduce((sum, subCriterion) => sum + subCriterion.maxScore, 0) * 1000) / 1000
 
 		if (maxScore <= 0) {
@@ -153,6 +359,56 @@ function normalizeCriteria(criteria: CreateEventInput['criteria']): EventCriteri
 	})
 }
 
+function normalizePresentationSlots(slots: CreateEventInput['presentationSlots'], contestants: EventContestant[], judges: EventJudge[]): EventPresentationSlot[] | undefined {
+	if (!Array.isArray(slots) || slots.length === 0) {
+		return undefined
+	}
+
+	if (slots.length !== contestants.length) {
+		throw new Error('Presentation slots must match the number of contestants.')
+	}
+
+	const judgeIdByName = new Map(judges.map((judge) => [judge.name.toLowerCase(), judge.id]))
+	const usedContestantIndices = new Set<number>()
+
+	const normalized = slots.map((slot, index) => {
+		const contestantIndex = Number(slot.contestantIndex)
+		if (!Number.isInteger(contestantIndex) || contestantIndex < 0 || contestantIndex >= contestants.length) {
+			throw new Error('Presentation slot contestant index is invalid.')
+		}
+
+		if (usedContestantIndices.has(contestantIndex)) {
+			throw new Error('Each contestant can only be assigned to one presentation slot.')
+		}
+		usedContestantIndices.add(contestantIndex)
+
+		const contestant = contestants[contestantIndex]
+		const label = compactWhitespace(slot.label ?? '') || `Slot ${index + 1}`
+		const judgeNames = Array.isArray(slot.judgeNames) ? slot.judgeNames.map((name) => compactWhitespace(name)) : []
+		const uniqueJudgeNames = uniqueCaseInsensitive(judgeNames.filter((name) => name.length > 0))
+		const judgeIds = uniqueJudgeNames.map((name) => {
+			const judgeId = judgeIdByName.get(name.toLowerCase())
+			if (!judgeId) {
+				throw new Error(`Judge "${name}" not found for presentation slot.`)
+			}
+			return judgeId
+		})
+
+		return {
+			id: randomUUID(),
+			label,
+			contestantId: contestant.id,
+			judgeIds,
+		}
+	})
+
+	if (usedContestantIndices.size !== contestants.length) {
+		throw new Error('Each contestant must be assigned to a presentation slot.')
+	}
+
+	return normalized
+}
+
 function buildEvent(input: CreateEventInput): EventScorer {
 	const title = compactWhitespace(input.title ?? '')
 
@@ -162,16 +418,24 @@ function buildEvent(input: CreateEventInput): EventScorer {
 
 	const description = input.description ? compactWhitespace(input.description) : undefined
 	const createdBy = input.createdBy ? compactWhitespace(input.createdBy) : undefined
+	const eventScoringType = normalizeEventScoringType(input.eventScoringType)
+
+	const normalizedContestants = normalizeContestants(input.contestants ?? [])
+	const normalizedJudges = normalizeJudges(input.judges ?? [])
+	const normalizedCriteria = normalizeCriteria(input.criteria ?? [], normalizedContestants)
+	const normalizedPresentationSlots = normalizePresentationSlots(input.presentationSlots, normalizedContestants, normalizedJudges)
 
 	return {
 		id: randomUUID(),
 		title,
 		description,
 		createdBy,
+		eventScoringType,
 		createdAt: new Date().toISOString(),
-		contestants: normalizeContestants(input.contestants ?? []),
-		judges: normalizeJudges(input.judges ?? []),
-		criteria: normalizeCriteria(input.criteria ?? []),
+		contestants: normalizedContestants,
+		judges: normalizedJudges,
+		criteria: normalizedCriteria,
+		presentationSlots: normalizedPresentationSlots,
 		submissions: [],
 	}
 }
@@ -252,6 +516,38 @@ function countSubmittedJudges(event: EventScorer): number {
 	}, 0)
 }
 
+function hasAnyAssignedJudges(event: EventScorer): boolean {
+	if (!Array.isArray(event.presentationSlots) || event.presentationSlots.length === 0) {
+		return false
+	}
+
+	return event.presentationSlots.some((slot) => slot.judgeIds.length > 0)
+}
+
+function assignedSlotsForJudge(event: EventScorer, judgeId: string): EventPresentationSlot[] | null {
+	if (!Array.isArray(event.presentationSlots) || event.presentationSlots.length === 0) {
+		return null
+	}
+
+	if (!hasAnyAssignedJudges(event)) {
+		return null
+	}
+
+	return event.presentationSlots.filter((slot) => slot.judgeIds.includes(judgeId))
+}
+
+function isJudgeAssignedToContestant(event: EventScorer, judgeId: string, contestantId: string): boolean {
+	if (!Array.isArray(event.presentationSlots) || event.presentationSlots.length === 0) {
+		return true
+	}
+
+	if (!hasAnyAssignedJudges(event)) {
+		return true
+	}
+
+	return event.presentationSlots.some((slot) => slot.contestantId === contestantId && slot.judgeIds.includes(judgeId))
+}
+
 function buildSavedContestantIds(event: EventScorer, previousSubmission: EventScorer['submissions'][number] | undefined, savedContestantId: string): string[] {
 	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
 
@@ -313,14 +609,20 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 		}
 
 		const submission = event.submissions.find((item) => item.judgeId === judge.id)
+		const assignedSlots = assignedSlotsForJudge(event, judge.id)
+		const allSlots = Array.isArray(event.presentationSlots) && event.presentationSlots.length > 0 ? event.presentationSlots : undefined
+		const contestantsById = new Map(event.contestants.map((contestant) => [contestant.id, contestant]))
+		const orderedContestants = assignedSlots ? assignedSlots.map((slot) => contestantsById.get(slot.contestantId)).filter((contestant): contestant is EventContestant => Boolean(contestant)) : event.contestants
 
 		return {
 			event: {
 				id: event.id,
 				title: event.title,
 				description: event.description,
-				contestants: event.contestants,
+				eventScoringType: event.eventScoringType,
+				contestants: orderedContestants,
 				criteria: event.criteria,
+				presentationSlots: assignedSlots ?? allSlots,
 			},
 			judge: {
 				id: judge.id,
@@ -343,6 +645,10 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 
 		if (!judge) {
 			continue
+		}
+
+		if (!isJudgeAssignedToContestant(event, judge.id, savedContestantId)) {
+			throw new Error('You are not assigned to score this presentation.')
 		}
 
 		const normalizedScores = normalizeScoreMatrix(event, rawScores)

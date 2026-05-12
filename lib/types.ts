@@ -5,6 +5,16 @@ export interface JudgeInput {
 	email?: string
 }
 
+export type EventScoringType = 'standard' | 'final-oral-defense'
+
+export type ContestantEntryType = 'group' | 'individual'
+
+export interface ContestantInput {
+	name: string
+	entryType?: ContestantEntryType
+	participants?: string[]
+}
+
 export interface SubCriterionInput {
 	name: string
 	maxScore: number
@@ -15,18 +25,28 @@ export interface CriterionInput {
 	subCriteria: SubCriterionInput[]
 }
 
+export interface PresentationSlotInput {
+	label: string
+	contestantIndex: number
+	judgeNames: string[]
+}
+
 export interface CreateEventInput {
 	title: string
 	description?: string
 	createdBy?: string
-	contestants: string[]
+	eventScoringType?: EventScoringType
+	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
 	criteria: CriterionInput[]
+	presentationSlots?: PresentationSlotInput[]
 }
 
 export interface EventContestant {
 	id: string
 	name: string
+	entryType?: ContestantEntryType
+	participants?: string[]
 }
 
 export interface EventJudge {
@@ -49,6 +69,13 @@ export interface EventCriterion {
 	subCriteria: EventSubCriterion[]
 }
 
+export interface EventPresentationSlot {
+	id: string
+	label: string
+	contestantId: string
+	judgeIds: string[]
+}
+
 export interface JudgeSubmission {
 	judgeId: string
 	submittedAt: string
@@ -61,10 +88,12 @@ export interface EventScorer {
 	title: string
 	description?: string
 	createdBy?: string
+	eventScoringType?: EventScoringType
 	createdAt: string
 	contestants: EventContestant[]
 	judges: EventJudge[]
 	criteria: EventCriterion[]
+	presentationSlots?: EventPresentationSlot[]
 	submissions: JudgeSubmission[]
 }
 
@@ -84,7 +113,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'contestants' | 'criteria'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }
@@ -107,9 +136,20 @@ export interface CompiledContestantResult {
 	contestantId: string
 	contestantName: string
 	averageScore: number
+	groupAverageScore?: number
+	individualAverageScore?: number
+	groupRating?: number
+	individualRating?: number
+	weightedScore?: number
 	totalScore: number
 	judgeCount: number
 	perJudgeTotals: Record<string, number>
+	participantScores?: Array<{
+		participantLabel: string
+		averageScore: number
+		maxScore: number
+		rating?: number
+	}>
 }
 
 export interface JudgeBreakdown {
@@ -122,6 +162,9 @@ export interface JudgeBreakdown {
 
 export interface EventCompiledResults {
 	maxPossibleScore: number
+	groupMaxScore?: number
+	individualMaxScore?: number
+	hasWeightedScores?: boolean
 	submittedJudgeCount: number
 	totalJudgeCount: number
 	rankings: CompiledContestantResult[]

@@ -15,7 +15,17 @@ export default async function JudgeTokenPage({ params }: { params: Promise<{ tok
 
 	return (
 		<div className='min-h-screen bg-transparent pb-12'>
-			<JudgeScoringForm token={token} eventTitle={session.event.title} contestants={session.event.contestants} criteria={session.event.criteria} judge={session.judge} existingScores={session.submission?.scores} existingSavedContestantIds={session.submission?.savedContestantIds} submittedAt={session.submission?.submittedAt} />
+			<JudgeScoringForm
+				token={token}
+				eventTitle={session.event.title}
+				contestants={session.event.contestants}
+				criteria={session.event.criteria}
+				judge={session.judge}
+				presentationSlots={session.event.presentationSlots}
+				existingScores={session.submission?.scores}
+				existingSavedContestantIds={session.submission?.savedContestantIds}
+				submittedAt={session.submission?.submittedAt}
+			/>
 		</div>
 	)
 }

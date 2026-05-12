@@ -1,9 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventCriterion, EventScorer } from '@/lib/types'
+import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventScorer } from '@/lib/types'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 type ProgramLabel = 'BSINT' | 'BSCS'
@@ -13,7 +13,7 @@ interface ProgramTopTeam {
 	teamName: string
 	contestantName: string
 	rank: number
-	averageScore: number
+	score: number
 	totalScore: number
 	judgeCount: number
 }
@@ -41,6 +41,14 @@ function formatScore(value: number): string {
 	return value.toFixed(2)
 }
 
+function formatPercent(value: number): string {
+	return `${value.toFixed(2)}%`
+}
+
+function rankingScore(result: EventCompiledResults['rankings'][number], _useWeighted: boolean): number {
+	return _useWeighted ? (result.weightedScore ?? result.averageScore) : result.averageScore
+}
+
 function criterionMaxScore(criterion: EventCriterion): number {
 	const directMaxScore = Number(criterion.maxScore)
 
@@ -52,6 +60,99 @@ function criterionMaxScore(criterion: EventCriterion): number {
 		const subCriterionMaxScore = Number(subCriterion.maxScore)
 		return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
 	}, 0)
+}
+
+function isIndividualPresentationCriterion(criterion: EventCriterion): boolean {
+	return criterion.name.trim().toLowerCase() === 'individual presentation'
+}
+
+function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
+	const separatorIndex = name.indexOf(' - ')
+	if (separatorIndex === -1) {
+		return { memberLabel: 'Individual', displayName: name }
+	}
+
+	const memberLabel = name.slice(0, separatorIndex).trim()
+	const displayName = name.slice(separatorIndex + 3).trim()
+	return {
+		memberLabel: memberLabel || 'Individual',
+		displayName: displayName || name,
+	}
+}
+
+function memberIndexFromLabel(memberLabel: string): number | null {
+	const match = memberLabel.match(/(\d+)\s*$/)
+	if (!match) {
+		return null
+	}
+
+	const index = Number.parseInt(match[1], 10)
+	return Number.isFinite(index) && index > 0 ? index : null
+}
+
+function normalizedParticipants(contestant: EventContestant): string[] {
+	if (!Array.isArray(contestant.participants)) {
+		return []
+	}
+
+	return contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
+}
+
+function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCriteria']): number {
+	let maxMemberCount = 0
+
+	for (const subCriterion of subCriteria) {
+		const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterion.name).memberLabel)
+		if (memberIndex && memberIndex > maxMemberCount) {
+			maxMemberCount = memberIndex
+		}
+	}
+
+	return maxMemberCount > 0 ? maxMemberCount : 1
+}
+
+function allowedMemberCountForContestant(contestant: EventContestant, subCriteria: EventCriterion['subCriteria']): number {
+	if (contestant.entryType === 'individual') {
+		return 1
+	}
+
+	const participants = normalizedParticipants(contestant)
+	return participants.length > 0 ? participants.length : defaultMemberCountFromSubCriteria(subCriteria)
+}
+
+function isSubCriterionApplicableToContestant(subCriterionName: string, contestant: EventContestant, criterion: EventCriterion): boolean {
+	const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterionName).memberLabel)
+	if (!memberIndex) {
+		return true
+	}
+
+	return memberIndex <= allowedMemberCountForContestant(contestant, criterion.subCriteria)
+}
+
+function resolveMemberLabelForContestant(memberLabel: string, contestant: EventContestant): string {
+	const participants = normalizedParticipants(contestant)
+	if (participants.length === 0) {
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		if (contestant.entryType === 'individual' && memberIndex === 1) {
+			return contestant.name
+		}
+
+		return memberLabel
+	}
+
+	const memberIndex = memberIndexFromLabel(memberLabel)
+	if (!memberIndex) {
+		return memberLabel
+	}
+
+	const participantName = participants[memberIndex - 1]?.trim()
+	return participantName && participantName.length > 0 ? participantName : memberLabel
+}
+
+function displaySubCriterionNameForContestant(subCriterionName: string, contestant: EventContestant): string {
+	const { memberLabel, displayName } = splitMemberCriterionName(subCriterionName)
+	const resolvedLabel = resolveMemberLabelForContestant(memberLabel, contestant)
+	return `${resolvedLabel} - ${displayName}`
 }
 
 function connectionLabel(state: ConnectionState): string {
@@ -103,46 +204,35 @@ function extractDynamicTeamName(contestantName: string): string {
 	return cleanedName.length > 0 ? cleanedName : contestantName
 }
 
-function topTeamsByProgram(rankings: EventCompiledResults['rankings']): Record<ProgramLabel, ProgramTopTeam | null> {
-	const topByProgram: Record<ProgramLabel, ProgramTopTeam | null> = {
-		BSINT: null,
-		BSCS: null,
+function teamsByProgram(rankings: EventCompiledResults['rankings'], manualAssignments: Record<string, ProgramLabel | null>, useWeighted: boolean): Record<ProgramLabel, ProgramTopTeam[]> {
+	const grouped: Record<ProgramLabel, ProgramTopTeam[]> = {
+		BSINT: [],
+		BSCS: [],
 	}
 
 	for (const result of rankings) {
-		const detectedProgram = detectProgramLabel(result.contestantName)
+		const manual = manualAssignments[result.contestantId]
+		const detectedProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
+
 		if (!detectedProgram) {
 			continue
 		}
 
-		const candidate: ProgramTopTeam = {
+		grouped[detectedProgram].push({
 			program: detectedProgram,
 			teamName: extractDynamicTeamName(result.contestantName),
 			contestantName: result.contestantName,
 			rank: result.rank,
-			averageScore: result.averageScore,
+			score: rankingScore(result, useWeighted),
 			totalScore: result.totalScore,
 			judgeCount: result.judgeCount,
-		}
-
-		const existing = topByProgram[detectedProgram]
-
-		if (!existing) {
-			topByProgram[detectedProgram] = candidate
-			continue
-		}
-
-		if (candidate.rank < existing.rank) {
-			topByProgram[detectedProgram] = candidate
-			continue
-		}
-
-		if (candidate.rank === existing.rank && candidate.averageScore > existing.averageScore) {
-			topByProgram[detectedProgram] = candidate
-		}
+		})
 	}
 
-	return topByProgram
+	grouped.BSINT.sort((a, b) => b.score - a.score)
+	grouped.BSCS.sort((a, b) => b.score - a.score)
+
+	return grouped
 }
 
 export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: AdminLiveDashboardProps) {
@@ -153,10 +243,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const [refreshError, setRefreshError] = useState<string | null>(null)
 	const [isRefreshing, setIsRefreshing] = useState(false)
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
+	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>({})
 	const refreshInFlight = useRef(false)
 
+	const useWeightedScores = Boolean(compiled.hasWeightedScores)
+	const compiledTableColumnCount = useWeightedScores ? 9 : 6
+	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
 	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
-	const analyticsByProgram = useMemo(() => topTeamsByProgram(compiled.rankings), [compiled.rankings])
+	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, manualAssignments, useWeightedScores), [compiled.rankings, manualAssignments, useWeightedScores])
 
 	const copyLink = useCallback(async (value: string) => {
 		try {
@@ -422,7 +516,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
 							</div>
 							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Score Scale</p>
+								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : 'Score Scale'}</p>
 								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
 							</div>
 						</div>
@@ -432,20 +526,39 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Based on average score across submitted judges.</p>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>{useWeightedScores ? 'Final Oral Defense is shown separately by Group and Individual scoring. Final Score = (Group Rating x 60%) + (Individual Rating x 40%).' : 'Final Score is computed as Total Score / Total Judges.'}</p>
 
 						{winners.length > 0 ? (
 							<div className='mt-4 grid gap-3 sm:grid-cols-3'>
-								{winners.map((winner) => (
-									<article key={winner.contestantId} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>Rank #{winner.rank}</p>
-										<p className='mt-1 text-lg font-semibold text-[var(--text-primary)]'>{winner.contestantName}</p>
-										<p className='mt-2 text-sm text-[var(--text-secondary)]'>
-											Average: <span className='font-semibold'>{formatScore(winner.averageScore)}</span>
-										</p>
-										<p className='text-xs text-[var(--text-muted)]'>Judges counted: {winner.judgeCount}</p>
-									</article>
-								))}
+								{winners.map((winner) => {
+									const winnerContestant = contestantsById.get(winner.contestantId)
+									const isIndividual = winnerContestant?.entryType === 'individual'
+
+									return (
+										<article key={winner.contestantId} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+											<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>Rank #{winner.rank}</p>
+											<div className='mt-1 flex items-center gap-2'>
+												<p className='text-lg font-semibold text-[var(--text-primary)]'>{winner.contestantName}</p>
+												{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
+											</div>
+											{useWeightedScores ? (
+												<>
+													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+														Final Score: <span className='font-semibold'>{formatScore(winner.weightedScore ?? winner.averageScore)}</span>
+													</p>
+													<p className='text-xs text-[var(--text-muted)]'>
+														Group Avg: {formatScore(winner.groupAverageScore ?? 0)} · Individual Avg: {formatScore(winner.individualAverageScore ?? 0)}
+													</p>
+												</>
+											) : (
+												<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+													Average: <span className='font-semibold'>{formatScore(winner.averageScore)}</span>
+												</p>
+											)}
+											<p className='text-xs text-[var(--text-muted)]'>Judges counted: {winner.judgeCount}</p>
+										</article>
+									)
+								})}
 							</div>
 						) : (
 							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
@@ -454,31 +567,45 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Program Analytics</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams from Compiled Scores for BSINT and BSCS.</p>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams from Compiled Scores separated for BSINT and BSCS.</p>
 
-						<div className='mt-4 grid gap-3 sm:grid-cols-2'>
+						<div className='mt-4 grid gap-6 sm:grid-cols-2'>
 							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
-								const topTeam = analyticsByProgram[program]
+								const teams = analyticsByProgram[program]
 
 								return (
-									<article key={program} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>{program}</p>
-										{topTeam ? (
-											<>
-												<p className='mt-1 text-lg font-semibold text-[var(--text-primary)]'>{topTeam.teamName}</p>
-												<p className='text-xs text-[var(--text-muted)]'>Source: {topTeam.contestantName}</p>
-												<p className='mt-2 text-sm text-[var(--text-secondary)]'>
-													Rank: <span className='font-semibold'>#{topTeam.rank}</span>
-												</p>
-												<p className='text-sm text-[var(--text-secondary)]'>
-													Average: <span className='font-semibold'>{formatScore(topTeam.averageScore)}</span>
-												</p>
-												<p className='text-xs text-[var(--text-muted)]'>
-													Total: {formatScore(topTeam.totalScore)} | Judges Counted: {topTeam.judgeCount}
-												</p>
-											</>
+									<article key={program} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] overflow-hidden'>
+										<div className='p-4 border-b border-[var(--border-soft)] bg-[var(--surface)]'>
+											<h3 className='text-lg font-bold uppercase tracking-wide text-[var(--text-primary)]'>{program} Rankings</h3>
+										</div>
+										{teams.length > 0 ? (
+											<div className='overflow-x-auto'>
+												<table className='min-w-full text-sm text-left'>
+													<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
+														<tr>
+															<th className='px-4 py-2 font-semibold'>Rank</th>
+															<th className='px-4 py-2 font-semibold'>Team</th>
+															<th className='px-4 py-2 font-semibold text-right'>Score</th>
+														</tr>
+													</thead>
+													<tbody className='divide-y divide-[var(--border-soft)]'>
+														{teams.map((team, idx) => (
+															<tr key={team.contestantName} className={idx === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
+																<td className='px-4 py-3'>
+																	{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{idx + 1} <span className='text-[var(--text-muted)] text-xs ml-1'>(Overall #{team.rank})</span>
+																</td>
+																<td className='px-4 py-3'>
+																	<div className='text-[var(--text-primary)]'>{team.teamName}</div>
+																	<div className='text-[10px] text-[var(--text-muted)]'>{team.contestantName}</div>
+																</td>
+																<td className='px-4 py-3 text-right text-[var(--text-primary)]'>{formatScore(team.score)}</td>
+															</tr>
+														))}
+													</tbody>
+												</table>
+											</div>
 										) : (
-											<p className='mt-2 text-sm text-[var(--text-secondary)]'>No {program} team found in Compiled Scores.</p>
+											<div className='p-6 text-center text-sm text-[var(--text-secondary)]'>No {program} teams found in Compiled Scores.</div>
 										)}
 									</article>
 								)
@@ -488,27 +615,95 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
+						{useWeightedScores ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Group Rating = (Group Score / 110) x 100 and Individual Rating = (Individual Score / 36) x 100.</p> : null}
 						<div className='mt-4 overflow-x-auto rounded-2xl border border-[var(--border-soft)]'>
 							<table className='min-w-full border-collapse text-sm'>
 								<thead>
 									<tr className='bg-[var(--surface-muted)] text-left text-[var(--text-primary)]'>
 										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Rank</th>
 										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Contestant</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Average Score</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
+										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Program</th>
+										{useWeightedScores ? (
+											<>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Score</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Rating</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Score</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Rating</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Final Score</th>
+											</>
+										) : (
+											<>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Average Score</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
+											</>
+										)}
 										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Judges Counted</th>
 									</tr>
 								</thead>
 								<tbody>
-									{compiled.rankings.map((result, index) => (
-										<tr key={result.contestantId} className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
-											<td className='border-b border-[var(--border-soft)] px-3 py-3 font-medium'>#{result.rank}</td>
-											<td className='border-b border-[var(--border-soft)] px-3 py-3'>{result.contestantName}</td>
-											<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
-											<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
-											<td className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
-										</tr>
-									))}
+									{compiled.rankings.map((result, index) => {
+										const manual = manualAssignments[result.contestantId]
+										const currentProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
+										const rowContestant = contestantsById.get(result.contestantId)
+										const isIndividual = rowContestant?.entryType === 'individual'
+
+										const hasParticipantScores = useWeightedScores && Array.isArray(result.participantScores) && result.participantScores.length > 0
+
+										return (
+											<Fragment key={result.contestantId}>
+												<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
+													<td className='border-b border-[var(--border-soft)] px-3 py-3 font-medium'>#{result.rank}</td>
+													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
+														<div className='flex items-center gap-2'>
+															<span>{result.contestantName}</span>
+															{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
+														</div>
+													</td>
+													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
+														<div className='flex items-center gap-3'>
+															<label className='flex items-center gap-1 text-xs cursor-pointer'>
+																<input type='checkbox' checked={currentProgram === 'BSINT'} onChange={() => setManualAssignments((prev) => ({ ...prev, [result.contestantId]: currentProgram === 'BSINT' ? null : 'BSINT' }))} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+																BSINT
+															</label>
+															<label className='flex items-center gap-1 text-xs cursor-pointer'>
+																<input type='checkbox' checked={currentProgram === 'BSCS'} onChange={() => setManualAssignments((prev) => ({ ...prev, [result.contestantId]: currentProgram === 'BSCS' ? null : 'BSCS' }))} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+																BSCS
+															</label>
+														</div>
+													</td>
+													{useWeightedScores ? (
+														<>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.groupAverageScore ?? 0)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.groupRating ?? 0)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.individualAverageScore ?? 0)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.individualRating ?? 0)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
+														</>
+													) : (
+														<>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
+														</>
+													)}
+													<td className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
+												</tr>
+												{hasParticipantScores ? (
+													<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
+														<td className='border-b border-[var(--border-soft)] px-3 py-2 text-xs text-[var(--text-secondary)]' colSpan={compiledTableColumnCount}>
+															<div className='flex flex-wrap gap-2'>
+																<span className='font-semibold'>Participant Scores:</span>
+																{result.participantScores?.map((participant, participantIndex) => (
+																	<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
+																		{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participant.rating ?? 0)})
+																	</span>
+																))}
+															</div>
+														</td>
+													</tr>
+												) : null}
+											</Fragment>
+										)
+									})}
 								</tbody>
 							</table>
 						</div>
@@ -548,21 +743,48 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
 						<div className='mt-4 grid gap-4'>
-							{event.criteria.map((criterion) => (
-								<article key={criterion.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-									<p className='text-sm font-semibold text-[var(--text-primary)]'>
-										{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
-									</p>
-									<div className='mt-2 space-y-2'>
-										{criterion.subCriteria.map((subCriterion) => (
-											<div key={subCriterion.id} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm sm:grid-cols-2'>
-												<span className='text-[var(--text-primary)]'>{subCriterion.name}</span>
-												<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
+							{event.criteria.map((criterion) => {
+								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
+
+								return (
+									<article key={criterion.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<p className='text-sm font-semibold text-[var(--text-primary)]'>
+											{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
+										</p>
+
+										{showPerContestantParticipants ? (
+											<div className='mt-2 space-y-3'>
+												{event.contestants.map((contestant) => {
+													const visibleSubCriteria = criterion.subCriteria.filter((subCriterion) => isSubCriterionApplicableToContestant(subCriterion.name, contestant, criterion))
+
+													return (
+														<div key={`${criterion.id}-${contestant.id}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3'>
+															<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{contestant.name}</p>
+															<div className='mt-2 space-y-2'>
+																{visibleSubCriteria.map((subCriterion) => (
+																	<div key={`${contestant.id}-${subCriterion.id}`} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm sm:grid-cols-2'>
+																		<span className='text-[var(--text-primary)]'>{displaySubCriterionNameForContestant(subCriterion.name, contestant)}</span>
+																		<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
+																	</div>
+																))}
+															</div>
+														</div>
+													)
+												})}
 											</div>
-										))}
-									</div>
-								</article>
-							))}
+										) : (
+											<div className='mt-2 space-y-2'>
+												{criterion.subCriteria.map((subCriterion) => (
+													<div key={subCriterion.id} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm sm:grid-cols-2'>
+														<span className='text-[var(--text-primary)]'>{subCriterion.name}</span>
+														<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
+													</div>
+												))}
+											</div>
+										)}
+									</article>
+								)
+							})}
 						</div>
 					</section>
 				</div>
@@ -594,7 +816,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 									{j.name}
 								</th>
 							))}
-							<th className='border border-black p-2 font-bold uppercase'>Total</th>
+							<th className='border border-black p-2 font-bold uppercase'>Final Score</th>
 							<th className='border border-black p-2 font-bold uppercase'>Rank</th>
 						</tr>
 					</thead>
@@ -607,7 +829,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 										{result.perJudgeTotals[j.id] !== undefined ? formatScore(result.perJudgeTotals[j.id]) : ''}
 									</td>
 								))}
-								<td className='border border-black p-2 font-bold'>{formatScore(result.totalScore)}</td>
+								<td className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : result.averageScore)}</td>
 								<td className='border border-black p-2 font-bold'>{result.rank}</td>
 							</tr>
 						))}

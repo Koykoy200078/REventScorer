@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react'
 
-import type { EventContestant, EventCriterion, JudgeProfile, ScoreMatrix } from '@/lib/types'
+import type { EventContestant, EventCriterion, EventPresentationSlot, JudgeProfile, ScoreMatrix } from '@/lib/types'
 
 type InputScoreMatrix = Record<string, Record<string, string>>
 
@@ -12,6 +12,7 @@ interface JudgeScoringFormProps {
 	contestants: EventContestant[]
 	criteria: EventCriterion[]
 	judge: JudgeProfile
+	presentationSlots?: EventPresentationSlot[]
 	existingScores?: ScoreMatrix
 	existingSavedContestantIds?: string[]
 	submittedAt?: string
@@ -59,6 +60,125 @@ function normalizeScoreInput(rawValue: string, maxScore: number): string {
 	}
 
 	return rawValue
+}
+
+function isIndividualCriterion(criterion: EventCriterion): boolean {
+	return criterion.name.trim().toLowerCase() === 'individual presentation'
+}
+
+function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
+	const separatorIndex = name.indexOf(' - ')
+	if (separatorIndex === -1) {
+		return { memberLabel: 'Individual', displayName: name }
+	}
+
+	const memberLabel = name.slice(0, separatorIndex).trim()
+	const displayName = name.slice(separatorIndex + 3).trim()
+	return { memberLabel: memberLabel || 'Individual', displayName: displayName || name }
+}
+
+function memberIndexFromLabel(memberLabel: string): number | null {
+	const match = memberLabel.match(/(\d+)\s*$/)
+	if (!match) {
+		return null
+	}
+
+	const index = Number.parseInt(match[1], 10)
+	return Number.isFinite(index) && index > 0 ? index : null
+}
+
+function normalizedParticipants(contestant?: EventContestant): string[] {
+	if (!contestant?.participants) {
+		return []
+	}
+
+	return contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
+}
+
+function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCriteria']): number {
+	let maxMemberCount = 0
+
+	for (const subCriterion of subCriteria) {
+		const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterion.name).memberLabel)
+		if (memberIndex && memberIndex > maxMemberCount) {
+			maxMemberCount = memberIndex
+		}
+	}
+
+	return maxMemberCount > 0 ? maxMemberCount : 1
+}
+
+function allowedMemberCountForContestant(contestant: EventContestant | undefined, subCriteria: EventCriterion['subCriteria']): number {
+	const defaultMemberCount = defaultMemberCountFromSubCriteria(subCriteria)
+
+	if (!contestant) {
+		return defaultMemberCount
+	}
+
+	if (contestant.entryType === 'individual') {
+		return 1
+	}
+
+	const participants = normalizedParticipants(contestant)
+	return participants.length > 0 ? participants.length : defaultMemberCount
+}
+
+function resolvedMemberLabel(memberLabel: string, contestant?: EventContestant): string {
+	const participants = normalizedParticipants(contestant)
+	if (participants.length === 0) {
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		if (contestant?.entryType === 'individual' && memberIndex === 1) {
+			return contestant.name
+		}
+
+		return memberLabel
+	}
+
+	const memberIndex = memberIndexFromLabel(memberLabel)
+	if (!memberIndex) {
+		return memberLabel
+	}
+
+	const participantName = participants[memberIndex - 1]?.trim()
+	return participantName && participantName.length > 0 ? participantName : memberLabel
+}
+
+function groupSubCriteriaByMember(subCriteria: EventCriterion['subCriteria'], contestant?: EventContestant): Array<{ memberLabel: string; memberDisplayLabel: string; items: Array<{ subCriterion: EventCriterion['subCriteria'][number]; displayName: string }> }> {
+	const allowedMemberCount = allowedMemberCountForContestant(contestant, subCriteria)
+	const grouped = new Map<string, Array<{ subCriterion: EventCriterion['subCriteria'][number]; displayName: string }>>()
+
+	for (const subCriterion of subCriteria) {
+		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		if (memberIndex && memberIndex > allowedMemberCount) {
+			continue
+		}
+
+		const existing = grouped.get(memberLabel)
+		if (existing) {
+			existing.push({ subCriterion, displayName })
+		} else {
+			grouped.set(memberLabel, [{ subCriterion, displayName }])
+		}
+	}
+
+	return Array.from(grouped.entries()).map(([memberLabel, items]) => ({
+		memberLabel,
+		memberDisplayLabel: resolvedMemberLabel(memberLabel, contestant),
+		items,
+	}))
+}
+
+function applicableSubCriteriaForContestant(criterion: EventCriterion, contestant?: EventContestant): EventCriterion['subCriteria'] {
+	if (!isIndividualCriterion(criterion)) {
+		return criterion.subCriteria
+	}
+
+	const allowedMemberCount = allowedMemberCountForContestant(contestant, criterion.subCriteria)
+	return criterion.subCriteria.filter((subCriterion) => {
+		const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterion.name).memberLabel)
+		return !memberIndex || memberIndex <= allowedMemberCount
+	})
 }
 
 function hasPositiveDraftScore(scores: InputScoreMatrix, contestantId: string, criteria: EventCriterion[]): boolean {
@@ -128,7 +248,7 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, existingScores, existingSavedContestantIds, submittedAt }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, presentationSlots, existingScores, existingSavedContestantIds, submittedAt }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
 	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores, existingSavedContestantIds))
@@ -137,12 +257,25 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	const [error, setError] = useState<string | null>(null)
 	const [successMessage, setSuccessMessage] = useState<string | null>(null)
 	const [lastSubmittedAt, setLastSubmittedAt] = useState<string | undefined>(submittedAt)
-
-	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)), [criteria])
-	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + criterion.subCriteria.length, 0), [criteria])
-
 	const activeContestant = contestants[activeContestantIndex]
 	const activeContestantId = activeContestant?.id ?? ''
+
+	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)), [criteria, activeContestant])
+	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).length, 0), [criteria, activeContestant])
+	const slotLabelsByContestant = useMemo(() => {
+		const labels = new Map<string, string>()
+		if (!presentationSlots) {
+			return labels
+		}
+
+		for (const slot of presentationSlots) {
+			labels.set(slot.contestantId, slot.label)
+		}
+
+		return labels
+	}, [presentationSlots])
+
+	const activeSlotLabel = activeContestantId ? slotLabelsByContestant.get(activeContestantId) : undefined
 	const draftScoredContestantIds = useMemo(() => {
 		const ids = contestants.filter((contestant) => hasPositiveDraftScore(scores, contestant.id, criteria)).map((contestant) => contestant.id)
 		return new Set(ids)
@@ -155,7 +288,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 		return round(
 			criteria.reduce((total, criterion) => {
-				const criterionTotal = criterion.subCriteria.reduce((subTotal, subCriterion) => {
+				const criterionTotal = applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => {
 					const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
 					return subTotal + parseAndClampScore(rawValue, subCriterion.maxScore)
 				}, 0)
@@ -163,7 +296,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 				return total + criterionTotal
 			}, 0),
 		)
-	}, [activeContestantId, criteria, scores])
+	}, [activeContestant, activeContestantId, criteria, scores])
 
 	const scoredFieldCount = useMemo(() => {
 		if (!activeContestantId) {
@@ -171,7 +304,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		}
 
 		return criteria.reduce((sum, criterion) => {
-			const countInCriterion = criterion.subCriteria.reduce((count, subCriterion) => {
+			const countInCriterion = applicableSubCriteriaForContestant(criterion, activeContestant).reduce((count, subCriterion) => {
 				const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
 				const parsedValue = Number.parseFloat(rawValue)
 				return count + (Number.isFinite(parsedValue) && parsedValue > 0 ? 1 : 0)
@@ -179,7 +312,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 			return sum + countInCriterion
 		}, 0)
-	}, [activeContestantId, criteria, scores])
+	}, [activeContestant, activeContestantId, criteria, scores])
 
 	function updateScore(contestantId: string, subCriterionId: string, value: string, maxScore: number): void {
 		const normalizedValue = normalizeScoreInput(value, maxScore)
@@ -229,7 +362,14 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			payload[contestant.id] = {}
 
 			for (const criterion of criteria) {
+				const applicableSubCriterionIds = new Set(applicableSubCriteriaForContestant(criterion, contestant).map((subCriterion) => subCriterion.id))
+
 				for (const subCriterion of criterion.subCriteria) {
+					if (!applicableSubCriterionIds.has(subCriterion.id)) {
+						payload[contestant.id][subCriterion.id] = 0
+						continue
+					}
+
 					const rawValue = scores[contestant.id]?.[subCriterion.id] ?? '0'
 					payload[contestant.id][subCriterion.id] = round(parseAndClampScore(rawValue, subCriterion.maxScore))
 				}
@@ -306,11 +446,17 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 							const isActive = index === activeContestantIndex
 							const isSaved = savedContestantIds.has(contestant.id)
 							const hasDraft = draftScoredContestantIds.has(contestant.id)
+							const slotLabel = slotLabelsByContestant.get(contestant.id)
+							const isIndividual = contestant.entryType === 'individual'
 							return (
-								<button key={contestant.id} type='button' onClick={() => goToContestant(index)} className={`rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
-									<span>
-										{index + 1}. {contestant.name}
-									</span>
+								<button key={contestant.id} type='button' onClick={() => goToContestant(index)} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
+									<div className='flex flex-col items-start'>
+										<span>
+											{index + 1}. {contestant.name}
+										</span>
+										{isIndividual ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-sky-700'}`}>Individual</span> : null}
+										{slotLabel ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-cyan-800/70'}`}>{slotLabel}</span> : null}
+									</div>
 									{isSaved ? (
 										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>Scored</span>
 									) : hasDraft ? (
@@ -326,10 +472,14 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 					<section className='rounded-2xl border border-cyan-100 bg-white p-4 sm:p-5'>
 						<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 							<div>
-								<h2 className='text-xl font-semibold text-cyan-950'>Now Scoring: {activeContestant.name}</h2>
+								<div className='flex items-center gap-2'>
+									<h2 className='text-xl font-semibold text-cyan-950'>Now Scoring: {activeContestant.name}</h2>
+									{activeContestant.entryType === 'individual' ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800'>Individual</span> : null}
+								</div>
 								<p className='mt-1 text-sm text-cyan-900/90'>
 									Entry {activeContestantIndex + 1} of {contestants.length}
 								</p>
+								{activeSlotLabel ? <p className='text-xs text-cyan-900/80'>Slot: {activeSlotLabel}</p> : null}
 							</div>
 							<div className='flex flex-wrap items-center gap-2'>
 								<span className='rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>
@@ -343,9 +493,10 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 						<div className='mt-4 space-y-4'>
 							{criteria.map((criterion) => {
-								const parentMaxScore = criterionMaxScore(criterion)
+								const applicableSubCriteria = applicableSubCriteriaForContestant(criterion, activeContestant)
+								const parentMaxScore = round(applicableSubCriteria.reduce((sum, subCriterion) => sum + Number(subCriterion.maxScore), 0))
 								const parentCurrentTotal = round(
-									criterion.subCriteria.reduce((sum, subCriterion) => {
+									applicableSubCriteria.reduce((sum, subCriterion) => {
 										const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
 										return sum + parseAndClampScore(rawValue, subCriterion.maxScore)
 									}, 0),
@@ -360,25 +511,70 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 											</p>
 										</div>
 
-										<div className='mt-3 grid gap-3 xl:grid-cols-2'>
-											{criterion.subCriteria.map((subCriterion) => (
-												<label key={subCriterion.id} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-													<span className='block text-sm font-semibold text-cyan-950'>{subCriterion.name}</span>
-													<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
-													<input
-														value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
-														onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
-														type='number'
-														inputMode='decimal'
-														min={0}
-														max={subCriterion.maxScore}
-														step='0.01'
-														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 [color:#0f172a] [-webkit-text-fill-color:#0f172a] outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-													/>
-													<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
-												</label>
-											))}
-										</div>
+										{isIndividualCriterion(criterion) ? (
+											<div className='mt-3 space-y-4'>
+												{groupSubCriteriaByMember(criterion.subCriteria, activeContestant).map((group) => {
+													const groupMaxScore = round(group.items.reduce((sum, item) => sum + item.subCriterion.maxScore, 0))
+													const groupCurrentTotal = round(
+														group.items.reduce((sum, item) => {
+															const rawValue = scores[activeContestantId]?.[item.subCriterion.id] ?? '0'
+															return sum + parseAndClampScore(rawValue, item.subCriterion.maxScore)
+														}, 0),
+													)
+
+													return (
+														<div key={group.memberLabel} className='rounded-2xl border border-cyan-200 bg-white p-3'>
+															<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
+																<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
+																<p className='text-xs text-cyan-900/90'>
+																	Max: {groupMaxScore.toFixed(2)} | Current: {groupCurrentTotal.toFixed(2)}
+																</p>
+															</div>
+
+															<div className='mt-3 grid gap-3 xl:grid-cols-2'>
+																{group.items.map(({ subCriterion, displayName }) => (
+																	<label key={subCriterion.id} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
+																		<span className='block text-sm font-semibold text-cyan-950'>{displayName}</span>
+																		<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
+																		<input
+																			value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
+																			onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
+																			type='number'
+																			inputMode='decimal'
+																			min={0}
+																			max={subCriterion.maxScore}
+																			step='0.01'
+																			className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 [color:#0f172a] [-webkit-text-fill-color:#0f172a] outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+																		/>
+																		<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
+																	</label>
+																))}
+															</div>
+														</div>
+													)
+												})}
+											</div>
+										) : (
+											<div className='mt-3 grid gap-3 xl:grid-cols-2'>
+												{criterion.subCriteria.map((subCriterion) => (
+													<label key={subCriterion.id} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
+														<span className='block text-sm font-semibold text-cyan-950'>{subCriterion.name}</span>
+														<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
+														<input
+															value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
+															onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
+															type='number'
+															inputMode='decimal'
+															min={0}
+															max={subCriterion.maxScore}
+															step='0.01'
+															className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 [color:#0f172a] [-webkit-text-fill-color:#0f172a] outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+														/>
+														<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
+													</label>
+												))}
+											</div>
+										)}
 									</article>
 								)
 							})}

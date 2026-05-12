@@ -39,3 +39,42 @@ export const PAPER_PRESENTATION_CRITERIA: CriterionInput[] = [
 ]
 
 export const PAPER_PRESENTATION_CONTESTANT_SAMPLES = ['Entry 1', 'Entry 2', 'Entry 3']
+
+export const FINAL_ORAL_DEFENSE_GROUP_CRITERIA = {
+	name: 'Group Presentation',
+	subCriteria: [
+		{ name: 'Project Context and societal impact', maxScore: 10 },
+		{ name: 'Problem Statement', maxScore: 10 },
+		{ name: 'Objectives', maxScore: 10 },
+		{ name: 'Proposed Methodology', maxScore: 10 },
+		{ name: 'Requirement Analysis', maxScore: 10 },
+		{ name: 'Standards of the study', maxScore: 10 },
+		{ name: 'Team Organization', maxScore: 10 },
+		{ name: 'Solution Approach', maxScore: 10 },
+		{ name: 'Spelling, Punctuation, Grammar', maxScore: 10 },
+		{ name: 'Overall Presentation', maxScore: 10 },
+		{ name: 'Question and Answer', maxScore: 10 },
+	],
+}
+
+export const FINAL_ORAL_DEFENSE_INDIVIDUAL_CRITERIA = [
+	{ name: 'Delivery (Voice Projection and Modulation)', maxScore: 20 },
+	{ name: 'Grammar, Syntax, and Understandability', maxScore: 20 },
+	{ name: 'Preparedness (Professionalism and Demeanor)', maxScore: 20 },
+	{ name: 'Ability to present the assigned topic(s) clearly', maxScore: 20 },
+	{ name: 'Participation in the defense', maxScore: 20 },
+	{ name: 'Ability to answer questions', maxScore: 20 },
+	{ name: 'Ability to convince the panelists of the ideas being presented', maxScore: 20 },
+]
+
+export const FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES = ['Team Alpha (BSCS)', 'Team Bravo (BSINT)', 'Team Charlie']
+
+export function buildFinalOralDefenseCriteria(): CriterionInput[] {
+	return [
+		FINAL_ORAL_DEFENSE_GROUP_CRITERIA,
+		{
+			name: 'Individual Presentation',
+			subCriteria: FINAL_ORAL_DEFENSE_INDIVIDUAL_CRITERIA,
+		},
+	]
+}
