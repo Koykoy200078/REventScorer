@@ -235,6 +235,43 @@ function teamsByProgram(rankings: EventCompiledResults['rankings'], manualAssign
 	return grouped
 }
 
+function assignedJudgeIdsForContestant(event: EventScorer, contestantId: string): string[] {
+	if (!Array.isArray(event.presentationSlots) || event.presentationSlots.length === 0) {
+		return event.judges.map((judge) => judge.id)
+	}
+
+	const hasAnyJudgeAssigned = event.presentationSlots.some((slot) => slot.judgeIds.length > 0)
+	if (!hasAnyJudgeAssigned) {
+		return event.judges.map((judge) => judge.id)
+	}
+
+	const slot = event.presentationSlots.find((candidate) => candidate.contestantId === contestantId)
+	if (!slot) {
+		return event.judges.map((judge) => judge.id)
+	}
+
+	return slot.judgeIds
+}
+
+function buildJudgeAssignmentDrafts(event: EventScorer): Record<string, string[]> {
+	const drafts: Record<string, string[]> = {}
+
+	for (const contestant of event.contestants) {
+		drafts[contestant.id] = assignedJudgeIdsForContestant(event, contestant.id)
+	}
+
+	return drafts
+}
+
+function sameJudgeAssignments(left: string[], right: string[]): boolean {
+	if (left.length !== right.length) {
+		return false
+	}
+
+	const leftSet = new Set(left)
+	return right.every((judgeId) => leftSet.has(judgeId))
+}
+
 export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
@@ -244,6 +281,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const [isRefreshing, setIsRefreshing] = useState(false)
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
 	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>({})
+	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>(() => buildJudgeAssignmentDrafts(initialEvent))
+	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
+	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const refreshInFlight = useRef(false)
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
@@ -251,6 +291,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
 	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
 	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, manualAssignments, useWeightedScores), [compiled.rankings, manualAssignments, useWeightedScores])
+
+	useEffect(() => {
+		setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(event))
+	}, [event])
 
 	const copyLink = useCallback(async (value: string) => {
 		try {
@@ -308,6 +352,68 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 			setIsRefreshing(false)
 		}
 	}, [event.id])
+
+	const toggleJudgeAssignment = useCallback(
+		(contestantId: string, judgeId: string) => {
+			setJudgeAssignmentDrafts((previous) => {
+				const currentJudgeIds = previous[contestantId] ?? assignedJudgeIdsForContestant(event, contestantId)
+				const nextJudgeIds = new Set(currentJudgeIds)
+
+				if (nextJudgeIds.has(judgeId)) {
+					if (nextJudgeIds.size === 1) {
+						return previous
+					}
+
+					nextJudgeIds.delete(judgeId)
+				} else {
+					nextJudgeIds.add(judgeId)
+				}
+
+				return {
+					...previous,
+					[contestantId]: Array.from(nextJudgeIds),
+				}
+			})
+		},
+		[event],
+	)
+
+	const saveJudgeAssignment = useCallback(
+		async (contestantId: string) => {
+			const judgeIds = judgeAssignmentDrafts[contestantId] ?? assignedJudgeIdsForContestant(event, contestantId)
+
+			if (judgeIds.length === 0) {
+				setRefreshError('At least 1 judge must be assigned to each participant.')
+				return
+			}
+
+			setSavingJudgeAssignmentForContestantId(contestantId)
+			setRefreshError(null)
+
+			try {
+				const response = await fetch(`/api/admin/events/${event.id}`, {
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ contestantId, judgeIds }),
+				})
+
+				const responseBody = (await response.json()) as AdminEventResponse
+
+				if (!response.ok) {
+					throw new Error(responseBody.error ?? 'Unable to update judge assignment.')
+				}
+
+				setEvent(responseBody.event)
+				setCompiled(responseBody.compiled)
+				setEditingJudgeAssignmentForContestantId(null)
+			} catch (error) {
+				setRefreshError(error instanceof Error ? error.message : 'Unable to update judge assignment.')
+			} finally {
+				setSavingJudgeAssignmentForContestantId(null)
+			}
+		},
+		[event, judgeAssignmentDrafts],
+	)
 
 	useEffect(() => {
 		const eventId = event.id
@@ -646,6 +752,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 										const currentProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
 										const rowContestant = contestantsById.get(result.contestantId)
 										const isIndividual = rowContestant?.entryType === 'individual'
+										const currentAssignedJudgeIds = assignedJudgeIdsForContestant(event, result.contestantId)
+										const assignmentDraftJudgeIds = judgeAssignmentDrafts[result.contestantId] ?? currentAssignedJudgeIds
+										const hasAssignmentChanges = !sameJudgeAssignments(currentAssignedJudgeIds, assignmentDraftJudgeIds)
+										const isEditingJudgeAssignment = editingJudgeAssignmentForContestantId === result.contestantId
+										const isSavingAssignment = savingJudgeAssignmentForContestantId === result.contestantId
+										const currentAssignedJudgeNames = event.judges.filter((judge) => currentAssignedJudgeIds.includes(judge.id)).map((judge) => judge.name)
+										const currentAssignedJudgeLabel = currentAssignedJudgeNames.length > 0 ? currentAssignedJudgeNames.join(', ') : 'No assigned judge'
 
 										const hasParticipantScores = useWeightedScores && Array.isArray(result.participantScores) && result.participantScores.length > 0
 
@@ -690,13 +803,50 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 												{hasParticipantScores ? (
 													<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
 														<td className='border-b border-[var(--border-soft)] px-3 py-2 text-xs text-[var(--text-secondary)]' colSpan={compiledTableColumnCount}>
-															<div className='flex flex-wrap gap-2'>
-																<span className='font-semibold'>Participant Scores:</span>
-																{result.participantScores?.map((participant, participantIndex) => (
-																	<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
-																		{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participant.rating ?? 0)})
-																	</span>
-																))}
+															<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
+																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Participant Scores:</span>
+																<div className='flex flex-wrap items-center gap-2'>
+																	{result.participantScores?.map((participant, participantIndex) => (
+																		<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
+																			{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participant.rating ?? 0)})
+																		</span>
+																	))}
+																</div>
+															</div>
+															<div className='mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
+																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Judge Assignment:</span>
+																<div className='relative inline-flex items-center gap-2'>
+																	<span className='rounded-full border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-medium text-cyan-900'>Current: {currentAssignedJudgeLabel}</span>
+																	<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId((current) => (current === result.contestantId ? null : result.contestantId))} className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800'>
+																		Edit Judge
+																	</button>
+
+																	{isEditingJudgeAssignment ? (
+																		<div className='absolute left-0 top-full z-20 mt-2 w-max max-w-[min(92vw,560px)] rounded-2xl border border-cyan-300 bg-white p-3 shadow-xl'>
+																			<p className='text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>Swap Judges</p>
+																			<div className='mt-2 flex flex-wrap items-center gap-2'>
+																				{event.judges.map((judge) => (
+																					<label key={`${result.contestantId}-${judge.id}`} className='flex items-center gap-1 rounded-full border border-cyan-300 bg-white px-2 py-1 text-[11px] text-cyan-900'>
+																						<input type='checkbox' checked={assignmentDraftJudgeIds.includes(judge.id)} onChange={() => toggleJudgeAssignment(result.contestantId, judge.id)} className='rounded border-cyan-400 text-cyan-700 focus:ring-cyan-500' />
+																						<span>{judge.name}</span>
+																					</label>
+																				))}
+																			</div>
+																			<div className='mt-3 flex flex-wrap items-center gap-2'>
+																				<button
+																					type='button'
+																					onClick={() => saveJudgeAssignment(result.contestantId)}
+																					disabled={!hasAssignmentChanges || isSavingAssignment}
+																					className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
+																					{isSavingAssignment ? 'Saving...' : 'Save Swap'}
+																				</button>
+																				<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId(null)} disabled={isSavingAssignment} className='rounded-full border border-cyan-300 bg-white px-3 py-1 text-[11px] font-semibold text-cyan-800 transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60'>
+																					Cancel
+																				</button>
+																			</div>
+																		</div>
+																	) : null}
+																</div>
 															</div>
 														</td>
 													</tr>

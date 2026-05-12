@@ -5,8 +5,11 @@ import { getJudgeSessionByToken } from '@/lib/storage'
 
 export const dynamic = 'force-dynamic'
 
-export default async function JudgeTokenPage({ params }: { params: Promise<{ token: string }> }) {
+export default async function JudgeTokenPage({ params, searchParams }: { params: Promise<{ token: string }>; searchParams?: Promise<{ contestantId?: string; fromAdmin?: string }> }) {
 	const { token } = await params
+	const resolvedSearchParams = searchParams ? await searchParams : undefined
+	const initialContestantId = typeof resolvedSearchParams?.contestantId === 'string' ? resolvedSearchParams.contestantId : undefined
+	const adminEditMode = resolvedSearchParams?.fromAdmin === '1' || resolvedSearchParams?.fromAdmin === 'true'
 	const session = await getJudgeSessionByToken(token)
 
 	if (!session) {
@@ -25,6 +28,8 @@ export default async function JudgeTokenPage({ params }: { params: Promise<{ tok
 				existingScores={session.submission?.scores}
 				existingSavedContestantIds={session.submission?.savedContestantIds}
 				submittedAt={session.submission?.submittedAt}
+				initialContestantId={initialContestantId}
+				adminEditMode={adminEditMode}
 			/>
 		</div>
 	)

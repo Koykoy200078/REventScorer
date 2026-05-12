@@ -16,6 +16,8 @@ interface JudgeScoringFormProps {
 	existingScores?: ScoreMatrix
 	existingSavedContestantIds?: string[]
 	submittedAt?: string
+	initialContestantId?: string
+	adminEditMode?: boolean
 }
 
 function round(value: number): number {
@@ -248,11 +250,18 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, presentationSlots, existingScores, existingSavedContestantIds, submittedAt }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, presentationSlots, existingScores, existingSavedContestantIds, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
 	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores, existingSavedContestantIds))
-	const [activeContestantIndex, setActiveContestantIndex] = useState(0)
+	const [activeContestantIndex, setActiveContestantIndex] = useState(() => {
+		if (!initialContestantId) {
+			return 0
+		}
+
+		const targetIndex = contestants.findIndex((contestant) => contestant.id === initialContestantId)
+		return targetIndex >= 0 ? targetIndex : 0
+	})
 	const [isSaving, setIsSaving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -402,7 +411,9 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			const currentName = activeContestant.name
 			const nextIndex = activeContestantIndex + 1
 
-			if (nextIndex < contestants.length) {
+			if (adminEditMode) {
+				setSuccessMessage(`Saved scores for ${currentName}. Continue editing this participant or switch entries.`)
+			} else if (nextIndex < contestants.length) {
 				setActiveContestantIndex(nextIndex)
 				setSuccessMessage(`Saved scores for ${currentName}. Continue with ${contestants[nextIndex].name}.`)
 			} else {
@@ -524,9 +535,12 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 													return (
 														<div key={group.memberLabel} className='rounded-2xl border border-cyan-200 bg-white p-3'>
-															<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
-																<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
-																<p className='text-xs text-cyan-900/90'>
+															<div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+																<div>
+																	<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
+																	<p className='mt-1 text-[11px] text-cyan-900/90'>Legend: 4 - Excellent, 3 - Exceeds Expectations, 2 - Meets Expectations, 1 - Meets Expectations Sometimes, 0 - Does Not Meet Expectations</p>
+																</div>
+																<p className='text-xs text-cyan-900/90 sm:text-right'>
 																	Max: {groupMaxScore.toFixed(2)} | Current: {groupCurrentTotal.toFixed(2)}
 																</p>
 															</div>

@@ -548,6 +548,49 @@ function isJudgeAssignedToContestant(event: EventScorer, judgeId: string, contes
 	return event.presentationSlots.some((slot) => slot.contestantId === contestantId && slot.judgeIds.includes(judgeId))
 }
 
+function normalizeJudgeAssignmentIds(event: EventScorer, rawJudgeIds: unknown): string[] {
+	if (!Array.isArray(rawJudgeIds)) {
+		throw new Error('Judge assignments must be an array of judge IDs.')
+	}
+
+	const cleanedJudgeIds = Array.from(new Set(rawJudgeIds.map((judgeId) => compactWhitespace(String(judgeId ?? ''))).filter((judgeId) => judgeId.length > 0)))
+
+	if (cleanedJudgeIds.length === 0) {
+		throw new Error('At least 1 judge must be assigned to a participant.')
+	}
+
+	const validJudgeIds = new Set(event.judges.map((judge) => judge.id))
+
+	for (const judgeId of cleanedJudgeIds) {
+		if (!validJudgeIds.has(judgeId)) {
+			throw new Error('One or more selected judges are not part of this event.')
+		}
+	}
+
+	return cleanedJudgeIds
+}
+
+function ensurePresentationSlotsForAssignmentUpdates(event: EventScorer): EventPresentationSlot[] {
+	const existingSlots = Array.isArray(event.presentationSlots) ? event.presentationSlots : []
+	const hasAnyJudgeAssigned = existingSlots.some((slot) => slot.judgeIds.length > 0)
+	const existingSlotByContestantId = new Map(existingSlots.map((slot) => [slot.contestantId, slot]))
+	const allJudgeIds = event.judges.map((judge) => judge.id)
+	const validJudgeIds = new Set(allJudgeIds)
+
+	return event.contestants.map((contestant, index) => {
+		const existingSlot = existingSlotByContestantId.get(contestant.id)
+		const baseJudgeIds = hasAnyJudgeAssigned ? (existingSlot?.judgeIds ?? allJudgeIds) : allJudgeIds
+		const normalizedJudgeIds = Array.from(new Set(baseJudgeIds.filter((judgeId) => validJudgeIds.has(judgeId))))
+
+		return {
+			id: existingSlot?.id ?? randomUUID(),
+			label: compactWhitespace(existingSlot?.label ?? '') || `Slot ${index + 1}`,
+			contestantId: contestant.id,
+			judgeIds: normalizedJudgeIds,
+		}
+	})
+}
+
 function buildSavedContestantIds(event: EventScorer, previousSubmission: EventScorer['submissions'][number] | undefined, savedContestantId: string): string[] {
 	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
 
@@ -597,6 +640,54 @@ export async function createEvent(input: CreateEventInput): Promise<EventScorer>
 export async function getEventById(eventId: string): Promise<EventScorer | undefined> {
 	const store = await readStore()
 	return store.events.find((event) => event.id === eventId)
+}
+
+export async function updateContestantJudgeAssignments(eventId: string, contestantId: string, rawJudgeIds: unknown): Promise<EventScorer> {
+	const store = await readStore()
+
+	for (let index = 0; index < store.events.length; index += 1) {
+		const event = store.events[index]
+		if (event.id !== eventId) {
+			continue
+		}
+
+		const contestantExists = event.contestants.some((contestant) => contestant.id === contestantId)
+		if (!contestantExists) {
+			throw new Error('Contestant not found for this event.')
+		}
+
+		const updatedJudgeIds = normalizeJudgeAssignmentIds(event, rawJudgeIds)
+		const updatedSlots = ensurePresentationSlotsForAssignmentUpdates(event).map((slot) => (slot.contestantId === contestantId ? { ...slot, judgeIds: updatedJudgeIds } : slot))
+		const assignedJudgeIdsByContestant = new Map(updatedSlots.map((slot) => [slot.contestantId, new Set(slot.judgeIds)]))
+
+		const updatedSubmissions = event.submissions.map((submission) => {
+			const filteredSavedContestantIds = Array.from(savedContestantIdsForSubmission(event, submission)).filter((savedContestantId) => {
+				const assignedJudgeIds = assignedJudgeIdsByContestant.get(savedContestantId)
+				if (!assignedJudgeIds) {
+					return true
+				}
+
+				return assignedJudgeIds.has(submission.judgeId)
+			})
+
+			return {
+				...submission,
+				savedContestantIds: filteredSavedContestantIds,
+			}
+		})
+
+		const updatedEvent: EventScorer = {
+			...event,
+			presentationSlots: updatedSlots,
+			submissions: updatedSubmissions,
+		}
+
+		store.events[index] = updatedEvent
+		await writeStore(store)
+		return updatedEvent
+	}
+
+	throw new Error('Event not found.')
 }
 
 export async function getJudgeSessionByToken(token: string): Promise<JudgeSessionData | undefined> {
