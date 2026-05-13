@@ -757,8 +757,18 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 										const hasAssignmentChanges = !sameJudgeAssignments(currentAssignedJudgeIds, assignmentDraftJudgeIds)
 										const isEditingJudgeAssignment = editingJudgeAssignmentForContestantId === result.contestantId
 										const isSavingAssignment = savingJudgeAssignmentForContestantId === result.contestantId
-										const currentAssignedJudgeNames = event.judges.filter((judge) => currentAssignedJudgeIds.includes(judge.id)).map((judge) => judge.name)
-										const currentAssignedJudgeLabel = currentAssignedJudgeNames.length > 0 ? currentAssignedJudgeNames.join(', ') : 'No assigned judge'
+										const assignedJudgeStatus = event.judges
+											.filter((judge) => currentAssignedJudgeIds.includes(judge.id))
+											.map((judge) => {
+												const judgeBreakdown = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
+												const hasScoredContestant = judgeBreakdown ? Object.prototype.hasOwnProperty.call(judgeBreakdown.totalsByContestant, result.contestantId) : false
+
+												return {
+													id: judge.id,
+													name: judge.name,
+													hasScoredContestant,
+												}
+											})
 
 										const hasParticipantScores = useWeightedScores && Array.isArray(result.participantScores) && result.participantScores.length > 0
 
@@ -816,7 +826,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 															<div className='mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
 																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Judge Assignment:</span>
 																<div className='relative inline-flex items-center gap-2'>
-																	<span className='rounded-full border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-medium text-cyan-900'>Current: {currentAssignedJudgeLabel}</span>
+																	<div className='flex flex-wrap items-center gap-1'>
+																		{assignedJudgeStatus.length > 0 ? (
+																			assignedJudgeStatus.map((judgeStatus) => (
+																				<span
+																					key={`${result.contestantId}-${judgeStatus.id}-status`}
+																					className={judgeStatus.hasScoredContestant ? 'rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800' : 'rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'}>
+																					{judgeStatus.name}
+																					{judgeStatus.hasScoredContestant ? '' : ' (Not scored)'}
+																				</span>
+																			))
+																		) : (
+																			<span className='rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'>No assigned judge</span>
+																		)}
+																	</div>
 																	<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId((current) => (current === result.contestantId ? null : result.contestantId))} className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800'>
 																		Edit Judge
 																	</button>
