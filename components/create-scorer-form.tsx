@@ -95,6 +95,21 @@ function toNumber(value: string): number {
 	return Number.isFinite(numeric) ? numeric : 0
 }
 
+function entriesFromNewLines(value: string): string[] {
+	return value
+		.split(/\r?\n/)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0)
+}
+
+function isEmptyContestantDraft(contestant: ContestantDraft): boolean {
+	if (contestant.name.trim().length > 0) {
+		return false
+	}
+
+	return contestant.participants.every((participant) => participant.trim().length === 0)
+}
+
 function criterionMaxScore(criterion: CriterionDraft): number {
 	return criterion.subCriteria.reduce((sum, subCriterion) => sum + toNumber(subCriterion.maxScore), 0)
 }
@@ -112,6 +127,9 @@ export function CreateScorerForm() {
 	const [createdBy, setCreatedBy] = useState('')
 	const [eventScoringType, setEventScoringType] = useState<EventScoringType>('standard')
 	const [contestants, setContestants] = useState<ContestantDraft[]>([createContestant(), createContestant()])
+	const [bulkContestantEnabled, setBulkContestantEnabled] = useState(false)
+	const [bulkContestantText, setBulkContestantText] = useState('')
+	const [bulkContestantEntryType, setBulkContestantEntryType] = useState<ContestantEntryType>('group')
 	const [judges, setJudges] = useState<JudgeDraft[]>([createJudge()])
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
@@ -126,13 +144,29 @@ export function CreateScorerForm() {
 
 	useEffect(() => {
 		const activeJudgeIds = new Set(judges.map((judge) => judge.id))
-		setPresentationSlots((previous) =>
-			previous.map((slot) => ({
-				...slot,
-				judgeIds: slot.judgeIds.filter((judgeId) => activeJudgeIds.has(judgeId)),
-			})),
-		)
-	}, [judges])
+		const onlyJudgeId = judges.length === 1 ? judges[0].id : null
+		setPresentationSlots((previous) => {
+			let hasChanges = false
+
+			const nextSlots = previous.map((slot) => {
+				const filteredJudgeIds = slot.judgeIds.filter((judgeId) => activeJudgeIds.has(judgeId))
+				const nextJudgeIds = onlyJudgeId && filteredJudgeIds.length === 0 ? [onlyJudgeId] : filteredJudgeIds
+				const unchanged = nextJudgeIds.length === slot.judgeIds.length && nextJudgeIds.every((judgeId, index) => judgeId === slot.judgeIds[index])
+
+				if (unchanged) {
+					return slot
+				}
+
+				hasChanges = true
+				return {
+					...slot,
+					judgeIds: nextJudgeIds,
+				}
+			})
+
+			return hasChanges ? nextSlots : previous
+		})
+	}, [judges, presentationSlots])
 
 	function loadPaperTemplate(): void {
 		const sampleContestants = [...PAPER_PRESENTATION_CONTESTANT_SAMPLES]
@@ -237,6 +271,29 @@ export function CreateScorerForm() {
 	function removeContestant(index: number): void {
 		setContestants((previous) => previous.filter((_, contestantIndex) => contestantIndex !== index))
 		setPresentationSlots((previous) => previous.filter((_, slotIndex) => slotIndex !== index))
+	}
+
+	function addContestantsFromNewLines(): void {
+		const names = entriesFromNewLines(bulkContestantText)
+
+		if (names.length === 0) {
+			setError('Please enter at least one entry name in the bulk input.')
+			return
+		}
+
+		setError(null)
+		const importedContestants = contestantsFromNames(names, bulkContestantEntryType)
+		const shouldReplaceEmptyStarters = contestants.every((contestant) => isEmptyContestantDraft(contestant))
+
+		if (shouldReplaceEmptyStarters) {
+			setContestants(importedContestants)
+			setPresentationSlots(buildPresentationSlots(importedContestants.length))
+		} else {
+			setContestants((previous) => [...previous, ...importedContestants])
+			setPresentationSlots((previous) => buildPresentationSlots(previous.length + importedContestants.length, previous))
+		}
+
+		setBulkContestantText('')
 	}
 
 	function updateJudge(judgeId: string, value: Partial<Pick<JudgeDraft, 'name' | 'email'>>): void {
@@ -466,6 +523,25 @@ export function CreateScorerForm() {
 							</div>
 						</div>
 						<p className='mb-3 text-xs text-emerald-900/70'>Set each entry as a whole team/group or an individual presenter.</p>
+						<label className='mb-3 flex items-center gap-2 text-xs font-medium text-emerald-900'>
+							<input type='checkbox' checked={bulkContestantEnabled} onChange={(event) => setBulkContestantEnabled(event.target.checked)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+							Enable Bulk Add Team/Group Entries
+						</label>
+						{bulkContestantEnabled ? (
+							<div className='mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3'>
+								<p className='text-xs font-medium text-emerald-900'>Bulk Add Entries (one per line)</p>
+								<textarea value={bulkContestantText} onChange={(event) => setBulkContestantText(event.target.value)} rows={4} placeholder={`A\nB\nC`} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+								<div className='mt-2 flex flex-wrap items-center gap-2'>
+									<select value={bulkContestantEntryType} onChange={(event) => setBulkContestantEntryType(event.target.value as ContestantEntryType)} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+										<option value='individual'>Add as Individual entries</option>
+										<option value='group'>Add as Team/Group entries</option>
+									</select>
+									<button type='button' onClick={addContestantsFromNewLines} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+										Add Entries from New Lines
+									</button>
+								</div>
+							</div>
+						) : null}
 						<div className='space-y-3'>
 							{contestants.map((contestant, index) => (
 								<div key={contestant.id} className='rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3'>
