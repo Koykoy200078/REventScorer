@@ -1,5 +1,54 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Storage
+
+EventScorer now uses a normalized MySQL schema instead of `data/events.json` for runtime persistence.
+
+Configure MySQL credentials in the root `.env` file (`C:\Projects\ShareME\.env`) with:
+
+- `EVENTSCORER_DB_HOST`
+- `EVENTSCORER_DB_PORT`
+- `EVENTSCORER_DB_USER`
+- `EVENTSCORER_DB_PASSWORD`
+- `EVENTSCORER_DB_NAME`
+- `EVENTSCORER_DB_POOL_SIZE`
+
+Compatibility aliases are also supported: `MYSQL_*` and `DB_*` variants.
+
+On first startup, if MySQL has zero events and `data/events.json` exists, EventScorer auto-imports legacy JSON data into MySQL.
+
+## API Ownership
+
+EventScorer API routes are owned by the root Express server (`server.js`) under:
+
+- `/api/eventscorer/events`
+- `/api/eventscorer/admin/events/:eventId`
+- `/api/eventscorer/judge/:token`
+- `/api/eventscorer/broadcast`
+
+The EventScorer Next.js app uses a rewrite so client calls to `/api/eventscorer/*` are forwarded to the root backend origin.
+
+## DB Migration and Rollback
+
+Run from the workspace root (`C:\Projects\ShareME`):
+
+```bash
+npm run eventscorer:db:migrate
+```
+
+`eventscorer:db:migrate` now applies schema and imports `data/events.json` when the target database has no events yet.
+
+Rollback requires explicit confirmation:
+
+```bash
+npm run eventscorer:db:rollback -- --yes
+```
+
+SQL files used by these scripts:
+
+- `scripts/sql/eventscorer-migration.sql`
+- `scripts/sql/eventscorer-rollback.sql`
+
 ## Getting Started
 
 First, run the development server:

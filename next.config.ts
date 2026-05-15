@@ -46,7 +46,12 @@ const nextConfig: NextConfig = {
 	},
 	allowedDevOrigins: getAllowedDevOrigins(),
 	async rewrites() {
-		return []
+		return [
+			{
+				source: '/api/eventscorer/:path*',
+				destination: `${backendOrigin}/api/eventscorer/:path*`,
+			},
+		]
 	},
 }
 

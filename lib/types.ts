@@ -6,6 +6,7 @@ export interface JudgeInput {
 }
 
 export type EventScoringType = 'standard' | 'final-oral-defense'
+export type EventProgramTag = 'BSINT' | 'BSCS'
 
 export type ContestantEntryType = 'group' | 'individual'
 
@@ -13,6 +14,7 @@ export interface ContestantInput {
 	name: string
 	entryType?: ContestantEntryType
 	participants?: string[]
+	programTag?: EventProgramTag | null
 }
 
 export interface SubCriterionInput {
@@ -47,6 +49,7 @@ export interface EventContestant {
 	name: string
 	entryType?: ContestantEntryType
 	participants?: string[]
+	programTag?: EventProgramTag | null
 }
 
 export interface EventJudge {

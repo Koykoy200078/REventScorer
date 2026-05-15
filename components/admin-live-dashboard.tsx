@@ -3,10 +3,10 @@
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventScorer } from '@/lib/types'
+import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
-type ProgramLabel = 'BSINT' | 'BSCS'
+type ProgramLabel = EventProgramTag
 
 interface ProgramTopTeam {
 	program: ProgramLabel
@@ -100,14 +100,14 @@ function isIndividualPresentationCriterion(criterion: EventCriterion): boolean {
 
 function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
 	const normalizedName = name.trim()
-	const separatorIndex = normalizedName.indexOf(' - ')
-	if (separatorIndex === -1) {
+	const splitMatch = normalizedName.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
+	if (!splitMatch) {
 		return { memberLabel: 'Individual', displayName: normalizedName || name }
 	}
 
-	const memberLabel = normalizedName.slice(0, separatorIndex).trim()
-	const displayName = normalizedName.slice(separatorIndex + 3).trim()
-	const isMemberLabel = /^member\s*\d+$/i.test(memberLabel) || /^individual(?:\s*\d+)?$/i.test(memberLabel)
+	const memberLabel = splitMatch[1].trim()
+	const displayName = splitMatch[2].trim()
+	const isMemberLabel = /^(member|student|participant)\s*\d+$/i.test(memberLabel) || /^individual(?:\s*\d+)?$/i.test(memberLabel)
 
 	if (!isMemberLabel) {
 		return {
@@ -196,10 +196,31 @@ function resolveMemberLabelForContestant(memberLabel: string, contestant: EventC
 	return participantName && participantName.length > 0 ? participantName : memberLabel
 }
 
-function displaySubCriterionNameForContestant(subCriterionName: string, contestant: EventContestant): string {
-	const { memberLabel, displayName } = splitMemberCriterionName(subCriterionName)
-	const resolvedLabel = resolveMemberLabelForContestant(memberLabel, contestant)
-	return `${resolvedLabel} - ${displayName}`
+function mergedIndividualSubCriteriaForContestant(criterion: EventCriterion, contestant: EventContestant): Array<{ id: string; name: string; maxScore: number }> {
+	const merged: Array<{ id: string; name: string; maxScore: number }> = []
+	const seenItemKeys = new Set<string>()
+
+	for (const subCriterion of criterion.subCriteria) {
+		if (!isSubCriterionApplicableToContestant(subCriterion.name, contestant, criterion)) {
+			continue
+		}
+
+		const { displayName } = splitMemberCriterionName(subCriterion.name)
+		const itemKey = `${displayName.toLowerCase()}::${subCriterion.maxScore}`
+
+		if (seenItemKeys.has(itemKey)) {
+			continue
+		}
+
+		seenItemKeys.add(itemKey)
+		merged.push({
+			id: subCriterion.id,
+			name: displayName,
+			maxScore: subCriterion.maxScore,
+		})
+	}
+
+	return merged
 }
 
 function connectionLabel(state: ConnectionState): string {
@@ -240,18 +261,55 @@ function detectProgramLabel(contestantName: string): ProgramLabel | null {
 	return null
 }
 
+function contestantProgramLabel(contestant: EventContestant | undefined): ProgramLabel | null {
+	if (!contestant) {
+		return null
+	}
+
+	return contestant.programTag === 'BSINT' || contestant.programTag === 'BSCS' ? contestant.programTag : null
+}
+
+function resolveProgramLabel(contestantName: string, contestant: EventContestant | undefined, manualAssignment: ProgramLabel | null | undefined): ProgramLabel | null {
+	if (manualAssignment !== undefined) {
+		return manualAssignment
+	}
+
+	const persistedProgram = contestantProgramLabel(contestant)
+	if (persistedProgram) {
+		return persistedProgram
+	}
+
+	return detectProgramLabel(contestantName)
+}
+
+function buildProgramAssignmentsFromEvent(event: EventScorer): Record<string, ProgramLabel | null> {
+	const assignments: Record<string, ProgramLabel | null> = {}
+
+	for (const contestant of event.contestants) {
+		const persistedProgram = contestantProgramLabel(contestant)
+		if (persistedProgram) {
+			assignments[contestant.id] = persistedProgram
+		}
+	}
+
+	return assignments
+}
+
 function extractDynamicTeamName(contestantName: string): string {
 	const cleanedName = contestantName
 		.replace(/\bBSINT\b|\bBSCS\b/gi, ' ')
+		.replace(/\(\s*\)/g, ' ')
+		.replace(/\(\s+/g, '(')
+		.replace(/\s+\)/g, ')')
 		.replace(/[|_]+/g, ' ')
 		.replace(/\s{2,}/g, ' ')
-		.replace(/^[\s\-:|/\\]+|[\s\-:|/\\]+$/g, '')
+		.replace(/^[\s\-:|/\\()]+|[\s\-:|/\\()]+$/g, '')
 		.trim()
 
 	return cleanedName.length > 0 ? cleanedName : contestantName
 }
 
-function teamsByProgram(rankings: EventCompiledResults['rankings'], manualAssignments: Record<string, ProgramLabel | null>, useWeighted: boolean): Record<ProgramLabel, ProgramTopTeam[]> {
+function teamsByProgram(rankings: EventCompiledResults['rankings'], contestantsById: Map<string, EventContestant>, manualAssignments: Record<string, ProgramLabel | null>, useWeighted: boolean): Record<ProgramLabel, ProgramTopTeam[]> {
 	const grouped: Record<ProgramLabel, ProgramTopTeam[]> = {
 		BSINT: [],
 		BSCS: [],
@@ -259,9 +317,15 @@ function teamsByProgram(rankings: EventCompiledResults['rankings'], manualAssign
 
 	for (const result of rankings) {
 		const manual = manualAssignments[result.contestantId]
-		const detectedProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
+		const contestant = contestantsById.get(result.contestantId)
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
 
 		if (!detectedProgram) {
+			continue
+		}
+
+		const score = rankingScore(result, useWeighted)
+		if (!Number.isFinite(score) || score <= 0) {
 			continue
 		}
 
@@ -270,7 +334,7 @@ function teamsByProgram(rankings: EventCompiledResults['rankings'], manualAssign
 			teamName: extractDynamicTeamName(result.contestantName),
 			contestantName: result.contestantName,
 			rank: result.rank,
-			score: rankingScore(result, useWeighted),
+			score,
 			totalScore: result.totalScore,
 			judgeCount: result.judgeCount,
 		})
@@ -294,7 +358,7 @@ function participantAnalyticsScore(participant: NonNullable<EventCompiledResults
 	return (participant.averageScore / participant.maxScore) * 100
 }
 
-function participantRankingsByProgram(rankings: EventCompiledResults['rankings'], manualAssignments: Record<string, ProgramLabel | null>): Record<ProgramLabel, ProgramTopParticipant[]> {
+function participantRankingsByProgram(rankings: EventCompiledResults['rankings'], contestantsById: Map<string, EventContestant>, manualAssignments: Record<string, ProgramLabel | null>): Record<ProgramLabel, ProgramTopParticipant[]> {
 	const grouped: Record<ProgramLabel, ProgramTopParticipant[]> = {
 		BSINT: [],
 		BSCS: [],
@@ -302,13 +366,19 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 
 	for (const result of rankings) {
 		const manual = manualAssignments[result.contestantId]
-		const detectedProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
+		const contestant = contestantsById.get(result.contestantId)
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
 
 		if (!detectedProgram || !Array.isArray(result.participantScores) || result.participantScores.length === 0) {
 			continue
 		}
 
 		for (const participant of result.participantScores) {
+			const participantRating = participantAnalyticsScore(participant)
+			if (!Number.isFinite(participantRating) || participantRating <= 0 || participant.averageScore <= 0) {
+				continue
+			}
+
 			grouped[detectedProgram].push({
 				program: detectedProgram,
 				teamName: extractDynamicTeamName(result.contestantName),
@@ -317,7 +387,7 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 				participantLabel: participant.participantLabel,
 				participantAverageScore: participant.averageScore,
 				participantMaxScore: participant.maxScore,
-				participantRating: participantAnalyticsScore(participant),
+				participantRating,
 				rank: 0,
 			})
 		}
@@ -452,7 +522,7 @@ function subCriteriaRankingsByProgram(event: EventScorer, manualAssignments: Rec
 			}
 
 			const manual = manualAssignments[contestant.id]
-			const program = manual !== undefined ? manual : detectProgramLabel(contestant.name)
+			const program = resolveProgramLabel(contestant.name, contestant, manual)
 
 			if (!program) {
 				continue
@@ -509,63 +579,66 @@ function subCriteriaRankingsByProgram(event: EventScorer, manualAssignments: Rec
 	}
 
 	for (const program of ['BSINT', 'BSCS'] as const) {
-		const groups = Array.from(grouped[program].entries()).map(([subCriterionKey, entriesByContestant]) => {
-			const rankedEntries = Array.from(entriesByContestant.values())
-				.map((entry) => {
-					const averageScore = entry.judgeCount > 0 ? roundAnalytics(entry.totalScore / entry.judgeCount) : 0
-					const rating = entry.maxScore > 0 ? roundAnalytics((averageScore / entry.maxScore) * 100) : 0
+		const groups = Array.from(grouped[program].entries())
+			.map(([subCriterionKey, entriesByContestant]) => {
+				const rankedEntries = Array.from(entriesByContestant.values())
+					.map((entry) => {
+						const averageScore = entry.judgeCount > 0 ? roundAnalytics(entry.totalScore / entry.judgeCount) : 0
+						const rating = entry.maxScore > 0 ? roundAnalytics((averageScore / entry.maxScore) * 100) : 0
+
+						return {
+							program: entry.program,
+							teamName: entry.teamName,
+							contestantId: entry.contestantId,
+							contestantName: entry.contestantName,
+							participantLabel: entry.participantLabel,
+							subCriterionName: entry.subCriterionName,
+							averageScore,
+							maxScore: entry.maxScore,
+							rating,
+							rank: 0,
+						}
+					})
+					.filter((entry) => entry.averageScore > 0 && entry.rating > 0)
+					.sort((left, right) => {
+						if (right.rating !== left.rating) {
+							return right.rating - left.rating
+						}
+
+						if (right.averageScore !== left.averageScore) {
+							return right.averageScore - left.averageScore
+						}
+
+						if (left.contestantName !== right.contestantName) {
+							return left.contestantName.localeCompare(right.contestantName)
+						}
+
+						return left.participantLabel.localeCompare(right.participantLabel)
+					})
+
+				let currentRank = 0
+				let lastRating: number | null = null
+
+				const entriesWithRank = rankedEntries.map((entry, index) => {
+					if (lastRating === null || Math.abs(entry.rating - lastRating) > 0.0001) {
+						currentRank = index + 1
+						lastRating = entry.rating
+					}
 
 					return {
-						program: entry.program,
-						teamName: entry.teamName,
-						contestantId: entry.contestantId,
-						contestantName: entry.contestantName,
-						participantLabel: entry.participantLabel,
-						subCriterionName: entry.subCriterionName,
-						averageScore,
-						maxScore: entry.maxScore,
-						rating,
-						rank: 0,
+						...entry,
+						rank: currentRank,
 					}
 				})
-				.sort((left, right) => {
-					if (right.rating !== left.rating) {
-						return right.rating - left.rating
-					}
-
-					if (right.averageScore !== left.averageScore) {
-						return right.averageScore - left.averageScore
-					}
-
-					if (left.contestantName !== right.contestantName) {
-						return left.contestantName.localeCompare(right.contestantName)
-					}
-
-					return left.participantLabel.localeCompare(right.participantLabel)
-				})
-
-			let currentRank = 0
-			let lastRating: number | null = null
-
-			const entriesWithRank = rankedEntries.map((entry, index) => {
-				if (lastRating === null || Math.abs(entry.rating - lastRating) > 0.0001) {
-					currentRank = index + 1
-					lastRating = entry.rating
-				}
 
 				return {
-					...entry,
-					rank: currentRank,
+					program,
+					subCriterionKey,
+					subCriterionName: subCriterionNamesByKey.get(subCriterionKey) ?? subCriterionKey,
+					entries: entriesWithRank,
 				}
 			})
-
-			return {
-				program,
-				subCriterionKey,
-				subCriterionName: subCriterionNamesByKey.get(subCriterionKey) ?? subCriterionKey,
-				entries: entriesWithRank,
-			}
-		})
+			.filter((group) => group.entries.length > 0)
 
 		groups.sort((left, right) => {
 			const leftOrder = subCriterionOrder.get(left.subCriterionKey) ?? Number.MAX_SAFE_INTEGER
@@ -624,7 +697,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const [refreshError, setRefreshError] = useState<string | null>(null)
 	const [isRefreshing, setIsRefreshing] = useState(false)
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
-	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>({})
+	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>(() => buildProgramAssignmentsFromEvent(initialEvent))
+	const [isSavingProgramAssignments, setIsSavingProgramAssignments] = useState(false)
 	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>(() => buildJudgeAssignmentDrafts(initialEvent))
 	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
@@ -642,17 +716,18 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 		for (const result of compiled.rankings) {
 			const manual = manualAssignments[result.contestantId]
-			const currentProgram = manual !== undefined ? manual : detectProgramLabel(result.contestantName)
+			const contestant = contestantsById.get(result.contestantId)
+			const currentProgram = resolveProgramLabel(result.contestantName, contestant, manual)
 			map.set(result.contestantId, currentProgram)
 		}
 
 		return map
-	}, [compiled.rankings, manualAssignments])
+	}, [compiled.rankings, contestantsById, manualAssignments])
 	const allContestantsBSINT = useMemo(() => compiled.rankings.length > 0 && compiled.rankings.every((result) => resolvedProgramByContestantId.get(result.contestantId) === 'BSINT'), [compiled.rankings, resolvedProgramByContestantId])
 	const allContestantsBSCS = useMemo(() => compiled.rankings.length > 0 && compiled.rankings.every((result) => resolvedProgramByContestantId.get(result.contestantId) === 'BSCS'), [compiled.rankings, resolvedProgramByContestantId])
 	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
-	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, manualAssignments, useWeightedScores), [compiled.rankings, manualAssignments, useWeightedScores])
-	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, manualAssignments), [compiled.rankings, manualAssignments])
+	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
+	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, contestantsById, manualAssignments), [compiled.rankings, contestantsById, manualAssignments])
 	const subCriteriaAnalyticsByProgram = useMemo(() => subCriteriaRankingsByProgram(event, manualAssignments), [event, manualAssignments])
 
 	useEffect(() => {
@@ -696,7 +771,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 		setRefreshError(null)
 
 		try {
-			const response = await fetch(`/api/admin/events/${event.id}`, {
+			const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
 				cache: 'no-store',
 			})
 
@@ -716,8 +791,43 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 		}
 	}, [event.id])
 
+	const saveProgramAssignments = useCallback(
+		async (assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }>) => {
+			if (assignments.length === 0) {
+				return
+			}
+
+			setIsSavingProgramAssignments(true)
+			setRefreshError(null)
+
+			try {
+				const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ programAssignments: assignments }),
+				})
+
+				const responseBody = (await response.json()) as AdminEventResponse
+
+				if (!response.ok) {
+					throw new Error(responseBody.error ?? 'Unable to update program tag assignments.')
+				}
+
+				setEvent(responseBody.event)
+				setCompiled(responseBody.compiled)
+			} catch (error) {
+				setRefreshError(error instanceof Error ? error.message : 'Unable to update program tag assignments.')
+			} finally {
+				setIsSavingProgramAssignments(false)
+			}
+		},
+		[event.id],
+	)
+
 	const setProgramForAllContestants = useCallback(
 		(program: ProgramLabel | null) => {
+			const assignments = compiled.rankings.map((result) => ({ contestantId: result.contestantId, programTag: program }))
+
 			setManualAssignments((previous) => {
 				const next = { ...previous }
 
@@ -727,8 +837,25 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 				return next
 			})
+
+			void saveProgramAssignments(assignments)
 		},
-		[compiled.rankings],
+		[compiled.rankings, saveProgramAssignments],
+	)
+
+	const toggleContestantProgram = useCallback(
+		(contestantId: string, selectedProgram: ProgramLabel) => {
+			const currentProgram = resolvedProgramByContestantId.get(contestantId) ?? null
+			const nextProgram = currentProgram === selectedProgram ? null : selectedProgram
+
+			setManualAssignments((previous) => ({
+				...previous,
+				[contestantId]: nextProgram,
+			}))
+
+			void saveProgramAssignments([{ contestantId, programTag: nextProgram }])
+		},
+		[resolvedProgramByContestantId, saveProgramAssignments],
 	)
 
 	const toggleJudgeAssignment = useCallback(
@@ -769,7 +896,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 			setRefreshError(null)
 
 			try {
-				const response = await fetch(`/api/admin/events/${event.id}`, {
+				const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
 					method: 'PATCH',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ contestantId, judgeIds }),
@@ -1234,11 +1361,23 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 												<span>Program</span>
 												<div className='flex items-center gap-3 text-[10px] font-normal text-[var(--text-secondary)]'>
 													<label className='flex items-center gap-1 cursor-pointer'>
-														<input type='checkbox' checked={allContestantsBSINT} onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSINT' : null)} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+														<input
+															type='checkbox'
+															checked={allContestantsBSINT}
+															disabled={isSavingProgramAssignments}
+															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSINT' : null)}
+															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+														/>
 														All BSINT
 													</label>
 													<label className='flex items-center gap-1 cursor-pointer'>
-														<input type='checkbox' checked={allContestantsBSCS} onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSCS' : null)} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+														<input
+															type='checkbox'
+															checked={allContestantsBSCS}
+															disabled={isSavingProgramAssignments}
+															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSCS' : null)}
+															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+														/>
 														All BSCS
 													</label>
 												</div>
@@ -1299,11 +1438,23 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
 														<div className='flex items-center gap-3'>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
-																<input type='checkbox' checked={currentProgram === 'BSINT'} onChange={() => setManualAssignments((prev) => ({ ...prev, [result.contestantId]: currentProgram === 'BSINT' ? null : 'BSINT' }))} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+																<input
+																	type='checkbox'
+																	checked={currentProgram === 'BSINT'}
+																	disabled={isSavingProgramAssignments}
+																	onChange={() => toggleContestantProgram(result.contestantId, 'BSINT')}
+																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+																/>
 																BSINT
 															</label>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
-																<input type='checkbox' checked={currentProgram === 'BSCS'} onChange={() => setManualAssignments((prev) => ({ ...prev, [result.contestantId]: currentProgram === 'BSCS' ? null : 'BSCS' }))} className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer' />
+																<input
+																	type='checkbox'
+																	checked={currentProgram === 'BSCS'}
+																	disabled={isSavingProgramAssignments}
+																	onChange={() => toggleContestantProgram(result.contestantId, 'BSCS')}
+																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+																/>
 																BSCS
 															</label>
 														</div>
@@ -1442,16 +1593,16 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 										{showPerContestantParticipants ? (
 											<div className='mt-2 space-y-3'>
 												{event.contestants.map((contestant) => {
-													const visibleSubCriteria = criterion.subCriteria.filter((subCriterion) => isSubCriterionApplicableToContestant(subCriterion.name, contestant, criterion))
+													const mergedSubCriteria = mergedIndividualSubCriteriaForContestant(criterion, contestant)
 
 													return (
 														<div key={`${criterion.id}-${contestant.id}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3'>
 															<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{contestant.name}</p>
 															<div className='mt-2 space-y-2'>
-																{visibleSubCriteria.map((subCriterion) => (
-																	<div key={`${contestant.id}-${subCriterion.id}`} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm sm:grid-cols-2'>
-																		<span className='text-[var(--text-primary)]'>{displaySubCriterionNameForContestant(subCriterion.name, contestant)}</span>
-																		<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
+																{mergedSubCriteria.map((item) => (
+																	<div key={`${contestant.id}-${item.id}`} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm sm:grid-cols-2'>
+																		<span className='text-[var(--text-primary)]'>{item.name}</span>
+																		<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(item.maxScore)}</span>
 																	</div>
 																))}
 															</div>

@@ -386,7 +386,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		}
 
 		try {
-			const response = await fetch(`/api/judge/${token}`, {
+			const response = await fetch(`/api/eventscorer/judge/${token}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ scores: payload, contestantId: activeContestant.id }),

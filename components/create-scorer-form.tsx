@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
-import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventScoringType } from '@/lib/types'
+import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType } from '@/lib/types'
 
 type ContestantDraft = {
 	id: string
 	name: string
 	entryType: ContestantEntryType
 	participants: string[]
+	programTag: EventProgramTag | null
 }
 
 type JudgeDraft = {
@@ -44,13 +45,13 @@ function createJudge(): JudgeDraft {
 	return { id: localId(), name: '', email: '' }
 }
 
-function createContestant(entryType: ContestantEntryType = 'group', name = '', participants?: string[]): ContestantDraft {
+function createContestant(entryType: ContestantEntryType = 'group', name = '', participants?: string[], programTag: EventProgramTag | null = null): ContestantDraft {
 	const defaultParticipants = entryType === 'group' ? [''] : []
-	return { id: localId(), name, entryType, participants: participants ?? defaultParticipants }
+	return { id: localId(), name, entryType, participants: participants ?? defaultParticipants, programTag }
 }
 
-function contestantsFromNames(names: string[], entryType: ContestantEntryType = 'group'): ContestantDraft[] {
-	return names.map((name) => createContestant(entryType, name, entryType === 'group' ? [''] : []))
+function contestantsFromNames(names: string[], entryType: ContestantEntryType = 'group', programTag: EventProgramTag | null = null): ContestantDraft[] {
+	return names.map((name) => createContestant(entryType, name, entryType === 'group' ? [''] : [], programTag))
 }
 
 function createSubCriterion(): SubCriterionDraft {
@@ -130,6 +131,7 @@ export function CreateScorerForm() {
 	const [bulkContestantEnabled, setBulkContestantEnabled] = useState(false)
 	const [bulkContestantText, setBulkContestantText] = useState('')
 	const [bulkContestantEntryType, setBulkContestantEntryType] = useState<ContestantEntryType>('group')
+	const [bulkContestantProgramTag, setBulkContestantProgramTag] = useState<EventProgramTag | null>(null)
 	const [judges, setJudges] = useState<JudgeDraft[]>([createJudge()])
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
@@ -218,6 +220,10 @@ export function CreateScorerForm() {
 		)
 	}
 
+	function updateContestantProgramTag(index: number, programTag: EventProgramTag | null): void {
+		setContestants((previous) => previous.map((contestant, contestantIndex) => (contestantIndex === index ? { ...contestant, programTag } : contestant)))
+	}
+
 	function updateParticipantName(contestantIndex: number, participantIndex: number, value: string): void {
 		setContestants((previous) =>
 			previous.map((contestant, currentContestantIndex) => {
@@ -282,7 +288,7 @@ export function CreateScorerForm() {
 		}
 
 		setError(null)
-		const importedContestants = contestantsFromNames(names, bulkContestantEntryType)
+		const importedContestants = contestantsFromNames(names, bulkContestantEntryType, bulkContestantProgramTag)
 		const shouldReplaceEmptyStarters = contestants.every((contestant) => isEmptyContestantDraft(contestant))
 
 		if (shouldReplaceEmptyStarters) {
@@ -427,6 +433,7 @@ export function CreateScorerForm() {
 			contestants: contestants.map((contestant) => ({
 				name: contestant.name,
 				entryType: contestant.entryType,
+				programTag: contestant.programTag,
 				participants: contestant.entryType === 'group' ? contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0) : undefined,
 			})),
 			judges: judges.map((judge) => ({
@@ -448,7 +455,7 @@ export function CreateScorerForm() {
 		}
 
 		try {
-			const response = await fetch('/api/events', {
+			const response = await fetch('/api/eventscorer/events', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(payload),
@@ -536,6 +543,11 @@ export function CreateScorerForm() {
 										<option value='individual'>Add as Individual entries</option>
 										<option value='group'>Add as Team/Group entries</option>
 									</select>
+									<select value={bulkContestantProgramTag ?? ''} onChange={(event) => setBulkContestantProgramTag(event.target.value === '' ? null : (event.target.value as EventProgramTag))} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+										<option value=''>No Program Tag</option>
+										<option value='BSINT'>BSINT</option>
+										<option value='BSCS'>BSCS</option>
+									</select>
 									<button type='button' onClick={addContestantsFromNewLines} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
 										Add Entries from New Lines
 									</button>
@@ -549,7 +561,7 @@ export function CreateScorerForm() {
 										<p className='text-xs text-emerald-900/80'>Entry {index + 1}</p>
 										<span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${contestant.entryType === 'individual' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'}`}>{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}</span>
 									</div>
-									<div className='grid gap-2 sm:grid-cols-[1fr_180px_auto]'>
+									<div className='grid gap-2 sm:grid-cols-[1fr_170px_150px_auto]'>
 										<input
 											value={contestant.name}
 											onChange={(event) => updateContestant(index, { name: event.target.value })}
@@ -559,6 +571,11 @@ export function CreateScorerForm() {
 										<select value={contestant.entryType} onChange={(event) => updateContestantEntryType(index, event.target.value as ContestantEntryType)} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
 											<option value='group'>Team/Group</option>
 											<option value='individual'>Individual</option>
+										</select>
+										<select value={contestant.programTag ?? ''} onChange={(event) => updateContestantProgramTag(index, event.target.value === '' ? null : (event.target.value as EventProgramTag))} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+											<option value=''>No Program Tag</option>
+											<option value='BSINT'>BSINT</option>
+											<option value='BSCS'>BSCS</option>
 										</select>
 										{contestants.length > 1 ? (
 											<button type='button' onClick={() => removeContestant(index)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
