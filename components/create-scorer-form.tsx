@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
-import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType } from '@/lib/types'
+import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
 
 type ContestantDraft = {
 	id: string
@@ -28,6 +29,7 @@ type SubCriterionDraft = {
 type CriterionDraft = {
 	id: string
 	name: string
+	appliesTo: 'group' | 'individual'
 	subCriteria: SubCriterionDraft[]
 }
 
@@ -37,8 +39,26 @@ type PresentationSlotDraft = {
 	judgeIds: string[]
 }
 
+type RubricLegendDraft = {
+	id: string
+	score: string
+	label: string
+}
+
 function localId(): string {
 	return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `id-${Math.random().toString(36).slice(2)}`
+}
+
+function createRubricLegendDraft(score: number, label: string): RubricLegendDraft {
+	return {
+		id: localId(),
+		score: String(score),
+		label,
+	}
+}
+
+function defaultRubricLegendDrafts(): RubricLegendDraft[] {
+	return DEFAULT_RUBRIC_LEGEND.map((legendItem) => createRubricLegendDraft(legendItem.score, legendItem.label))
 }
 
 function createJudge(): JudgeDraft {
@@ -62,6 +82,7 @@ function createCriterion(): CriterionDraft {
 	return {
 		id: localId(),
 		name: '',
+		appliesTo: 'group',
 		subCriteria: [createSubCriterion()],
 	}
 }
@@ -83,12 +104,64 @@ function toCriterionDraft(criteria: CriterionInput[]): CriterionDraft[] {
 	return criteria.map((criterion) => ({
 		id: localId(),
 		name: criterion.name,
+		appliesTo: criterion.name.trim().toLowerCase() === 'individual presentation' ? 'individual' : 'group',
 		subCriteria: criterion.subCriteria.map((subCriterion) => ({
 			id: localId(),
 			name: subCriterion.name,
 			maxScore: String(subCriterion.maxScore),
 		})),
 	}))
+}
+
+function hasMemberPrefix(value: string): boolean {
+	const normalized = value.trim()
+	const parts = normalized.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
+	if (!parts) {
+		return false
+	}
+
+	return /(\d+)\s*$/.test(parts[1])
+}
+
+function contestantMemberCount(contestant: ContestantDraft): number {
+	if (contestant.entryType === 'individual') {
+		return 1
+	}
+
+	const participantCount = contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0).length
+	return participantCount > 0 ? participantCount : 1
+}
+
+function normalizeSubCriteriaForPayload(subCriteria: SubCriterionDraft[]): Array<{ name: string; maxScore: number }> {
+	return subCriteria.map((subCriterion) => ({
+		name: subCriterion.name,
+		maxScore: toNumber(subCriterion.maxScore),
+	}))
+}
+
+function expandSubCriteriaForIndividualCriteria(subCriteria: SubCriterionDraft[], contestants: ContestantDraft[]): Array<{ name: string; maxScore: number }> {
+	const normalizedSubCriteria = normalizeSubCriteriaForPayload(subCriteria)
+	if (normalizedSubCriteria.length === 0) {
+		return normalizedSubCriteria
+	}
+
+	if (normalizedSubCriteria.some((subCriterion) => hasMemberPrefix(subCriterion.name))) {
+		return normalizedSubCriteria
+	}
+
+	const maxMemberCount = contestants.reduce((highest, contestant) => Math.max(highest, contestantMemberCount(contestant)), 1)
+	const expanded: Array<{ name: string; maxScore: number }> = []
+
+	for (let memberIndex = 1; memberIndex <= Math.max(1, maxMemberCount); memberIndex += 1) {
+		for (const subCriterion of normalizedSubCriteria) {
+			expanded.push({
+				name: `Student ${memberIndex} - ${subCriterion.name}`,
+				maxScore: subCriterion.maxScore,
+			})
+		}
+	}
+
+	return expanded
 }
 
 function toNumber(value: string): number {
@@ -135,7 +208,9 @@ export function CreateScorerForm() {
 	const [judges, setJudges] = useState<JudgeDraft[]>([createJudge()])
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
+	const [rubricLegend, setRubricLegend] = useState<RubricLegendDraft[]>(() => defaultRubricLegendDrafts())
 	const [isSaving, setIsSaving] = useState(false)
+	const [showPreview, setShowPreview] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [created, setCreated] = useState<CreateEventResponse | null>(null)
 	const [copiedValue, setCopiedValue] = useState<string | null>(null)
@@ -143,6 +218,25 @@ export function CreateScorerForm() {
 	const totalEventMaxScore = useMemo(() => {
 		return criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)
 	}, [criteria])
+
+	const totalSubCriteria = useMemo(() => {
+		return criteria.reduce((sum, criterion) => sum + criterion.subCriteria.length, 0)
+	}, [criteria])
+
+	const normalizedRubricLegend = useMemo(() => {
+		const legendItems = rubricLegend.map((legendItem) => ({
+			score: toNumber(legendItem.score),
+			label: legendItem.label,
+		}))
+
+		return normalizeRubricLegend(legendItems)
+	}, [rubricLegend])
+
+	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedRubricLegend), [normalizedRubricLegend])
+
+	const judgeNameById = useMemo(() => {
+		return new Map(judges.map((judge) => [judge.id, judge.name.trim()]))
+	}, [judges])
 
 	useEffect(() => {
 		const activeJudgeIds = new Set(judges.map((judge) => judge.id))
@@ -178,6 +272,8 @@ export function CreateScorerForm() {
 		setContestants(contestantsFromNames(sampleContestants, 'group'))
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
 		setCriteria(toCriterionDraft(PAPER_PRESENTATION_CRITERIA))
+		setRubricLegend(defaultRubricLegendDrafts())
+		setShowPreview(false)
 		setError(null)
 	}
 
@@ -189,7 +285,25 @@ export function CreateScorerForm() {
 		setContestants(contestantsFromNames(sampleContestants, 'group'))
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
 		setCriteria(toCriterionDraft(buildFinalOralDefenseCriteria()))
+		setRubricLegend(defaultRubricLegendDrafts())
+		setShowPreview(false)
 		setError(null)
+	}
+
+	function updateRubricLegendItem(legendId: string, value: Partial<Pick<RubricLegendDraft, 'score' | 'label'>>): void {
+		setRubricLegend((previous) => previous.map((legendItem) => (legendItem.id === legendId ? { ...legendItem, ...value } : legendItem)))
+	}
+
+	function addRubricLegendItem(): void {
+		setRubricLegend((previous) => [...previous, createRubricLegendDraft(0, '')])
+	}
+
+	function removeRubricLegendItem(legendId: string): void {
+		setRubricLegend((previous) => previous.filter((legendItem) => legendItem.id !== legendId))
+	}
+
+	function resetRubricLegend(): void {
+		setRubricLegend(defaultRubricLegendDrafts())
 	}
 
 	function updateContestant(index: number, value: Partial<Pick<ContestantDraft, 'name'>>): void {
@@ -334,7 +448,7 @@ export function CreateScorerForm() {
 		)
 	}
 
-	function updateCriterion(criterionId: string, value: Partial<Pick<CriterionDraft, 'name'>>): void {
+	function updateCriterion(criterionId: string, value: Partial<Pick<CriterionDraft, 'name' | 'appliesTo'>>): void {
 		setCriteria((previous) => previous.map((criterion) => (criterion.id === criterionId ? { ...criterion, ...value } : criterion)))
 	}
 
@@ -423,13 +537,20 @@ export function CreateScorerForm() {
 		setError(null)
 		setCreated(null)
 		setIsSaving(true)
-		const judgeNameById = new Map(judges.map((judge) => [judge.id, judge.name.trim()]))
 
 		const payload = {
 			title,
 			description,
 			createdBy,
 			eventScoringType,
+			rubricLegend: rubricLegend
+				.map(
+					(legendItem): RubricLegendItem => ({
+						score: toNumber(legendItem.score),
+						label: legendItem.label.trim(),
+					}),
+				)
+				.filter((legendItem) => legendItem.label.length > 0),
 			contestants: contestants.map((contestant) => ({
 				name: contestant.name,
 				entryType: contestant.entryType,
@@ -442,10 +563,7 @@ export function CreateScorerForm() {
 			})),
 			criteria: criteria.map((criterion) => ({
 				name: criterion.name,
-				subCriteria: criterion.subCriteria.map((subCriterion) => ({
-					name: subCriterion.name,
-					maxScore: toNumber(subCriterion.maxScore),
-				})),
+				subCriteria: criterion.appliesTo === 'individual' ? expandSubCriteriaForIndividualCriteria(criterion.subCriteria, contestants) : normalizeSubCriteriaForPayload(criterion.subCriteria),
 			})),
 			presentationSlots: presentationSlots.map((slot, index) => ({
 				label: slot.label || `Slot ${index + 1}`,
@@ -468,6 +586,7 @@ export function CreateScorerForm() {
 			}
 
 			setCreated(responseData)
+			setShowPreview(false)
 		} catch (submitError) {
 			setError(submitError instanceof Error ? submitError.message : 'Unable to create scorer event.')
 		} finally {
@@ -697,6 +816,7 @@ export function CreateScorerForm() {
 								</button>
 							</div>
 						</div>
+						<p className='mb-4 text-xs text-emerald-900/80'>Choose each criterion scope: Per Contestant (Individual) for member-based questions, or Group Criteria Only for one team-level set of questions.</p>
 
 						<div className='space-y-5'>
 							{criteria.map((criterion, criterionIndex) => {
@@ -704,7 +824,7 @@ export function CreateScorerForm() {
 
 								return (
 									<div key={criterion.id} className='rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4'>
-										<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_auto]'>
+										<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_180px_auto]'>
 											<input
 												value={criterion.name}
 												onChange={(event) =>
@@ -716,12 +836,28 @@ export function CreateScorerForm() {
 												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
 											/>
 											<div className='flex items-center rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-900'>Parent Max: {parentMaxScore.toFixed(2)}</div>
+											<select
+												value={criterion.appliesTo}
+												onChange={(event) =>
+													updateCriterion(criterion.id, {
+														appliesTo: event.target.value as 'group' | 'individual',
+													})
+												}
+												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+												<option value='group'>Apply To: Group Criteria Only</option>
+												<option value='individual'>Apply To: Per Contestant (Individual)</option>
+											</select>
 											{criteria.length > 1 ? (
 												<button type='button' onClick={() => removeCriterion(criterion.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
 													Remove Parent
 												</button>
 											) : null}
 										</div>
+										{criterion.appliesTo === 'individual' ? (
+											<p className='mb-3 text-xs text-emerald-900/80'>This criterion will be expanded per member and scored per contestant member, even when the event uses Standard Scoring.</p>
+										) : (
+											<p className='mb-3 text-xs text-emerald-900/80'>This criterion will stay as group-only questions (one set for the whole team/entry).</p>
+										)}
 
 										<div className='mb-3 flex items-center justify-between'>
 											<span className='text-xs text-emerald-900/80'>Subcriteria total max score: {parentMaxScore.toFixed(2)}</span>
@@ -770,16 +906,302 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
+					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+							<div>
+								<h2 className='text-lg font-semibold text-emerald-950'>Rubric Legend</h2>
+								<p className='mt-1 text-xs text-emerald-900/80'>Customize the score meanings shown to judges and in the admin dashboard.</p>
+							</div>
+							<div className='flex items-center gap-2'>
+								<button type='button' onClick={resetRubricLegend} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+									Reset Default Legend
+								</button>
+								<button type='button' onClick={addRubricLegendItem} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+									Add Legend Item
+								</button>
+							</div>
+						</div>
+
+						<p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900'>Current Legend: {rubricLegendText}</p>
+
+						<div className='mt-3 space-y-2'>
+							{rubricLegend.map((legendItem, legendIndex) => (
+								<div key={legendItem.id} className='grid gap-2 rounded-xl border border-emerald-100 bg-white p-3 sm:grid-cols-[140px_1fr_auto]'>
+									<input
+										value={legendItem.score}
+										onChange={(event) =>
+											updateRubricLegendItem(legendItem.id, {
+												score: event.target.value,
+											})
+										}
+										type='number'
+										min={0}
+										step='0.01'
+										placeholder={`Score ${legendIndex + 1}`}
+										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
+									/>
+									<input
+										value={legendItem.label}
+										onChange={(event) =>
+											updateRubricLegendItem(legendItem.id, {
+												label: event.target.value,
+											})
+										}
+										placeholder={`Meaning for score ${legendIndex + 1}`}
+										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+									/>
+									{rubricLegend.length > 1 ? (
+										<button type='button' onClick={() => removeRubricLegendItem(legendItem.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+											Remove
+										</button>
+									) : null}
+								</div>
+							))}
+						</div>
+
+						<div className='mt-3 flex flex-wrap gap-2'>
+							{normalizedRubricLegend.map((legendItem) => (
+								<span key={`${legendItem.score}-${legendItem.label}`} className='rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900'>
+									{formatLegendScore(legendItem.score)} - {legendItem.label}
+								</span>
+							))}
+						</div>
+					</section>
+
+					<section className='rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
+						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+							<div>
+								<h2 className='text-lg font-semibold text-cyan-950'>Preview Before Publish</h2>
+								<p className='mt-1 text-xs text-cyan-900/80'>Use preview mode to verify your full event setup, then switch back to edit anytime before publishing.</p>
+							</div>
+							<button
+								type='button'
+								onClick={() => {
+									setShowPreview((current) => !current)
+									setError(null)
+								}}
+								className='rounded-full border border-cyan-400 bg-white px-4 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100'>
+								{showPreview ? 'Hide Preview' : 'Preview Draft'}
+							</button>
+						</div>
+
+						{showPreview ? (
+							<div className='mt-4 space-y-4'>
+								<div className='grid gap-3 sm:grid-cols-3'>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Event Title</p>
+										<p className='mt-1 text-sm font-semibold text-cyan-950'>{title.trim() || 'Untitled Event'}</p>
+									</div>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Created By</p>
+										<p className='mt-1 text-sm font-semibold text-cyan-950'>{createdBy.trim() || 'Not provided'}</p>
+									</div>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Scoring Type</p>
+										<p className='mt-1 text-sm font-semibold text-cyan-950'>{eventScoringType === 'final-oral-defense' ? 'Final Oral Defense' : 'Standard Scoring'}</p>
+									</div>
+								</div>
+
+								<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+									<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Description</p>
+									<p className='mt-1 text-sm text-cyan-950'>{description.trim() || 'No description provided.'}</p>
+								</div>
+
+								<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+									<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Rubric Legend</p>
+									<p className='mt-1 text-sm text-cyan-950'>{rubricLegendText}</p>
+								</div>
+
+								<div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs text-cyan-800/80'>Entries</p>
+										<p className='text-lg font-semibold text-cyan-950'>{contestants.length}</p>
+									</div>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs text-cyan-800/80'>Judges</p>
+										<p className='text-lg font-semibold text-cyan-950'>{judges.length}</p>
+									</div>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs text-cyan-800/80'>Criteria / Subcriteria</p>
+										<p className='text-lg font-semibold text-cyan-950'>
+											{criteria.length} / {totalSubCriteria}
+										</p>
+									</div>
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs text-cyan-800/80'>Event Max Score</p>
+										<p className='text-lg font-semibold text-cyan-950'>{totalEventMaxScore.toFixed(2)}</p>
+									</div>
+								</div>
+
+								<div className='space-y-4'>
+									<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
+										<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
+											<p className='text-sm font-semibold text-cyan-950'>Entries Matrix</p>
+										</div>
+										<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:gap-2'>
+											<span>#</span>
+											<span>Entry</span>
+											<span>Type</span>
+											<span>Program</span>
+											<span>Participants</span>
+										</div>
+										<div className='divide-y divide-cyan-100'>
+											{contestants.map((contestant, index) => {
+												const cleanParticipants = contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
+												const participantDisplay = contestant.entryType === 'group' && cleanParticipants.length > 0 ? cleanParticipants.join(', ') : '-'
+
+												return (
+													<div key={contestant.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:items-center'>
+														<p>
+															<span className='font-medium sm:hidden'># </span>
+															{index + 1}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Entry: </span>
+															{contestant.name.trim() || `Entry ${index + 1}`}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Type: </span>
+															{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Program: </span>
+															{contestant.programTag || '-'}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Participants: </span>
+															{participantDisplay}
+														</p>
+													</div>
+												)
+											})}
+										</div>
+									</div>
+
+									<div className='grid gap-4 xl:grid-cols-2'>
+										<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
+											<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
+												<p className='text-sm font-semibold text-cyan-950'>Judges Matrix</p>
+											</div>
+											<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:gap-2'>
+												<span>#</span>
+												<span>Judge</span>
+												<span>Email</span>
+											</div>
+											<div className='divide-y divide-cyan-100'>
+												{judges.map((judge, index) => (
+													<div key={judge.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:items-center'>
+														<p>
+															<span className='font-medium sm:hidden'># </span>
+															{index + 1}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Judge: </span>
+															{judge.name.trim() || `Judge ${index + 1}`}
+														</p>
+														<p>
+															<span className='font-medium sm:hidden'>Email: </span>
+															{judge.email.trim() || '-'}
+														</p>
+													</div>
+												))}
+											</div>
+										</div>
+
+										<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
+											<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
+												<p className='text-sm font-semibold text-cyan-950'>Slot Assignment Matrix</p>
+											</div>
+											<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:gap-2'>
+												<span>Slot</span>
+												<span>Entry</span>
+												<span>Assigned Judges</span>
+											</div>
+											<div className='divide-y divide-cyan-100'>
+												{presentationSlots.map((slot, index) => {
+													const assignedJudgeNames = slot.judgeIds.map((judgeId) => judgeNameById.get(judgeId) ?? '').filter((judgeName) => judgeName.length > 0)
+													const contestant = contestants[index]
+													const contestantName = contestant?.name.trim() || `Entry ${index + 1}`
+
+													return (
+														<div key={slot.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:items-center'>
+															<p>
+																<span className='font-medium sm:hidden'>Slot: </span>
+																{slot.label || `Slot ${index + 1}`}
+															</p>
+															<p>
+																<span className='font-medium sm:hidden'>Entry: </span>
+																{contestantName}
+															</p>
+															<p>
+																<span className='font-medium sm:hidden'>Assigned Judges: </span>
+																{assignedJudgeNames.length > 0 ? assignedJudgeNames.join(', ') : 'No judges assigned yet.'}
+															</p>
+														</div>
+													)
+												})}
+											</div>
+										</div>
+									</div>
+
+									<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
+										<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
+											<p className='text-sm font-semibold text-cyan-950'>Criteria Matrix</p>
+										</div>
+										<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:gap-2'>
+											<span>#</span>
+											<span>Criterion</span>
+											<span>Scope</span>
+											<span>Max</span>
+											<span>Subcriteria</span>
+										</div>
+										<div className='divide-y divide-cyan-100'>
+											{criteria.map((criterion, criterionIndex) => (
+												<div key={criterion.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:items-start'>
+													<p>
+														<span className='font-medium sm:hidden'># </span>
+														{criterionIndex + 1}
+													</p>
+													<p>
+														<span className='font-medium sm:hidden'>Criterion: </span>
+														{criterion.name.trim() || `Criterion ${criterionIndex + 1}`}
+													</p>
+													<p>
+														<span className='font-medium sm:hidden'>Scope: </span>
+														{criterion.appliesTo === 'individual' ? 'Per Contestant (Individual)' : 'Group Criteria Only'}
+													</p>
+													<p>
+														<span className='font-medium sm:hidden'>Max: </span>
+														{criterionMaxScore(criterion).toFixed(2)}
+													</p>
+													<p>
+														<span className='font-medium sm:hidden'>Subcriteria: </span>
+														{criterion.subCriteria.map((subCriterion, subCriterionIndex) => `${subCriterionIndex + 1}) ${subCriterion.name.trim() || `Subcriterion ${subCriterionIndex + 1}`} [${toNumber(subCriterion.maxScore).toFixed(2)}]`).join(' | ')}
+													</p>
+												</div>
+											))}
+										</div>
+									</div>
+								</div>
+							</div>
+						) : null}
+					</section>
+
 					{error ? <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
 
-					<button type='submit' disabled={isSaving} className='rounded-full bg-emerald-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
-						{isSaving ? 'Creating Scorer...' : 'Create Scorer and Generate Judge Links'}
-					</button>
+					<div className='flex flex-wrap items-center gap-3'>
+						<button type='button' onClick={() => setShowPreview(true)} className='rounded-full border border-cyan-400 bg-cyan-50 px-6 py-3 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100'>
+							Preview Draft
+						</button>
+						<button type='submit' disabled={isSaving} className='rounded-full bg-emerald-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
+							{isSaving ? 'Publishing Event...' : 'Publish Event and Generate Judge Links'}
+						</button>
+					</div>
 				</form>
 
 				{created ? (
 					<section className='mt-8 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
-						<h2 className='text-lg font-semibold text-cyan-950'>Scorer Created Successfully</h2>
+						<h2 className='text-lg font-semibold text-cyan-950'>Event Published Successfully</h2>
 						<p className='mt-1 text-sm text-cyan-900/80'>Share each judge link privately.</p>
 
 						<div className='mt-4 rounded-xl border border-cyan-200 bg-white p-3'>

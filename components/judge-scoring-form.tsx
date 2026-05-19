@@ -1,10 +1,201 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { EventContestant, EventCriterion, EventPresentationSlot, JudgeProfile, ScoreMatrix } from '@/lib/types'
+import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import type { EventContestant, EventCriterion, EventPresentationSlot, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
 type InputScoreMatrix = Record<string, Record<string, string>>
+
+interface SubmitScoresRequestBody {
+	scores: ScoreMatrix
+	contestantId: string
+}
+
+interface SubmitScoresResponseBody {
+	error?: string
+	submittedAt?: string
+}
+
+interface QueuedScoreUpload {
+	id: string
+	token: string
+	contestantId: string
+	contestantName: string
+	payload: SubmitScoresRequestBody
+	queuedAt: string
+}
+
+const QUEUED_SCORE_UPLOADS_STORAGE_KEY = 'eventscorer:queued-score-uploads:v1'
+const AUTO_SYNC_INTERVAL_MS = 15_000
+
+class SubmitScoresError extends Error {
+	status?: number
+
+	constructor(message: string, status?: number) {
+		super(message)
+		this.name = 'SubmitScoresError'
+		this.status = status
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object'
+}
+
+function queuedScoreUploadId(token: string, contestantId: string): string {
+	return `${token}:${contestantId}`
+}
+
+function readQueuedScoreUploads(): QueuedScoreUpload[] {
+	if (typeof window === 'undefined') {
+		return []
+	}
+
+	try {
+		const raw = window.localStorage.getItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY)
+		if (!raw) {
+			return []
+		}
+
+		const parsed = JSON.parse(raw) as unknown
+		if (!Array.isArray(parsed)) {
+			return []
+		}
+
+		const normalized: QueuedScoreUpload[] = []
+
+		for (const entry of parsed) {
+			if (!isRecord(entry)) {
+				continue
+			}
+
+			const token = typeof entry.token === 'string' ? entry.token.trim() : ''
+			const contestantId = typeof entry.contestantId === 'string' ? entry.contestantId.trim() : ''
+			const contestantName = typeof entry.contestantName === 'string' ? entry.contestantName.trim() : ''
+			const queuedAt = typeof entry.queuedAt === 'string' ? entry.queuedAt : new Date().toISOString()
+
+			if (!token || !contestantId || !contestantName) {
+				continue
+			}
+
+			const payload = entry.payload
+			if (!isRecord(payload)) {
+				continue
+			}
+
+			const payloadContestantId = typeof payload.contestantId === 'string' ? payload.contestantId.trim() : ''
+			const payloadScores = payload.scores
+
+			if (!payloadContestantId || !isRecord(payloadScores)) {
+				continue
+			}
+
+			normalized.push({
+				id: typeof entry.id === 'string' && entry.id.trim().length > 0 ? entry.id : queuedScoreUploadId(token, contestantId),
+				token,
+				contestantId,
+				contestantName,
+				payload: {
+					contestantId: payloadContestantId,
+					scores: payloadScores as ScoreMatrix,
+				},
+				queuedAt,
+			})
+		}
+
+		return normalized
+	} catch {
+		return []
+	}
+}
+
+function writeQueuedScoreUploads(queue: QueuedScoreUpload[]): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+
+	if (queue.length === 0) {
+		window.localStorage.removeItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY)
+		return
+	}
+
+	window.localStorage.setItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY, JSON.stringify(queue))
+}
+
+function listQueuedScoreUploadsForToken(token: string): QueuedScoreUpload[] {
+	const normalizedToken = token.trim()
+	if (!normalizedToken) {
+		return []
+	}
+
+	return readQueuedScoreUploads()
+		.filter((entry) => entry.token === normalizedToken)
+		.sort((left, right) => new Date(left.queuedAt).getTime() - new Date(right.queuedAt).getTime())
+}
+
+function upsertQueuedScoreUpload(upload: QueuedScoreUpload): void {
+	const queue = readQueuedScoreUploads()
+	const existingIndex = queue.findIndex((entry) => entry.id === upload.id)
+
+	if (existingIndex >= 0) {
+		queue[existingIndex] = upload
+	} else {
+		queue.push(upload)
+	}
+
+	writeQueuedScoreUploads(queue)
+}
+
+function removeQueuedScoreUpload(uploadId: string): void {
+	const queue = readQueuedScoreUploads()
+	const nextQueue = queue.filter((entry) => entry.id !== uploadId)
+
+	if (nextQueue.length === queue.length) {
+		return
+	}
+
+	writeQueuedScoreUploads(nextQueue)
+}
+
+function shouldQueueScoreUpload(error: unknown): boolean {
+	if (typeof navigator !== 'undefined' && !navigator.onLine) {
+		return true
+	}
+
+	if (error instanceof TypeError) {
+		return true
+	}
+
+	if (error instanceof SubmitScoresError && typeof error.status === 'number' && error.status >= 500) {
+		return true
+	}
+
+	return false
+}
+
+function isServerUnreachableScoreUploadError(error: unknown): boolean {
+	if (typeof navigator !== 'undefined' && !navigator.onLine) {
+		return true
+	}
+
+	if (error instanceof TypeError) {
+		return true
+	}
+
+	if (error instanceof SubmitScoresError && typeof error.status === 'number' && [502, 503, 504].includes(error.status)) {
+		return true
+	}
+
+	if (error instanceof Error) {
+		const normalizedMessage = error.message.toLowerCase()
+		if (normalizedMessage.includes('upstream') || normalizedMessage.includes('unavailable') || normalizedMessage.includes('network')) {
+			return true
+		}
+	}
+
+	return false
+}
 
 interface JudgeScoringFormProps {
 	token: string
@@ -12,6 +203,7 @@ interface JudgeScoringFormProps {
 	contestants: EventContestant[]
 	criteria: EventCriterion[]
 	judge: JudgeProfile
+	rubricLegend?: RubricLegendItem[]
 	presentationSlots?: EventPresentationSlot[]
 	existingScores?: ScoreMatrix
 	existingSavedContestantIds?: string[]
@@ -65,7 +257,23 @@ function normalizeScoreInput(rawValue: string, maxScore: number): string {
 }
 
 function isIndividualCriterion(criterion: EventCriterion): boolean {
-	return criterion.name.trim().toLowerCase() === 'individual presentation'
+	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
+		return true
+	}
+
+	return criterion.subCriteria.some((subCriterion) => {
+		const separatorIndex = subCriterion.name.indexOf(' - ')
+		if (separatorIndex === -1) {
+			return false
+		}
+
+		const memberLabel = subCriterion.name.slice(0, separatorIndex).trim()
+		return /(\d+)\s*$/.test(memberLabel)
+	})
+}
+
+function criterionScopeLabel(criterion: EventCriterion): string {
+	return isIndividualCriterion(criterion) ? 'Per Contestant (Individual)' : 'Group Criteria Only'
 }
 
 function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
@@ -250,8 +458,9 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, presentationSlots, existingScores, existingSavedContestantIds, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, presentationSlots, existingScores, existingSavedContestantIds, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
+	const autoSyncInProgressRef = useRef(false)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
 	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores, existingSavedContestantIds))
 	const [activeContestantIndex, setActiveContestantIndex] = useState(() => {
@@ -266,8 +475,12 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	const [error, setError] = useState<string | null>(null)
 	const [successMessage, setSuccessMessage] = useState<string | null>(null)
 	const [lastSubmittedAt, setLastSubmittedAt] = useState<string | undefined>(submittedAt)
+	const [queuedUploads, setQueuedUploads] = useState<QueuedScoreUpload[]>([])
+	const [isAutoSyncing, setIsAutoSyncing] = useState(false)
 	const activeContestant = contestants[activeContestantIndex]
 	const activeContestantId = activeContestant?.id ?? ''
+	const normalizedLegend = useMemo(() => normalizeRubricLegend(rubricLegend), [rubricLegend])
+	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedLegend), [normalizedLegend])
 
 	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)), [criteria, activeContestant])
 	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).length, 0), [criteria, activeContestant])
@@ -289,6 +502,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		const ids = contestants.filter((contestant) => hasPositiveDraftScore(scores, contestant.id, criteria)).map((contestant) => contestant.id)
 		return new Set(ids)
 	}, [contestants, criteria, scores])
+	const queuedContestantIds = useMemo(() => new Set(queuedUploads.map((entry) => entry.contestantId)), [queuedUploads])
 
 	const activeContestantTotal = useMemo(() => {
 		if (!activeContestantId) {
@@ -347,6 +561,151 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		})
 	}
 
+	const refreshQueuedUploads = useCallback(() => {
+		setQueuedUploads(listQueuedScoreUploadsForToken(token))
+	}, [token])
+
+	const markContestantsAsSaved = useCallback((contestantIds: string[]) => {
+		if (contestantIds.length === 0) {
+			return
+		}
+
+		setSavedContestantIds((previous) => {
+			const next = new Set(previous)
+			for (const contestantId of contestantIds) {
+				next.add(contestantId)
+			}
+			return next
+		})
+	}, [])
+
+	const submitPayload = useCallback(
+		async (payload: SubmitScoresRequestBody): Promise<SubmitScoresResponseBody> => {
+			const response = await fetch(`/api/eventscorer/judge/${token}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+			})
+
+			let responseBody: SubmitScoresResponseBody = {}
+			try {
+				responseBody = (await response.json()) as SubmitScoresResponseBody
+			} catch {
+				responseBody = {}
+			}
+
+			if (!response.ok) {
+				throw new SubmitScoresError(responseBody.error ?? 'Unable to submit scores.', response.status)
+			}
+
+			return responseBody
+		},
+		[token],
+	)
+
+	const syncQueuedUploads = useCallback(
+		async (showSuccessMessage = false): Promise<void> => {
+			if (autoSyncInProgressRef.current) {
+				return
+			}
+
+			if (typeof navigator !== 'undefined' && !navigator.onLine) {
+				return
+			}
+
+			const pendingUploads = listQueuedScoreUploadsForToken(token)
+			if (pendingUploads.length === 0) {
+				setQueuedUploads([])
+				return
+			}
+
+			autoSyncInProgressRef.current = true
+			setIsAutoSyncing(true)
+
+			const syncedContestantIds: string[] = []
+			let syncedCount = 0
+			let latestSubmittedAtValue: string | undefined
+			let permanentErrorMessage: string | null = null
+
+			try {
+				for (const pendingUpload of pendingUploads) {
+					try {
+						const responseBody = await submitPayload(pendingUpload.payload)
+						removeQueuedScoreUpload(pendingUpload.id)
+						syncedContestantIds.push(pendingUpload.contestantId)
+						syncedCount += 1
+
+						if (responseBody.submittedAt) {
+							latestSubmittedAtValue = responseBody.submittedAt
+						}
+					} catch (syncError) {
+						if (syncError instanceof SubmitScoresError && typeof syncError.status === 'number' && syncError.status >= 400 && syncError.status < 500) {
+							removeQueuedScoreUpload(pendingUpload.id)
+
+							if (!permanentErrorMessage) {
+								permanentErrorMessage = `Auto-upload skipped ${pendingUpload.contestantName}: ${syncError.message}`
+							}
+
+							continue
+						}
+
+						break
+					}
+				}
+			} finally {
+				refreshQueuedUploads()
+				setIsAutoSyncing(false)
+				autoSyncInProgressRef.current = false
+			}
+
+			if (syncedContestantIds.length > 0) {
+				markContestantsAsSaved(syncedContestantIds)
+			}
+
+			if (latestSubmittedAtValue) {
+				setLastSubmittedAt(latestSubmittedAtValue)
+			}
+
+			if (showSuccessMessage && syncedCount > 0) {
+				setError(null)
+				setSuccessMessage(`Auto-uploaded ${syncedCount} pending ${syncedCount === 1 ? 'entry' : 'entries'}.`)
+			} else if (permanentErrorMessage) {
+				setError(permanentErrorMessage)
+			}
+		},
+		[markContestantsAsSaved, refreshQueuedUploads, submitPayload, token],
+	)
+
+	useEffect(() => {
+		refreshQueuedUploads()
+		void syncQueuedUploads(false)
+	}, [refreshQueuedUploads, syncQueuedUploads])
+
+	useEffect(() => {
+		const handleOnline = () => {
+			void syncQueuedUploads(true)
+		}
+
+		window.addEventListener('online', handleOnline)
+		return () => {
+			window.removeEventListener('online', handleOnline)
+		}
+	}, [syncQueuedUploads])
+
+	useEffect(() => {
+		if (queuedUploads.length === 0) {
+			return
+		}
+
+		const intervalId = window.setInterval(() => {
+			void syncQueuedUploads(false)
+		}, AUTO_SYNC_INTERVAL_MS)
+
+		return () => {
+			window.clearInterval(intervalId)
+		}
+	}, [queuedUploads.length, syncQueuedUploads])
+
 	async function submitScores(event: React.FormEvent<HTMLFormElement>): Promise<void> {
 		event.preventDefault()
 		if (!activeContestant) {
@@ -385,31 +744,23 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			}
 		}
 
+		const requestPayload: SubmitScoresRequestBody = {
+			scores: payload,
+			contestantId: activeContestant.id,
+		}
+		const currentName = activeContestant.name
+		const nextIndex = activeContestantIndex + 1
+
 		try {
-			const response = await fetch(`/api/eventscorer/judge/${token}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ scores: payload, contestantId: activeContestant.id }),
-			})
-
-			const responseBody = (await response.json()) as { error?: string; submittedAt?: string }
-
-			if (!response.ok) {
-				throw new Error(responseBody.error ?? 'Unable to submit scores.')
-			}
+			const responseBody = await submitPayload(requestPayload)
+			removeQueuedScoreUpload(queuedScoreUploadId(token, activeContestant.id))
+			refreshQueuedUploads()
 
 			if (responseBody.submittedAt) {
 				setLastSubmittedAt(responseBody.submittedAt)
 			}
 
-			setSavedContestantIds((previous) => {
-				const next = new Set(previous)
-				next.add(activeContestant.id)
-				return next
-			})
-
-			const currentName = activeContestant.name
-			const nextIndex = activeContestantIndex + 1
+			markContestantsAsSaved([activeContestant.id])
 
 			if (adminEditMode) {
 				setSuccessMessage(`Saved scores for ${currentName}. Continue editing this participant or switch entries.`)
@@ -422,7 +773,35 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 			scrollToTopAfterSubmit()
 		} catch (submitError) {
-			setError(submitError instanceof Error ? submitError.message : 'Unable to submit scores.')
+			if (shouldQueueScoreUpload(submitError)) {
+				const serverUnreachable = isServerUnreachableScoreUploadError(submitError)
+				const retryLabel = serverUnreachable ? 'the server is reachable' : 'internet is available'
+
+				upsertQueuedScoreUpload({
+					id: queuedScoreUploadId(token, activeContestant.id),
+					token,
+					contestantId: activeContestant.id,
+					contestantName: activeContestant.name,
+					payload: requestPayload,
+					queuedAt: new Date().toISOString(),
+				})
+				refreshQueuedUploads()
+				setError(null)
+
+				if (adminEditMode) {
+					setSuccessMessage(`Saved locally for ${currentName}. It will auto-upload when ${retryLabel}.`)
+				} else if (nextIndex < contestants.length) {
+					setActiveContestantIndex(nextIndex)
+					setSuccessMessage(`Saved locally for ${currentName}. It will auto-upload when ${retryLabel}. Continue with ${contestants[nextIndex].name}.`)
+				} else {
+					setSuccessMessage(`Saved locally for ${currentName}. It will auto-upload when ${retryLabel}.`)
+				}
+
+				scrollToTopAfterSubmit()
+				void syncQueuedUploads(false)
+			} else {
+				setError(submitError instanceof Error ? submitError.message : 'Unable to submit scores.')
+			}
 		} finally {
 			setIsSaving(false)
 		}
@@ -447,6 +826,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 					</p>
 					<p className='text-sm text-cyan-900/80'>Max possible score: {maxPossibleScore.toFixed(2)}</p>
 					{lastSubmittedAt ? <p className='text-xs text-emerald-700'>Last submitted: {formatDate(lastSubmittedAt)}</p> : null}
+					{queuedUploads.length > 0 ? <p className='text-xs text-amber-700'>Pending uploads: {queuedUploads.length}. Saved locally and waiting to sync.</p> : null}
+					{isAutoSyncing ? <p className='text-xs text-cyan-800'>Auto-uploading pending saves...</p> : null}
 				</div>
 
 				<div className='mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4'>
@@ -456,6 +837,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 						{contestants.map((contestant, index) => {
 							const isActive = index === activeContestantIndex
 							const isSaved = savedContestantIds.has(contestant.id)
+							const isQueued = queuedContestantIds.has(contestant.id)
 							const hasDraft = draftScoredContestantIds.has(contestant.id)
 							const slotLabel = slotLabelsByContestant.get(contestant.id)
 							const isIndividual = contestant.entryType === 'individual'
@@ -468,7 +850,9 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 										{isIndividual ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-sky-700'}`}>Individual</span> : null}
 										{slotLabel ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-cyan-800/70'}`}>{slotLabel}</span> : null}
 									</div>
-									{isSaved ? (
+									{isQueued ? (
+										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'}`}>Queued</span>
+									) : isSaved ? (
 										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>Scored</span>
 									) : hasDraft ? (
 										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'}`}>Draft</span>
@@ -505,6 +889,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 						<div className='mt-4 space-y-4'>
 							{criteria.map((criterion) => {
 								const applicableSubCriteria = applicableSubCriteriaForContestant(criterion, activeContestant)
+								const scopeLabel = criterionScopeLabel(criterion)
 								const parentMaxScore = round(applicableSubCriteria.reduce((sum, subCriterion) => sum + Number(subCriterion.maxScore), 0))
 								const parentCurrentTotal = round(
 									applicableSubCriteria.reduce((sum, subCriterion) => {
@@ -516,7 +901,11 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 								return (
 									<article key={criterion.id} className='rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4'>
 										<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
-											<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
+											<div>
+												<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
+												<p className='text-[11px] font-medium text-cyan-900/85'>Scope: {scopeLabel}</p>
+												<p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p>
+											</div>
 											<p className='text-xs text-cyan-900/90'>
 												Parent Max: {parentMaxScore.toFixed(2)} | Current: {parentCurrentTotal.toFixed(2)}
 											</p>
@@ -538,7 +927,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 															<div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
 																<div>
 																	<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
-																	<p className='mt-1 text-[11px] text-cyan-900/90'>Legend: 4 - Excellent, 3 - Exceeds Expectations, 2 - Meets Expectations, 1 - Meets Expectations Sometimes, 0 - Does Not Meet Expectations</p>
 																</div>
 																<p className='text-xs text-cyan-900/90 sm:text-right'>
 																	Max: {groupMaxScore.toFixed(2)} | Current: {groupCurrentTotal.toFixed(2)}
@@ -558,7 +946,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 																			min={0}
 																			max={subCriterion.maxScore}
 																			step='0.01'
-																			className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 [color:#0f172a] [-webkit-text-fill-color:#0f172a] outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+																			className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
 																		/>
 																		<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
 																	</label>
@@ -582,7 +970,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 															min={0}
 															max={subCriterion.maxScore}
 															step='0.01'
-															className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 [color:#0f172a] [-webkit-text-fill-color:#0f172a] outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+															className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
 														/>
 														<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
 													</label>
@@ -610,7 +998,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 						</button>
 					</div>
 
-					<p className='text-xs text-cyan-900/90'>Tip: Save each contestant right after the presentation. You can revisit any entry and resubmit anytime.</p>
+					<p className='text-xs text-cyan-900/90'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
 				</form>
 			</div>
 		</div>

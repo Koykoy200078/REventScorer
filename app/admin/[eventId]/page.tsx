@@ -1,14 +1,20 @@
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 
 import { AdminLiveDashboard } from '@/components/admin-live-dashboard'
 import { compileEventResults } from '@/lib/scoring'
 import { getEventById } from '@/lib/storage'
+import { UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
 
 export const dynamic = 'force-dynamic'
 
-export default async function AdminEventPage({ params }: { params: Promise<{ eventId: string }> }) {
+export default async function AdminEventPage({ params, searchParams }: { params: Promise<{ eventId: string }>; searchParams?: Promise<{ update?: string; editor?: string }> }) {
 	const { eventId } = await params
+	const resolvedSearchParams = searchParams ? await searchParams : undefined
+	const openEditor = resolvedSearchParams?.update === '1' || resolvedSearchParams?.update === 'true' || resolvedSearchParams?.editor === '1' || resolvedSearchParams?.editor === 'true'
+	const cookieStore = await cookies()
+	const authCookie = cookieStore.get(UPDATE_AUTH_COOKIE_NAME)?.value
+	const allowEventEditor = openEditor && verifyUpdateAuthCookieValue(authCookie)
 	const event = await getEventById(eventId)
 
 	if (!event) {
@@ -21,5 +27,5 @@ export default async function AdminEventPage({ params }: { params: Promise<{ eve
 	const protocol = requestHeaders.get('x-forwarded-proto') ?? 'http'
 	const baseUrl = host ? `${protocol}://${host}` : ''
 
-	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} />
+	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} initialOpenEditor={allowEventEditor} allowEventEditor={allowEventEditor} />
 }

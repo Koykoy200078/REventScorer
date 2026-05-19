@@ -1,5 +1,7 @@
 import Link from 'next/link'
 
+import UpdateDataButton from '@/components/update-data-button'
+
 import { listEventSummaries } from '@/lib/storage'
 
 export const dynamic = 'force-dynamic'
@@ -49,9 +51,12 @@ export default async function HomePage() {
 												Contestants: {event.contestantCount} | Judges: {event.judgeCount} | Submitted: {event.submittedJudgeCount}
 											</p>
 										</div>
-										<Link href={`/admin/${event.id}`} className='inline-flex items-center self-center sm:self-auto rounded-full border border-transparent bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--shadow-soft)] transition hover:bg-[var(--brand-strong)]'>
-											Open Admin Results
-										</Link>
+										<div className='flex flex-wrap items-center gap-2 self-center sm:self-auto'>
+											<Link href={`/admin/${event.id}`} className='inline-flex items-center rounded-full border border-transparent bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--shadow-soft)] transition hover:bg-[var(--brand-strong)]'>
+												Open Admin Results
+											</Link>
+											<UpdateDataButton eventId={event.id} className='inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-200' />
+										</div>
 									</div>
 								</article>
 							))}

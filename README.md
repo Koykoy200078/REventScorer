@@ -12,8 +12,26 @@ Configure MySQL credentials in the root `.env` file (`C:\Projects\ShareME\.env`)
 - `EVENTSCORER_DB_PASSWORD`
 - `EVENTSCORER_DB_NAME`
 - `EVENTSCORER_DB_POOL_SIZE`
+- `EVENTSCORER_DB_MAX_IDLE`
+- `EVENTSCORER_DB_IDLE_TIMEOUT_MS`
+- `EVENTSCORER_DB_QUEUE_LIMIT`
+- `EVENTSCORER_DB_RESERVED_CONNECTIONS`
+
+Recommended baseline for local/dev to avoid connection saturation:
+
+- `EVENTSCORER_DB_POOL_SIZE=4`
+- `EVENTSCORER_DB_MAX_IDLE=2`
+- `EVENTSCORER_DB_IDLE_TIMEOUT_MS=15000`
+- `EVENTSCORER_DB_QUEUE_LIMIT=200`
+- `EVENTSCORER_DB_RESERVED_CONNECTIONS=5`
 
 Compatibility aliases are also supported: `MYSQL_*` and `DB_*` variants.
+
+## Update Editor Access
+
+Protect the "Update Data" editor behind a password by setting this in the root `.env` file:
+
+- `EVENTSCORER_UPDATE_PASSWORD`
 
 On first startup, if MySQL has zero events and `data/events.json` exists, EventScorer auto-imports legacy JSON data into MySQL.
 
@@ -48,6 +66,31 @@ SQL files used by these scripts:
 
 - `scripts/sql/eventscorer-migration.sql`
 - `scripts/sql/eventscorer-rollback.sql`
+
+## DB Pressure Monitoring
+
+Check live MySQL connection pressure from the workspace root:
+
+```bash
+npm run eventscorer:db:pressure
+```
+
+Strict mode (exit non-zero on warning/critical):
+
+```bash
+npm run eventscorer:db:pressure:strict
+```
+
+Runtime health endpoint (served by root Express backend):
+
+- `/api/eventscorer/health/db-pressure`
+- `/api/eventscorer/health/db-pressure?strict=1`
+
+Reported metrics include:
+
+- `threadsConnected`
+- `maxUsedConnectionsDelta` (headroom from `max_connections`)
+- `connectionErrorsMaxConnections`
 
 ## Getting Started
 

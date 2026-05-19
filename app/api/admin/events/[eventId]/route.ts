@@ -1,5 +1,8 @@
+import { cookies } from 'next/headers'
+
 import { compileEventResults } from '@/lib/scoring'
-import { getEventById, updateContestantJudgeAssignments, updateContestantProgramTags } from '@/lib/storage'
+import { getEventById, updateContestantJudgeAssignments, updateContestantProgramTags, updateEventDefinition } from '@/lib/storage'
+import { UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,11 +27,20 @@ export async function PATCH(request: Request, context: { params: Promise<{ event
 			judgeIds?: unknown
 			programTag?: unknown
 			programAssignments?: unknown
+			eventEditor?: unknown
 		}
 
 		let event
 
-		if (Array.isArray(body.programAssignments)) {
+		if (body.eventEditor && typeof body.eventEditor === 'object') {
+			const cookieStore = await cookies()
+			const authCookie = cookieStore.get(UPDATE_AUTH_COOKIE_NAME)?.value
+			if (!verifyUpdateAuthCookieValue(authCookie)) {
+				return Response.json({ error: 'Update password required.' }, { status: 401 })
+			}
+
+			event = await updateEventDefinition(eventId, body.eventEditor)
+		} else if (Array.isArray(body.programAssignments)) {
 			event = await updateContestantProgramTags(eventId, body.programAssignments)
 		} else if (Object.prototype.hasOwnProperty.call(body, 'programTag')) {
 			if (typeof body.contestantId !== 'string' || body.contestantId.trim().length === 0) {

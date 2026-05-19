@@ -3,7 +3,8 @@
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
+import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 type ProgramLabel = EventProgramTag
@@ -54,12 +55,251 @@ interface AdminLiveDashboardProps {
 	initialEvent: EventScorer
 	initialCompiled: EventCompiledResults
 	baseUrl: string
+	initialOpenEditor?: boolean
+	allowEventEditor?: boolean
 }
 
 interface AdminEventResponse {
 	event: EventScorer
 	compiled: EventCompiledResults
 	error?: string
+}
+
+type QueuedAdminSaveKind = 'program-assignment' | 'judge-assignment' | 'event-editor'
+type PendingQueueFilter = 'all' | QueuedAdminSaveKind
+
+interface ProgramAssignmentSaveBody {
+	contestantId: string
+	programTag: ProgramLabel | null
+}
+
+interface JudgeAssignmentSaveBody {
+	contestantId: string
+	judgeIds: string[]
+}
+
+interface EventEditorSaveBody {
+	eventEditor: AdminEventEditorInput
+}
+
+type AdminSaveRequestBody = ProgramAssignmentSaveBody | JudgeAssignmentSaveBody | EventEditorSaveBody | { programAssignments: Array<{ contestantId: string; programTag: ProgramLabel | null }> }
+
+interface QueuedAdminSaveAction {
+	id: string
+	eventId: string
+	kind: QueuedAdminSaveKind
+	requestBody: ProgramAssignmentSaveBody | JudgeAssignmentSaveBody | EventEditorSaveBody
+	queuedAt: string
+	summary: string
+}
+
+const QUEUED_ADMIN_SAVES_STORAGE_KEY = 'eventscorer:queued-admin-saves:v1'
+const ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS = 15_000
+
+class AdminSaveError extends Error {
+	status?: number
+
+	constructor(message: string, status?: number) {
+		super(message)
+		this.name = 'AdminSaveError'
+		this.status = status
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object'
+}
+
+function normalizeProgramTag(value: unknown): ProgramLabel | null {
+	if (value === 'BSINT' || value === 'BSCS') {
+		return value
+	}
+
+	return null
+}
+
+function queuedAdminSaveActionId(eventId: string, kind: QueuedAdminSaveKind, contestantId?: string): string {
+	if (kind === 'event-editor') {
+		return `${eventId}:event-editor`
+	}
+
+	if (kind === 'program-assignment') {
+		return `${eventId}:program:${contestantId ?? ''}`
+	}
+
+	return `${eventId}:judge:${contestantId ?? ''}`
+}
+
+function isProgramAssignmentQueuedAction(action: QueuedAdminSaveAction): action is QueuedAdminSaveAction & { requestBody: ProgramAssignmentSaveBody } {
+	return action.kind === 'program-assignment'
+}
+
+function isJudgeAssignmentQueuedAction(action: QueuedAdminSaveAction): action is QueuedAdminSaveAction & { requestBody: JudgeAssignmentSaveBody } {
+	return action.kind === 'judge-assignment'
+}
+
+function readQueuedAdminSaveActions(): QueuedAdminSaveAction[] {
+	if (typeof window === 'undefined') {
+		return []
+	}
+
+	try {
+		const raw = window.localStorage.getItem(QUEUED_ADMIN_SAVES_STORAGE_KEY)
+		if (!raw) {
+			return []
+		}
+
+		const parsed = JSON.parse(raw) as unknown
+		if (!Array.isArray(parsed)) {
+			return []
+		}
+
+		const normalized: QueuedAdminSaveAction[] = []
+
+		for (const item of parsed) {
+			if (!isRecord(item)) {
+				continue
+			}
+
+			const eventId = typeof item.eventId === 'string' ? item.eventId.trim() : ''
+			const kind = item.kind === 'program-assignment' || item.kind === 'judge-assignment' || item.kind === 'event-editor' ? item.kind : null
+			const queuedAt = typeof item.queuedAt === 'string' ? item.queuedAt : new Date().toISOString()
+			const summary = typeof item.summary === 'string' && item.summary.trim().length > 0 ? item.summary.trim() : 'admin save action'
+
+			if (!eventId || !kind) {
+				continue
+			}
+
+			const requestBody = item.requestBody
+			if (!isRecord(requestBody)) {
+				continue
+			}
+
+			let normalizedRequestBody: ProgramAssignmentSaveBody | JudgeAssignmentSaveBody | EventEditorSaveBody | null = null
+
+			if (kind === 'program-assignment') {
+				const contestantId = typeof requestBody.contestantId === 'string' ? requestBody.contestantId.trim() : ''
+				if (!contestantId || !Object.prototype.hasOwnProperty.call(requestBody, 'programTag')) {
+					continue
+				}
+
+				normalizedRequestBody = {
+					contestantId,
+					programTag: normalizeProgramTag(requestBody.programTag),
+				}
+			} else if (kind === 'judge-assignment') {
+				const contestantId = typeof requestBody.contestantId === 'string' ? requestBody.contestantId.trim() : ''
+				const judgeIds = Array.isArray(requestBody.judgeIds) ? requestBody.judgeIds.map((judgeId) => (typeof judgeId === 'string' ? judgeId.trim() : '')).filter((judgeId) => judgeId.length > 0) : []
+
+				if (!contestantId || judgeIds.length === 0) {
+					continue
+				}
+
+				normalizedRequestBody = {
+					contestantId,
+					judgeIds,
+				}
+			} else {
+				const eventEditor = requestBody.eventEditor
+				if (!isRecord(eventEditor)) {
+					continue
+				}
+
+				normalizedRequestBody = {
+					eventEditor: eventEditor as unknown as AdminEventEditorInput,
+				}
+			}
+
+			normalized.push({
+				id: typeof item.id === 'string' && item.id.trim().length > 0 ? item.id : queuedAdminSaveActionId(eventId, kind, 'contestantId' in normalizedRequestBody ? normalizedRequestBody.contestantId : undefined),
+				eventId,
+				kind,
+				requestBody: normalizedRequestBody,
+				queuedAt,
+				summary,
+			})
+		}
+
+		return normalized
+	} catch {
+		return []
+	}
+}
+
+function writeQueuedAdminSaveActions(queue: QueuedAdminSaveAction[]): void {
+	if (typeof window === 'undefined') {
+		return
+	}
+
+	if (queue.length === 0) {
+		window.localStorage.removeItem(QUEUED_ADMIN_SAVES_STORAGE_KEY)
+		return
+	}
+
+	window.localStorage.setItem(QUEUED_ADMIN_SAVES_STORAGE_KEY, JSON.stringify(queue))
+}
+
+function listQueuedAdminSaveActionsForEvent(eventId: string): QueuedAdminSaveAction[] {
+	const normalizedEventId = eventId.trim()
+	if (!normalizedEventId) {
+		return []
+	}
+
+	return readQueuedAdminSaveActions()
+		.filter((action) => action.eventId === normalizedEventId)
+		.sort((left, right) => new Date(left.queuedAt).getTime() - new Date(right.queuedAt).getTime())
+}
+
+function upsertQueuedAdminSaveAction(action: QueuedAdminSaveAction): void {
+	const queue = readQueuedAdminSaveActions()
+	const existingIndex = queue.findIndex((entry) => entry.id === action.id)
+
+	if (existingIndex >= 0) {
+		queue[existingIndex] = action
+	} else {
+		queue.push(action)
+	}
+
+	writeQueuedAdminSaveActions(queue)
+}
+
+function removeQueuedAdminSaveAction(actionId: string): void {
+	const queue = readQueuedAdminSaveActions()
+	const nextQueue = queue.filter((entry) => entry.id !== actionId)
+
+	if (nextQueue.length === queue.length) {
+		return
+	}
+
+	writeQueuedAdminSaveActions(nextQueue)
+}
+
+function shouldQueueAdminSave(error: unknown): boolean {
+	if (typeof navigator !== 'undefined' && !navigator.onLine) {
+		return true
+	}
+
+	if (error instanceof TypeError) {
+		return true
+	}
+
+	if (error instanceof AdminSaveError && typeof error.status === 'number' && error.status >= 500) {
+		return true
+	}
+
+	return false
+}
+
+function queuedAdminSaveKindLabel(kind: QueuedAdminSaveKind): string {
+	if (kind === 'program-assignment') {
+		return 'Program Assignment'
+	}
+
+	if (kind === 'judge-assignment') {
+		return 'Judge Assignment'
+	}
+
+	return 'Published Event Changes'
 }
 
 function formatDate(iso: string): string {
@@ -95,7 +335,19 @@ function criterionMaxScore(criterion: EventCriterion): number {
 }
 
 function isIndividualPresentationCriterion(criterion: EventCriterion): boolean {
-	return criterion.name.trim().toLowerCase() === 'individual presentation'
+	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
+		return true
+	}
+
+	return criterion.subCriteria.some((subCriterion) => {
+		const normalizedName = subCriterion.name.trim()
+		const splitMatch = normalizedName.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
+		if (!splitMatch) {
+			return false
+		}
+
+		return /(\d+)\s*$/.test(splitMatch[1].trim())
+	})
 }
 
 function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
@@ -107,9 +359,9 @@ function splitMemberCriterionName(name: string): { memberLabel: string; displayN
 
 	const memberLabel = splitMatch[1].trim()
 	const displayName = splitMatch[2].trim()
-	const isMemberLabel = /^(member|student|participant)\s*\d+$/i.test(memberLabel) || /^individual(?:\s*\d+)?$/i.test(memberLabel)
+	const hasMemberSuffix = /(\d+)\s*$/.test(memberLabel)
 
-	if (!isMemberLabel) {
+	if (!hasMemberSuffix) {
 		return {
 			memberLabel: 'Individual',
 			displayName: normalizedName || name,
@@ -140,7 +392,7 @@ function normalizedParticipants(contestant: EventContestant): string[] {
 	return contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
 }
 
-function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCriteria']): number {
+function memberCountFromSubCriteriaNames(subCriteria: Array<{ name: string }>): number {
 	let maxMemberCount = 0
 
 	for (const subCriterion of subCriteria) {
@@ -151,6 +403,10 @@ function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCrite
 	}
 
 	return maxMemberCount > 0 ? maxMemberCount : 1
+}
+
+function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCriteria']): number {
+	return memberCountFromSubCriteriaNames(subCriteria)
 }
 
 function allowedMemberCountForContestant(contestant: EventContestant, subCriteria: EventCriterion['subCriteria']): number {
@@ -689,7 +945,303 @@ function sameJudgeAssignments(left: string[], right: string[]): boolean {
 	return right.every((judgeId) => leftSet.has(judgeId))
 }
 
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: AdminLiveDashboardProps) {
+function createLocalEditorId(prefix: string): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return `${prefix}-${crypto.randomUUID()}`
+	}
+
+	return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now().toString(36)}`
+}
+
+function uniqueTrimmedNames(value: string): string[] {
+	const unique = new Set<string>()
+
+	for (const entry of value.split(/[\n,]/)) {
+		const trimmed = entry.trim()
+		if (trimmed.length === 0) {
+			continue
+		}
+
+		unique.add(trimmed)
+	}
+
+	return Array.from(unique)
+}
+
+interface SharedSubCriterionDraft {
+	id?: string
+	name: string
+	maxScore: number
+}
+
+function hasMemberScopedSubCriteria(subCriteria: Array<{ name: string }>): boolean {
+	return subCriteria.some((subCriterion) => {
+		const { memberLabel } = splitMemberCriterionName(subCriterion.name)
+		return memberIndexFromLabel(memberLabel) !== null
+	})
+}
+
+function collapseMemberScopedSubCriteria(subCriteria: Array<{ id?: string; name: string; maxScore: number }>): SharedSubCriterionDraft[] {
+	const collapsed: SharedSubCriterionDraft[] = []
+	const seenDisplayNames = new Set<string>()
+
+	for (const subCriterion of subCriteria) {
+		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		const normalizedName = (memberIndex ? displayName : subCriterion.name).trim()
+		const key = normalizedName.toLowerCase()
+
+		if (!normalizedName || seenDisplayNames.has(key)) {
+			continue
+		}
+
+		seenDisplayNames.add(key)
+		collapsed.push({
+			id: subCriterion.id,
+			name: normalizedName,
+			maxScore: Number.isFinite(Number(subCriterion.maxScore)) ? Number(subCriterion.maxScore) : 0,
+		})
+	}
+
+	return collapsed
+}
+
+function expectedMemberCountForEditorContestant(contestant: AdminEventEditorInput['contestants'][number]): number {
+	if (contestant.entryType === 'individual') {
+		return 1
+	}
+
+	const participants = Array.isArray(contestant.participants) ? contestant.participants.map((participant) => String(participant ?? '').trim()).filter((participant) => participant.length > 0) : []
+	return participants.length > 0 ? participants.length : 1
+}
+
+function maxEditorMemberCount(contestants: AdminEventEditorInput['contestants']): number {
+	if (!Array.isArray(contestants) || contestants.length === 0) {
+		return 1
+	}
+
+	return contestants.reduce((maxCount, contestant) => Math.max(maxCount, expectedMemberCountForEditorContestant(contestant)), 1)
+}
+
+function criterionSubCriteriaTotalScore(subCriteria: Array<{ maxScore: number }>): number {
+	return (
+		Math.round(
+			subCriteria.reduce((sum, subCriterion) => {
+				const numericMaxScore = Number(subCriterion.maxScore)
+				return sum + (Number.isFinite(numericMaxScore) ? numericMaxScore : 0)
+			}, 0) * 1000,
+		) / 1000
+	)
+}
+
+function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorInput['criteria'][number], existingCriterion?: EventCriterion): boolean {
+	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
+		return true
+	}
+
+	if (existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria)) {
+		return true
+	}
+
+	return hasMemberScopedSubCriteria(criterion.subCriteria)
+}
+
+function resolveSharedCriterionMemberCount(criterion: AdminEventEditorInput['criteria'][number], existingCriterion: EventCriterion | undefined, editorMemberCount: number): number {
+	const existingMemberCount = existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria) ? memberCountFromSubCriteriaNames(existingCriterion.subCriteria) : 1
+	const draftMemberCount = hasMemberScopedSubCriteria(criterion.subCriteria) ? memberCountFromSubCriteriaNames(criterion.subCriteria) : 1
+
+	return Math.max(1, editorMemberCount, existingMemberCount, draftMemberCount)
+}
+
+function criterionTotalScoreForEditor(criterion: AdminEventEditorInput['criteria'][number]): number {
+	return criterionSubCriteriaTotalScore(criterion.subCriteria)
+}
+
+function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: string; name: string; maxScore: number }>, memberCount: number): AdminEventEditorInput['criteria'][number]['subCriteria'] {
+	const sharedSubCriteria = collapseMemberScopedSubCriteria(subCriteria)
+
+	if (memberCount <= 1 || sharedSubCriteria.length === 0) {
+		return sharedSubCriteria.map((subCriterion) => ({
+			id: subCriterion.id,
+			name: subCriterion.name,
+			maxScore: subCriterion.maxScore,
+		}))
+	}
+
+	const expanded: AdminEventEditorInput['criteria'][number]['subCriteria'] = []
+
+	for (let memberIndex = 1; memberIndex <= memberCount; memberIndex += 1) {
+		const memberLabel = `Student ${memberIndex}`
+
+		for (const sharedSubCriterion of sharedSubCriteria) {
+			expanded.push({
+				id: memberIndex === 1 ? sharedSubCriterion.id : undefined,
+				name: `${memberLabel} - ${sharedSubCriterion.name}`,
+				maxScore: sharedSubCriterion.maxScore,
+			})
+		}
+	}
+
+	return expanded
+}
+
+function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput, existingEvent: EventScorer): AdminEventEditorInput {
+	const synchronizedDraft = synchronizeEventEditorDraft(draft)
+	const existingCriteriaById = new Map(existingEvent.criteria.map((criterion) => [criterion.id, criterion]))
+	const editorMemberCount = maxEditorMemberCount(synchronizedDraft.contestants)
+
+	return {
+		...synchronizedDraft,
+		criteria: synchronizedDraft.criteria.map((criterion) => {
+			const existingCriterion = criterion.id ? existingCriteriaById.get(criterion.id) : undefined
+			const shouldExpandForMembers = criterionUsesSharedMemberExpansion(criterion, existingCriterion)
+
+			if (!shouldExpandForMembers) {
+				return criterion
+			}
+
+			return {
+				...criterion,
+				subCriteria: expandSharedSubCriteriaForMembers(criterion.subCriteria, resolveSharedCriterionMemberCount(criterion, existingCriterion, editorMemberCount)),
+			}
+		}),
+	}
+}
+
+function buildSynchronizedPresentationSlots(contestants: AdminEventEditorInput['contestants'], judges: AdminEventEditorInput['judges'], existingSlots: AdminEventEditorInput['presentationSlots']): NonNullable<AdminEventEditorInput['presentationSlots']> {
+	const validJudgeIds = new Set(judges.map((judge) => String(judge.id ?? '').trim()).filter((judgeId) => judgeId.length > 0))
+	const slotByContestantId = new Map<string, NonNullable<AdminEventEditorInput['presentationSlots']>[number]>()
+
+	if (Array.isArray(existingSlots)) {
+		for (const slot of existingSlots) {
+			if (!slot || typeof slot !== 'object') {
+				continue
+			}
+
+			const contestantId = String(slot.contestantId ?? '').trim()
+			if (!contestantId || slotByContestantId.has(contestantId)) {
+				continue
+			}
+
+			slotByContestantId.set(contestantId, slot)
+		}
+	}
+
+	const fallbackJudgeIds = Array.from(validJudgeIds)
+
+	return contestants.map((contestant, index) => {
+		const contestantId = String(contestant.id ?? '').trim()
+		const currentSlot = slotByContestantId.get(contestantId)
+
+		const nextJudgeIds = Array.from(new Set((Array.isArray(currentSlot?.judgeIds) ? currentSlot.judgeIds : fallbackJudgeIds).map((judgeId) => String(judgeId ?? '').trim()).filter((judgeId) => validJudgeIds.has(judgeId))))
+
+		return {
+			id: String(currentSlot?.id ?? '').trim() || createLocalEditorId(`slot-${index + 1}`),
+			label: String(currentSlot?.label ?? '').trim() || `Slot ${index + 1}`,
+			contestantId,
+			judgeIds: nextJudgeIds,
+		}
+	})
+}
+
+function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEditorInput {
+	const contestants: AdminEventEditorInput['contestants'] = (Array.isArray(draft.contestants) ? draft.contestants : []).map((contestant, index) => ({
+		id: String(contestant?.id ?? '').trim() || createLocalEditorId(`contestant-${index + 1}`),
+		name: typeof contestant?.name === 'string' ? contestant.name : '',
+		entryType: contestant?.entryType === 'individual' ? 'individual' : 'group',
+		programTag: contestant?.programTag === 'BSINT' || contestant?.programTag === 'BSCS' ? contestant.programTag : null,
+		participants: Array.isArray(contestant?.participants) ? contestant.participants.map((participant) => String(participant ?? '').trim()).filter((participant) => participant.length > 0) : [],
+	}))
+
+	const judges: AdminEventEditorInput['judges'] = (Array.isArray(draft.judges) ? draft.judges : []).map((judge, index) => ({
+		id: String(judge?.id ?? '').trim() || createLocalEditorId(`judge-${index + 1}`),
+		name: typeof judge?.name === 'string' ? judge.name : '',
+		email: typeof judge?.email === 'string' ? judge.email : '',
+		token: typeof judge?.token === 'string' ? judge.token : '',
+	}))
+
+	const criteria: AdminEventEditorInput['criteria'] = (Array.isArray(draft.criteria) ? draft.criteria : []).map((criterion, criterionIndex) => ({
+		id: String(criterion?.id ?? '').trim() || createLocalEditorId(`criterion-${criterionIndex + 1}`),
+		name: typeof criterion?.name === 'string' ? criterion.name : '',
+		subCriteria: (Array.isArray(criterion?.subCriteria) ? criterion.subCriteria : []).map((subCriterion, subCriterionIndex) => ({
+			id: String(subCriterion?.id ?? '').trim() || createLocalEditorId(`subcriterion-${criterionIndex + 1}-${subCriterionIndex + 1}`),
+			name: typeof subCriterion?.name === 'string' ? subCriterion.name : '',
+			maxScore: Number.isFinite(Number(subCriterion?.maxScore)) ? Number(subCriterion?.maxScore) : 0,
+		})),
+	}))
+
+	return {
+		title: typeof draft.title === 'string' ? draft.title : '',
+		description: typeof draft.description === 'string' ? draft.description : '',
+		createdBy: typeof draft.createdBy === 'string' ? draft.createdBy : '',
+		eventScoringType: draft.eventScoringType === 'final-oral-defense' ? 'final-oral-defense' : 'standard',
+		rubricLegend: normalizeRubricLegend(draft.rubricLegend),
+		contestants,
+		judges,
+		criteria,
+		presentationSlots: buildSynchronizedPresentationSlots(contestants, judges, draft.presentationSlots),
+	}
+}
+
+function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInput {
+	const contestants: AdminEventEditorInput['contestants'] = event.contestants.map((contestant) => ({
+		id: contestant.id,
+		name: contestant.name,
+		entryType: contestant.entryType === 'individual' ? 'individual' : 'group',
+		programTag: contestant.programTag ?? null,
+		participants: contestant.entryType === 'group' ? [...(contestant.participants ?? [])] : [],
+	}))
+
+	const judges: AdminEventEditorInput['judges'] = event.judges.map((judge) => ({
+		id: judge.id,
+		name: judge.name,
+		email: judge.email ?? '',
+		token: judge.token,
+	}))
+
+	const criteria: AdminEventEditorInput['criteria'] = event.criteria.map((criterion) => {
+		const shouldCollapseMemberScope = hasMemberScopedSubCriteria(criterion.subCriteria)
+		const normalizedSubCriteria = shouldCollapseMemberScope ? collapseMemberScopedSubCriteria(criterion.subCriteria) : criterion.subCriteria
+
+		return {
+			id: criterion.id,
+			name: criterion.name,
+			subCriteria: normalizedSubCriteria.map((subCriterion) => ({
+				id: subCriterion.id,
+				name: subCriterion.name,
+				maxScore: subCriterion.maxScore,
+			})),
+		}
+	})
+
+	const defaultPresentationSlots = event.contestants.map((contestant, index) => ({
+		id: '',
+		label: `Slot ${index + 1}`,
+		contestantId: contestant.id,
+		judgeIds: event.judges.map((judge) => judge.id),
+	}))
+
+	const sourceSlots = Array.isArray(event.presentationSlots) && event.presentationSlots.length > 0 ? event.presentationSlots : defaultPresentationSlots
+
+	return {
+		title: event.title,
+		description: event.description ?? '',
+		createdBy: event.createdBy ?? '',
+		eventScoringType: event.eventScoringType ?? 'standard',
+		rubricLegend: normalizeRubricLegend(event.rubricLegend),
+		contestants,
+		judges,
+		criteria,
+		presentationSlots: sourceSlots.map((slot) => ({
+			id: slot.id,
+			label: slot.label,
+			contestantId: slot.contestantId,
+			judgeIds: [...slot.judgeIds],
+		})),
+	}
+}
+
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
@@ -705,12 +1257,25 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
+	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
+	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
+	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
+	const [eventEditorNotice, setEventEditorNotice] = useState<string | null>(null)
+	const [isSavingEventEditor, setIsSavingEventEditor] = useState(false)
+	const [queuedAdminSaves, setQueuedAdminSaves] = useState<QueuedAdminSaveAction[]>([])
+	const [isAutoSyncingAdminSaves, setIsAutoSyncingAdminSaves] = useState(false)
+	const [adminQueueNotice, setAdminQueueNotice] = useState<string | null>(null)
+	const [pendingQueueFilter, setPendingQueueFilter] = useState<PendingQueueFilter>('all')
 	const refreshInFlight = useRef(false)
+	const adminAutoSyncInFlight = useRef(false)
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
 	const analyticsPreviewLimit = 3
 	const compiledTableColumnCount = useWeightedScores ? 9 : 6
+	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
+	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedRubricLegend), [normalizedRubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
+	const judgesById = useMemo(() => new Map(event.judges.map((judge) => [judge.id, judge])), [event.judges])
 	const resolvedProgramByContestantId = useMemo(() => {
 		const map = new Map<string, ProgramLabel | null>()
 
@@ -729,10 +1294,79 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
 	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, contestantsById, manualAssignments), [compiled.rankings, contestantsById, manualAssignments])
 	const subCriteriaAnalyticsByProgram = useMemo(() => subCriteriaRankingsByProgram(event, manualAssignments), [event, manualAssignments])
+	const eventEditorRubricTotalScore = useMemo(() => eventEditorDraft.criteria.reduce((sum, criterion) => sum + criterionTotalScoreForEditor(criterion), 0), [eventEditorDraft.criteria])
+	const pendingQueueRows = useMemo(
+		() =>
+			queuedAdminSaves.map((action) => {
+				if (isProgramAssignmentQueuedAction(action)) {
+					const contestantName = contestantsById.get(action.requestBody.contestantId)?.name ?? action.requestBody.contestantId
+					return {
+						id: action.id,
+						kind: action.kind,
+						kindLabel: queuedAdminSaveKindLabel(action.kind),
+						summary: action.summary,
+						targetLabel: contestantName,
+						detail: `Program tag: ${action.requestBody.programTag ?? 'Cleared'}`,
+						queuedAt: action.queuedAt,
+					}
+				}
+
+				if (isJudgeAssignmentQueuedAction(action)) {
+					const contestantName = contestantsById.get(action.requestBody.contestantId)?.name ?? action.requestBody.contestantId
+					const judgeNames = action.requestBody.judgeIds.map((judgeId) => judgesById.get(judgeId)?.name ?? judgeId)
+					return {
+						id: action.id,
+						kind: action.kind,
+						kindLabel: queuedAdminSaveKindLabel(action.kind),
+						summary: action.summary,
+						targetLabel: contestantName,
+						detail: `Assigned judges: ${judgeNames.join(', ')}`,
+						queuedAt: action.queuedAt,
+					}
+				}
+
+				const editorDraft = 'eventEditor' in action.requestBody ? action.requestBody.eventEditor : undefined
+				const contestantCount = Array.isArray(editorDraft?.contestants) ? editorDraft.contestants.length : 0
+				const judgeCount = Array.isArray(editorDraft?.judges) ? editorDraft.judges.length : 0
+				const criterionCount = Array.isArray(editorDraft?.criteria) ? editorDraft.criteria.length : 0
+
+				return {
+					id: action.id,
+					kind: action.kind,
+					kindLabel: queuedAdminSaveKindLabel(action.kind),
+					summary: action.summary,
+					targetLabel: event.title,
+					detail: `Event editor payload: ${contestantCount} contestants, ${judgeCount} judges, ${criterionCount} criteria.`,
+					queuedAt: action.queuedAt,
+				}
+			}),
+		[event.title, contestantsById, judgesById, queuedAdminSaves],
+	)
+	const filteredPendingQueueRows = useMemo(() => {
+		if (pendingQueueFilter === 'all') {
+			return pendingQueueRows
+		}
+
+		return pendingQueueRows.filter((row) => row.kind === pendingQueueFilter)
+	}, [pendingQueueFilter, pendingQueueRows])
 
 	useEffect(() => {
 		setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(event))
 	}, [event])
+
+	useEffect(() => {
+		if (showEventEditor) {
+			return
+		}
+
+		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event)))
+	}, [event, showEventEditor])
+
+	const updateEventEditorDraft = useCallback((updater: (previous: AdminEventEditorInput) => AdminEventEditorInput) => {
+		setEventEditorDraft((previous) => synchronizeEventEditorDraft(updater(previous)))
+		setEventEditorError(null)
+		setEventEditorNotice(null)
+	}, [])
 
 	const copyLink = useCallback(async (value: string) => {
 		try {
@@ -791,6 +1425,176 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 		}
 	}, [event.id])
 
+	const patchAdminEvent = useCallback(
+		async (requestBody: AdminSaveRequestBody, targetEventId = event.id): Promise<AdminEventResponse> => {
+			const response = await fetch(`/api/eventscorer/admin/events/${targetEventId}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(requestBody),
+			})
+
+			let responseBody: unknown = null
+			try {
+				responseBody = await response.json()
+			} catch {
+				responseBody = null
+			}
+
+			if (!response.ok) {
+				const message = isRecord(responseBody) && typeof responseBody.error === 'string' ? responseBody.error : 'Unable to save admin changes.'
+				throw new AdminSaveError(message, response.status)
+			}
+
+			if (!isRecord(responseBody) || !isRecord(responseBody.event) || !isRecord(responseBody.compiled)) {
+				throw new AdminSaveError('Unexpected response while saving admin changes.', 502)
+			}
+
+			return responseBody as unknown as AdminEventResponse
+		},
+		[event.id],
+	)
+
+	const refreshQueuedAdminSaves = useCallback(() => {
+		const queued = listQueuedAdminSaveActionsForEvent(event.id)
+		setQueuedAdminSaves(queued)
+
+		if (queued.length === 0) {
+			return
+		}
+
+		const queuedProgramActions = queued.filter(isProgramAssignmentQueuedAction)
+		if (queuedProgramActions.length > 0) {
+			setManualAssignments((previous) => {
+				const next = { ...previous }
+
+				for (const action of queuedProgramActions) {
+					next[action.requestBody.contestantId] = action.requestBody.programTag
+				}
+
+				return next
+			})
+		}
+
+		const queuedJudgeActions = queued.filter(isJudgeAssignmentQueuedAction)
+		if (queuedJudgeActions.length > 0) {
+			setJudgeAssignmentDrafts((previous) => {
+				const next = { ...previous }
+
+				for (const action of queuedJudgeActions) {
+					next[action.requestBody.contestantId] = [...action.requestBody.judgeIds]
+				}
+
+				return next
+			})
+		}
+	}, [event.id])
+
+	const syncQueuedAdminSaves = useCallback(
+		async (showNotice = false): Promise<void> => {
+			if (adminAutoSyncInFlight.current) {
+				return
+			}
+
+			if (typeof navigator !== 'undefined' && !navigator.onLine) {
+				return
+			}
+
+			const pendingSaves = listQueuedAdminSaveActionsForEvent(event.id)
+			if (pendingSaves.length === 0) {
+				setQueuedAdminSaves([])
+				return
+			}
+
+			adminAutoSyncInFlight.current = true
+			setIsAutoSyncingAdminSaves(true)
+
+			let syncedCount = 0
+			let permanentErrorMessage: string | null = null
+
+			try {
+				for (const pendingSave of pendingSaves) {
+					try {
+						const responseBody = await patchAdminEvent(pendingSave.requestBody, pendingSave.eventId)
+						removeQueuedAdminSaveAction(pendingSave.id)
+						syncedCount += 1
+
+						setEvent(responseBody.event)
+						setCompiled(responseBody.compiled)
+
+						if (pendingSave.kind === 'event-editor') {
+							setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
+							setEditingJudgeAssignmentForContestantId(null)
+							setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
+							setShowEventEditor(false)
+							setEventEditorError(null)
+							setEventEditorNotice('Queued published event changes uploaded. Judge submissions were reset to keep scoring consistent with the updated structure.')
+						}
+					} catch (syncError) {
+						if (syncError instanceof AdminSaveError && typeof syncError.status === 'number' && syncError.status >= 400 && syncError.status < 500) {
+							removeQueuedAdminSaveAction(pendingSave.id)
+
+							if (!permanentErrorMessage) {
+								permanentErrorMessage = `Auto-upload skipped ${pendingSave.summary}: ${syncError.message}`
+							}
+
+							continue
+						}
+
+						break
+					}
+				}
+			} finally {
+				refreshQueuedAdminSaves()
+				setIsAutoSyncingAdminSaves(false)
+				adminAutoSyncInFlight.current = false
+			}
+
+			if (syncedCount > 0) {
+				setRefreshError(null)
+
+				if (showNotice) {
+					setAdminQueueNotice(`Auto-uploaded ${syncedCount} pending admin ${syncedCount === 1 ? 'save' : 'saves'}.`)
+				}
+			}
+
+			if (permanentErrorMessage) {
+				setRefreshError(permanentErrorMessage)
+			}
+		},
+		[event.id, patchAdminEvent, refreshQueuedAdminSaves],
+	)
+
+	useEffect(() => {
+		refreshQueuedAdminSaves()
+		void syncQueuedAdminSaves(false)
+	}, [refreshQueuedAdminSaves, syncQueuedAdminSaves])
+
+	useEffect(() => {
+		const handleOnline = () => {
+			void syncQueuedAdminSaves(true)
+		}
+
+		window.addEventListener('online', handleOnline)
+
+		return () => {
+			window.removeEventListener('online', handleOnline)
+		}
+	}, [syncQueuedAdminSaves])
+
+	useEffect(() => {
+		if (queuedAdminSaves.length === 0) {
+			return
+		}
+
+		const intervalId = window.setInterval(() => {
+			void syncQueuedAdminSaves(false)
+		}, ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS)
+
+		return () => {
+			window.clearInterval(intervalId)
+		}
+	}, [queuedAdminSaves.length, syncQueuedAdminSaves])
+
 	const saveProgramAssignments = useCallback(
 		async (assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }>) => {
 			if (assignments.length === 0) {
@@ -801,27 +1605,41 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 			setRefreshError(null)
 
 			try {
-				const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
-					method: 'PATCH',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ programAssignments: assignments }),
-				})
-
-				const responseBody = (await response.json()) as AdminEventResponse
-
-				if (!response.ok) {
-					throw new Error(responseBody.error ?? 'Unable to update program tag assignments.')
-				}
+				const responseBody = await patchAdminEvent({ programAssignments: assignments })
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
+				setAdminQueueNotice(null)
 			} catch (error) {
-				setRefreshError(error instanceof Error ? error.message : 'Unable to update program tag assignments.')
+				if (shouldQueueAdminSave(error)) {
+					for (const assignment of assignments) {
+						const contestantName = contestantsById.get(assignment.contestantId)?.name ?? assignment.contestantId
+
+						upsertQueuedAdminSaveAction({
+							id: queuedAdminSaveActionId(event.id, 'program-assignment', assignment.contestantId),
+							eventId: event.id,
+							kind: 'program-assignment',
+							requestBody: {
+								contestantId: assignment.contestantId,
+								programTag: assignment.programTag,
+							},
+							queuedAt: new Date().toISOString(),
+							summary: `program assignment for ${contestantName}`,
+						})
+					}
+
+					refreshQueuedAdminSaves()
+					setRefreshError(null)
+					setAdminQueueNotice('Program assignment changes were saved locally and queued for auto-upload.')
+					void syncQueuedAdminSaves(false)
+				} else {
+					setRefreshError(error instanceof Error ? error.message : 'Unable to update program tag assignments.')
+				}
 			} finally {
 				setIsSavingProgramAssignments(false)
 			}
 		},
-		[event.id],
+		[contestantsById, event.id, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
 	)
 
 	const setProgramForAllContestants = useCallback(
@@ -896,29 +1714,95 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 			setRefreshError(null)
 
 			try {
-				const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
-					method: 'PATCH',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ contestantId, judgeIds }),
-				})
-
-				const responseBody = (await response.json()) as AdminEventResponse
-
-				if (!response.ok) {
-					throw new Error(responseBody.error ?? 'Unable to update judge assignment.')
-				}
+				const responseBody = await patchAdminEvent({ contestantId, judgeIds })
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
 				setEditingJudgeAssignmentForContestantId(null)
+				setAdminQueueNotice(null)
 			} catch (error) {
-				setRefreshError(error instanceof Error ? error.message : 'Unable to update judge assignment.')
+				if (shouldQueueAdminSave(error)) {
+					const contestantName = contestantsById.get(contestantId)?.name ?? contestantId
+
+					upsertQueuedAdminSaveAction({
+						id: queuedAdminSaveActionId(event.id, 'judge-assignment', contestantId),
+						eventId: event.id,
+						kind: 'judge-assignment',
+						requestBody: {
+							contestantId,
+							judgeIds: [...judgeIds],
+						},
+						queuedAt: new Date().toISOString(),
+						summary: `judge assignment for ${contestantName}`,
+					})
+
+					refreshQueuedAdminSaves()
+					setRefreshError(null)
+					setAdminQueueNotice(`Judge assignment for ${contestantName} was saved locally and queued for auto-upload.`)
+					setEditingJudgeAssignmentForContestantId(null)
+					void syncQueuedAdminSaves(false)
+				} else {
+					setRefreshError(error instanceof Error ? error.message : 'Unable to update judge assignment.')
+				}
 			} finally {
 				setSavingJudgeAssignmentForContestantId(null)
 			}
 		},
-		[event, judgeAssignmentDrafts],
+		[contestantsById, event, judgeAssignmentDrafts, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
 	)
+
+	const loadEventEditorFromCurrentEvent = useCallback(() => {
+		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event)))
+		setEventEditorError(null)
+		setEventEditorNotice(null)
+	}, [event])
+
+	const saveEventEditor = useCallback(async () => {
+		setEventEditorError(null)
+		setEventEditorNotice(null)
+		setRefreshError(null)
+
+		const preparedEditor = prepareEventEditorPayloadForSubmit(eventEditorDraft, event)
+		setEventEditorDraft(preparedEditor)
+
+		setIsSavingEventEditor(true)
+
+		try {
+			const responseBody = await patchAdminEvent({ eventEditor: preparedEditor })
+
+			setEvent(responseBody.event)
+			setCompiled(responseBody.compiled)
+			setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
+			setEditingJudgeAssignmentForContestantId(null)
+			setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
+			setEventEditorNotice('Published event updated. Judge submissions were reset to keep scoring consistent with the new structure.')
+			setAdminQueueNotice(null)
+			setShowEventEditor(false)
+		} catch (error) {
+			if (shouldQueueAdminSave(error)) {
+				upsertQueuedAdminSaveAction({
+					id: queuedAdminSaveActionId(event.id, 'event-editor'),
+					eventId: event.id,
+					kind: 'event-editor',
+					requestBody: {
+						eventEditor: preparedEditor,
+					},
+					queuedAt: new Date().toISOString(),
+					summary: 'published event changes',
+				})
+
+				refreshQueuedAdminSaves()
+				setEventEditorError(null)
+				setEventEditorNotice('Published event changes were saved locally and queued for auto-upload. They will sync automatically when internet/service is available.')
+				setAdminQueueNotice('Published event changes are queued for auto-upload.')
+				void syncQueuedAdminSaves(false)
+			} else {
+				setEventEditorError(error instanceof Error ? error.message : 'Unable to update published event.')
+			}
+		} finally {
+			setIsSavingEventEditor(false)
+		}
+	}, [event, eventEditorDraft, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves])
 
 	useEffect(() => {
 		const eventId = event.id
@@ -1092,6 +1976,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 								<p className='text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]'>Admin Console</p>
 								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl'>{event.title}</h1>
 								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]'>{event.description}</p> : null}
+								<p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p>
 								<p className='mt-3 text-xs text-[var(--text-muted)]'>
 									Created {formatDate(event.createdAt)}
 									{event.createdBy ? ` by ${event.createdBy}` : ''}
@@ -1101,6 +1986,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 							<div className='flex flex-wrap items-center gap-2 print:hidden'>
 								<span className={connectionBadgeClass(connectionState)}>{connectionLabel(connectionState)}</span>
 								{lastSignalAt ? <span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-secondary)]'>Last update {formatDate(lastSignalAt)}</span> : null}
+								{queuedAdminSaves.length > 0 ? <span className='rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-800'>Pending saves {queuedAdminSaves.length}</span> : null}
+								{isAutoSyncingAdminSaves ? <span className='rounded-full border border-cyan-300 bg-cyan-50 px-3 py-1 text-xs text-cyan-800'>Auto-uploading pending saves...</span> : null}
 								<button type='button' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
 									Print Results
 								</button>
@@ -1134,6 +2021,638 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 					</header>
 
 					{refreshError ? <section className='rounded-2xl border border-rose-400/40 bg-rose-300/15 px-4 py-3 text-sm text-rose-100 dark:text-rose-200'>{refreshError}</section> : null}
+					{adminQueueNotice ? <section className='rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800'>{adminQueueNotice}</section> : null}
+					{queuedAdminSaves.length > 0 ? (
+						<section className='rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-4'>
+							<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+								<div>
+									<h2 className='text-sm font-semibold uppercase tracking-wide text-amber-900'>Pending Queue</h2>
+									<p className='mt-1 text-xs text-amber-800'>These local admin changes are waiting to sync.</p>
+									<div className='mt-2 flex flex-wrap items-center gap-2'>
+										{(
+											[
+												{ id: 'all', label: 'All' },
+												{ id: 'program-assignment', label: 'Program' },
+												{ id: 'judge-assignment', label: 'Judge' },
+												{ id: 'event-editor', label: 'Event Editor' },
+											] as Array<{ id: PendingQueueFilter; label: string }>
+										).map((option) => {
+											const isActive = pendingQueueFilter === option.id
+
+											return (
+												<button key={option.id} type='button' onClick={() => setPendingQueueFilter(option.id)} className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${isActive ? 'border-amber-700 bg-amber-900 text-white' : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'}`}>
+													{option.label}
+												</button>
+											)
+										})}
+									</div>
+								</div>
+								<button
+									type='button'
+									onClick={() => {
+										void syncQueuedAdminSaves(true)
+									}}
+									disabled={isAutoSyncingAdminSaves}
+									className='rounded-full border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60'>
+									{isAutoSyncingAdminSaves ? 'Syncing Queue...' : 'Sync Queue Now'}
+								</button>
+							</div>
+
+							<div className='mt-3 space-y-2'>
+								{filteredPendingQueueRows.length > 0 ? (
+									filteredPendingQueueRows.map((row) => (
+										<article key={row.id} className='rounded-xl border border-amber-200 bg-white/90 px-3 py-2'>
+											<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
+												<p className='text-[11px] font-semibold uppercase tracking-wide text-amber-900'>{row.kindLabel}</p>
+												<p className='text-[11px] text-amber-800'>Queued {formatDate(row.queuedAt)}</p>
+											</div>
+											<p className='mt-1 text-sm font-medium text-amber-950'>{row.targetLabel}</p>
+											<p className='mt-1 text-xs text-amber-900'>{row.detail}</p>
+											<p className='mt-1 text-[11px] text-amber-800/90'>Change: {row.summary}</p>
+										</article>
+									))
+								) : (
+									<p className='rounded-xl border border-amber-200 bg-white/80 px-3 py-2 text-xs text-amber-800'>No queued items for this filter.</p>
+								)}
+							</div>
+						</section>
+					) : null}
+
+					{allowEventEditor ? (
+						<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+								<div>
+									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
+									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Edit judges, rubric criteria, contestants/participants, presentation slots, and rubric legend directly from this dashboard.</p>
+									<p className='mt-2 text-xs text-amber-700'>Saving this editor resets all current judge submissions so scoring stays consistent with the new structure.</p>
+								</div>
+								<div className='flex flex-wrap items-center gap-2'>
+									<button
+										type='button'
+										onClick={() => {
+											setShowEventEditor((current) => !current)
+											if (!showEventEditor) {
+												loadEventEditorFromCurrentEvent()
+											}
+										}}
+										className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+										{showEventEditor ? 'Hide Editor' : 'Open Editor Fields'}
+									</button>
+									<button type='button' onClick={loadEventEditorFromCurrentEvent} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+										Reload Snapshot
+									</button>
+								</div>
+							</div>
+
+							{eventEditorError ? <p className='mt-4 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{eventEditorError}</p> : null}
+							{eventEditorNotice ? <p className='mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{eventEditorNotice}</p> : null}
+
+							{showEventEditor ? (
+								<div className='mt-4 space-y-6'>
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Event Details</h3>
+										<div className='mt-3 grid gap-3 sm:grid-cols-2'>
+											<label className='text-xs text-[var(--text-secondary)]'>
+												Title
+												<input
+													type='text'
+													value={eventEditorDraft.title}
+													onChange={(event) => {
+														const value = event.target.value
+														updateEventEditorDraft((previous) => ({ ...previous, title: value }))
+													}}
+													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+												/>
+											</label>
+
+											<label className='text-xs text-[var(--text-secondary)]'>
+												Created By
+												<input
+													type='text'
+													value={eventEditorDraft.createdBy ?? ''}
+													onChange={(event) => {
+														const value = event.target.value
+														updateEventEditorDraft((previous) => ({ ...previous, createdBy: value }))
+													}}
+													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+												/>
+											</label>
+
+											<label className='text-xs text-[var(--text-secondary)]'>
+												Scoring Type
+												<select
+													value={eventEditorDraft.eventScoringType ?? 'standard'}
+													onChange={(event) => {
+														const value = event.target.value === 'final-oral-defense' ? 'final-oral-defense' : 'standard'
+														updateEventEditorDraft((previous) => ({ ...previous, eventScoringType: value }))
+													}}
+													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+													<option value='standard'>Standard</option>
+													<option value='final-oral-defense'>Final Oral Defense</option>
+												</select>
+											</label>
+
+											<label className='sm:col-span-2 text-xs text-[var(--text-secondary)]'>
+												Description
+												<textarea
+													value={eventEditorDraft.description ?? ''}
+													onChange={(event) => {
+														const value = event.target.value
+														updateEventEditorDraft((previous) => ({ ...previous, description: value }))
+													}}
+													rows={3}
+													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+												/>
+											</label>
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<div className='flex items-center justify-between gap-2'>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Legend</h3>
+											<div className='flex gap-2'>
+												<button
+													type='button'
+													onClick={() => {
+														updateEventEditorDraft((previous) => ({
+															...previous,
+															rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
+														}))
+													}}
+													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+													Add Legend Row
+												</button>
+												<button
+													type='button'
+													onClick={() => {
+														updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
+													}}
+													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+													Reset Default
+												</button>
+											</div>
+										</div>
+
+										<div className='mt-3 space-y-2'>
+											{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
+												<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
+													<input
+														type='number'
+														step='1'
+														value={legendItem.score}
+														onChange={(event) => {
+															const numericScore = Number(event.target.value)
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
+															}))
+														}}
+														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													/>
+													<input
+														type='text'
+														value={legendItem.label}
+														onChange={(event) => {
+															const value = event.target.value
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
+															}))
+														}}
+														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													/>
+													<button
+														type='button'
+														onClick={() => {
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
+															}))
+														}}
+														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+														Remove
+													</button>
+												</div>
+											))}
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<div className='flex items-center justify-between gap-2'>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Judges</h3>
+											<button
+												type='button'
+												onClick={() => {
+													updateEventEditorDraft((previous) => ({
+														...previous,
+														judges: [...previous.judges, { id: createLocalEditorId('judge'), name: '', email: '' }],
+													}))
+												}}
+												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												Add Judge
+											</button>
+										</div>
+
+										<div className='mt-3 space-y-2'>
+											{eventEditorDraft.judges.map((judge, judgeIndex) => (
+												<div key={judge.id ?? `judge-${judgeIndex}`} className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
+													<input
+														type='text'
+														placeholder='Judge name'
+														value={judge.name}
+														onChange={(event) => {
+															const value = event.target.value
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, name: value } : item)),
+															}))
+														}}
+														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													/>
+													<input
+														type='text'
+														placeholder='Email (optional)'
+														value={judge.email ?? ''}
+														onChange={(event) => {
+															const value = event.target.value
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, email: value } : item)),
+															}))
+														}}
+														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													/>
+													<button
+														type='button'
+														onClick={() => {
+															updateEventEditorDraft((previous) => ({
+																...previous,
+																judges: previous.judges.filter((_, itemIndex) => itemIndex !== judgeIndex),
+															}))
+														}}
+														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+														Remove
+													</button>
+												</div>
+											))}
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<div className='flex items-center justify-between gap-2'>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Contestants / Entries</h3>
+											<button
+												type='button'
+												onClick={() => {
+													updateEventEditorDraft((previous) => ({
+														...previous,
+														contestants: [...previous.contestants, { id: createLocalEditorId('contestant'), name: '', entryType: 'group', participants: [], programTag: null }],
+													}))
+												}}
+												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												Add Entry
+											</button>
+										</div>
+
+										<div className='mt-3 space-y-3'>
+											{eventEditorDraft.contestants.map((contestant, contestantIndex) => (
+												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+													<div className='grid gap-2 sm:grid-cols-[1fr_140px_120px_auto]'>
+														<input
+															type='text'
+															placeholder='Contestant or team name'
+															value={contestant.name}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, name: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+														<select
+															value={contestant.entryType === 'individual' ? 'individual' : 'group'}
+															onChange={(event) => {
+																const value = event.target.value === 'individual' ? 'individual' : 'group'
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) =>
+																		itemIndex === contestantIndex
+																			? {
+																					...item,
+																					entryType: value,
+																					participants: value === 'individual' ? [] : item.participants,
+																				}
+																			: item,
+																	),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															<option value='group'>Group</option>
+															<option value='individual'>Individual</option>
+														</select>
+														<select
+															value={contestant.programTag ?? ''}
+															onChange={(event) => {
+																const value = event.target.value === 'BSINT' || event.target.value === 'BSCS' ? event.target.value : null
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, programTag: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															<option value=''>Program</option>
+															<option value='BSINT'>BSINT</option>
+															<option value='BSCS'>BSCS</option>
+														</select>
+														<button
+															type='button'
+															onClick={() => {
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.filter((_, itemIndex) => itemIndex !== contestantIndex),
+																}))
+															}}
+															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+															Remove
+														</button>
+													</div>
+
+													{contestant.entryType !== 'individual' ? (
+														<label className='block text-xs text-[var(--text-secondary)]'>
+															Participants (comma or new line separated)
+															<textarea
+																value={Array.isArray(contestant.participants) ? contestant.participants.join('\n') : ''}
+																onChange={(event) => {
+																	const value = event.target.value
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, participants: uniqueTrimmedNames(value) } : item)),
+																	}))
+																}}
+																rows={2}
+																className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															/>
+														</label>
+													) : null}
+												</div>
+											))}
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<div className='flex items-center justify-between gap-2'>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Criteria</h3>
+											<button
+												type='button'
+												onClick={() => {
+													updateEventEditorDraft((previous) => ({
+														...previous,
+														criteria: [
+															...previous.criteria,
+															{
+																id: createLocalEditorId('criterion'),
+																name: '',
+																subCriteria: [{ id: createLocalEditorId('subcriterion'), name: '', maxScore: 0 }],
+															},
+														],
+													}))
+												}}
+												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												Add Criterion
+											</button>
+										</div>
+										<p className='mt-2 text-xs text-[var(--text-secondary)]'>Subcriteria here are shared. Updates are applied automatically to all students/members.</p>
+										<p className='mt-1 text-xs text-[var(--text-secondary)]'>
+											Total Rubric Score: <span className='font-semibold text-[var(--text-primary)]'>{formatScore(eventEditorRubricTotalScore)}</span>
+										</p>
+										<p className='mt-1 text-[11px] text-[var(--text-muted)]'>Totals shown here are based on the visible shared subcriteria values.</p>
+
+										<div className='mt-3 space-y-3'>
+											{eventEditorDraft.criteria.map((criterion, criterionIndex) => {
+												const criterionTotalScore = criterionTotalScoreForEditor(criterion)
+
+												return (
+													<div key={criterion.id ?? `criterion-${criterionIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+														<div className='grid gap-2 sm:grid-cols-[1fr_auto_auto]'>
+															<input
+																type='text'
+																placeholder='Criterion name'
+																value={criterion.name}
+																onChange={(event) => {
+																	const value = event.target.value
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		criteria: previous.criteria.map((item, itemIndex) => (itemIndex === criterionIndex ? { ...item, name: value } : item)),
+																	}))
+																}}
+																className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															/>
+															<p className='inline-flex items-center justify-center rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-xs font-semibold text-[var(--text-primary)]'>Total Score: {formatScore(criterionTotalScore)}</p>
+															<button
+																type='button'
+																onClick={() => {
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		criteria: previous.criteria.filter((_, itemIndex) => itemIndex !== criterionIndex),
+																	}))
+																}}
+																className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																Remove Criterion
+															</button>
+														</div>
+
+														<div className='space-y-2'>
+															{criterion.subCriteria.map((subCriterion, subCriterionIndex) => (
+																<div key={subCriterion.id ?? `sub-${criterionIndex}-${subCriterionIndex}`} className='grid gap-2 sm:grid-cols-[1fr_160px_auto]'>
+																	<input
+																		type='text'
+																		placeholder='Subcriterion name'
+																		value={subCriterion.name}
+																		onChange={(event) => {
+																			const value = event.target.value
+																			updateEventEditorDraft((previous) => ({
+																				...previous,
+																				criteria: previous.criteria.map((criterionItem, criterionItemIndex) =>
+																					criterionItemIndex !== criterionIndex
+																						? criterionItem
+																						: {
+																								...criterionItem,
+																								subCriteria: criterionItem.subCriteria.map((subItem, subItemIndex) => (subItemIndex === subCriterionIndex ? { ...subItem, name: value } : subItem)),
+																							},
+																				),
+																			}))
+																		}}
+																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																	/>
+																	<input
+																		type='number'
+																		step='0.01'
+																		min='0'
+																		value={subCriterion.maxScore}
+																		onChange={(event) => {
+																			const numericValue = Number(event.target.value)
+																			updateEventEditorDraft((previous) => ({
+																				...previous,
+																				criteria: previous.criteria.map((criterionItem, criterionItemIndex) =>
+																					criterionItemIndex !== criterionIndex
+																						? criterionItem
+																						: {
+																								...criterionItem,
+																								subCriteria: criterionItem.subCriteria.map((subItem, subItemIndex) => (subItemIndex === subCriterionIndex ? { ...subItem, maxScore: Number.isFinite(numericValue) ? numericValue : 0 } : subItem)),
+																							},
+																				),
+																			}))
+																		}}
+																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																	/>
+																	<button
+																		type='button'
+																		onClick={() => {
+																			updateEventEditorDraft((previous) => ({
+																				...previous,
+																				criteria: previous.criteria.map((criterionItem, criterionItemIndex) =>
+																					criterionItemIndex !== criterionIndex
+																						? criterionItem
+																						: {
+																								...criterionItem,
+																								subCriteria: criterionItem.subCriteria.filter((_, subItemIndex) => subItemIndex !== subCriterionIndex),
+																							},
+																				),
+																			}))
+																		}}
+																		className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																		Remove
+																	</button>
+																</div>
+															))}
+
+															<button
+																type='button'
+																onClick={() => {
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		criteria: previous.criteria.map((criterionItem, criterionItemIndex) =>
+																			criterionItemIndex === criterionIndex
+																				? {
+																						...criterionItem,
+																						subCriteria: [...criterionItem.subCriteria, { id: createLocalEditorId('subcriterion'), name: '', maxScore: 0 }],
+																					}
+																				: criterionItem,
+																		),
+																	}))
+																}}
+																className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+																Add Subcriterion
+															</button>
+														</div>
+													</div>
+												)
+											})}
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Presentation Assignments</h3>
+										<p className='mt-1 text-xs text-[var(--text-secondary)]'>Slots are auto-synced with entries. Edit slot labels and assigned judges below.</p>
+										<div className='mt-3 space-y-3'>
+											{(eventEditorDraft.presentationSlots ?? []).map((slot, slotIndex) => {
+												const contestantName = eventEditorDraft.contestants.find((contestant) => contestant.id === slot.contestantId)?.name || `Entry ${slotIndex + 1}`
+
+												return (
+													<div key={slot.id ?? `slot-${slotIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+														<p className='text-xs text-[var(--text-secondary)]'>
+															Entry: <span className='font-semibold text-[var(--text-primary)]'>{contestantName}</span>
+														</p>
+														<input
+															type='text'
+															placeholder='Slot label'
+															value={slot.label}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	presentationSlots: (previous.presentationSlots ?? []).map((item, itemIndex) => (itemIndex === slotIndex ? { ...item, label: value } : item)),
+																}))
+															}}
+															className='w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+
+														<div className='flex flex-wrap gap-2'>
+															{eventEditorDraft.judges.map((judge, judgeIndex) => {
+																const judgeId = String(judge.id ?? '').trim()
+																if (!judgeId) {
+																	return null
+																}
+
+																const isChecked = (slot.judgeIds ?? []).includes(judgeId)
+
+																return (
+																	<label key={`${judgeId}-${judgeIndex}`} className='inline-flex items-center gap-2 rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-primary)]'>
+																		<input
+																			type='checkbox'
+																			checked={isChecked}
+																			onChange={(event) => {
+																				const checked = event.target.checked
+																				updateEventEditorDraft((previous) => ({
+																					...previous,
+																					presentationSlots: (previous.presentationSlots ?? []).map((item, itemIndex) => {
+																						if (itemIndex !== slotIndex) {
+																							return item
+																						}
+
+																						const judgeIdSet = new Set(item.judgeIds ?? [])
+																						if (checked) {
+																							judgeIdSet.add(judgeId)
+																						} else {
+																							judgeIdSet.delete(judgeId)
+																						}
+
+																						return {
+																							...item,
+																							judgeIds: Array.from(judgeIdSet),
+																						}
+																					}),
+																				}))
+																			}}
+																		/>
+																		{judge.name || `Judge ${judgeIndex + 1}`}
+																	</label>
+																)
+															})}
+														</div>
+													</div>
+												)
+											})}
+										</div>
+									</section>
+
+									<div className='flex flex-wrap items-center gap-2'>
+										<button
+											type='button'
+											onClick={() => {
+												void saveEventEditor()
+											}}
+											disabled={isSavingEventEditor}
+											className='rounded-full border border-emerald-700 bg-emerald-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
+											{isSavingEventEditor ? 'Saving Published Event...' : 'Save Published Event Changes'}
+										</button>
+										<button
+											type='button'
+											onClick={() => {
+												setShowEventEditor(false)
+												setEventEditorError(null)
+											}}
+											disabled={isSavingEventEditor}
+											className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-60'>
+											Cancel
+										</button>
+									</div>
+								</div>
+							) : null}
+						</section>
+					) : null}
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
@@ -1178,7 +2697,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Program Analytics</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and Individual Presentation participant rankings separated for BSINT and BSCS.</p>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
 
 						<div className='mt-4 grid gap-6 sm:grid-cols-2'>
 							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
@@ -1240,7 +2759,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 										<div className='border-t border-[var(--border-soft)] bg-[var(--surface)] p-4'>
 											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Individual Subcriteria Participant Rankings</p>
+												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Per-Contestant Criteria Participant Rankings</p>
 												{participants.length > analyticsPreviewLimit ? (
 													<button type='button' onClick={() => setShowAllParticipantAnalytics((previous) => ({ ...previous, [program]: !showAllParticipants }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
 														{showAllParticipants ? 'Show Top 3' : 'View All'}
@@ -1349,7 +2868,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
-						{useWeightedScores ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Group Rating = (Group Score / 110) x 100 and Individual Rating = (Individual Score / 36) x 100.</p> : null}
+						{useWeightedScores ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p> : null}
 						<div className='mt-4 overflow-x-auto rounded-2xl border border-[var(--border-soft)]'>
 							<table className='min-w-full border-collapse text-sm'>
 								<thead>
@@ -1423,7 +2942,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 												}
 											})
 
-										const hasParticipantScores = useWeightedScores && Array.isArray(result.participantScores) && result.participantScores.length > 0
+										const hasParticipantScores = Array.isArray(result.participantScores) && result.participantScores.length > 0
 
 										return (
 											<Fragment key={result.contestantId}>
@@ -1481,11 +3000,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 															<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
 																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Participant Scores:</span>
 																<div className='flex flex-wrap items-center gap-2'>
-																	{result.participantScores?.map((participant, participantIndex) => (
-																		<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
-																			{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participant.rating ?? 0)})
-																		</span>
-																	))}
+																	{result.participantScores?.map((participant, participantIndex) => {
+																		const participantRating = participantAnalyticsScore(participant)
+																		return (
+																			<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
+																				{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participantRating)})
+																			</span>
+																		)
+																	})}
 																</div>
 															</div>
 															<div className='mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
@@ -1580,15 +3102,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl }: A
 
 					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
+						<p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p>
 						<div className='mt-4 grid gap-4'>
 							{event.criteria.map((criterion) => {
 								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
+								const criterionScopeLabel = showPerContestantParticipants ? 'Per Contestant (Individual)' : 'Group Criteria Only'
 
 								return (
 									<article key={criterion.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<p className='text-sm font-semibold text-[var(--text-primary)]'>
-											{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
-										</p>
+										<div className='flex flex-wrap items-center justify-between gap-2'>
+											<p className='text-sm font-semibold text-[var(--text-primary)]'>
+												{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
+											</p>
+											<span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-secondary)]'>Scope: {criterionScopeLabel}</span>
+										</div>
 
 										{showPerContestantParticipants ? (
 											<div className='mt-2 space-y-3'>

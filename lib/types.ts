@@ -22,6 +22,11 @@ export interface SubCriterionInput {
 	maxScore: number
 }
 
+export interface RubricLegendItem {
+	score: number
+	label: string
+}
+
 export interface CriterionInput {
 	name: string
 	subCriteria: SubCriterionInput[]
@@ -33,11 +38,60 @@ export interface PresentationSlotInput {
 	judgeNames: string[]
 }
 
+export interface AdminContestantEditorInput {
+	id?: string
+	name: string
+	entryType?: ContestantEntryType
+	participants?: string[]
+	programTag?: EventProgramTag | null
+}
+
+export interface AdminJudgeEditorInput {
+	id?: string
+	name: string
+	email?: string
+	token?: string
+}
+
+export interface AdminSubCriterionEditorInput {
+	id?: string
+	name: string
+	maxScore: number
+}
+
+export interface AdminCriterionEditorInput {
+	id?: string
+	name: string
+	subCriteria: AdminSubCriterionEditorInput[]
+}
+
+export interface AdminPresentationSlotEditorInput {
+	id?: string
+	label: string
+	contestantId?: string
+	contestantIndex?: number
+	judgeIds?: string[]
+	judgeNames?: string[]
+}
+
+export interface AdminEventEditorInput {
+	title: string
+	description?: string
+	createdBy?: string
+	eventScoringType?: EventScoringType
+	rubricLegend?: RubricLegendItem[]
+	contestants: AdminContestantEditorInput[]
+	judges: AdminJudgeEditorInput[]
+	criteria: AdminCriterionEditorInput[]
+	presentationSlots?: AdminPresentationSlotEditorInput[]
+}
+
 export interface CreateEventInput {
 	title: string
 	description?: string
 	createdBy?: string
 	eventScoringType?: EventScoringType
+	rubricLegend?: RubricLegendItem[]
 	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
 	criteria: CriterionInput[]
@@ -92,6 +146,7 @@ export interface EventScorer {
 	description?: string
 	createdBy?: string
 	eventScoringType?: EventScoringType
+	rubricLegend?: RubricLegendItem[]
 	createdAt: string
 	contestants: EventContestant[]
 	judges: EventJudge[]
@@ -116,7 +171,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'contestants' | 'criteria' | 'presentationSlots'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }

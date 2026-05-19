@@ -5,7 +5,8 @@ import path from 'node:path'
 import mysql from 'mysql2/promise.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise.js'
 
-import type { ContestantEntryType, CreateEventInput, EventContestant, EventCriterion, EventJudge, EventPresentationSlot, EventProgramTag, EventScorer, EventScoringType, EventSubCriterion, EventSummary, JudgeSessionData, JudgeSubmission, ScoreMatrix } from '@/lib/types'
+import { normalizeRubricLegend } from '@/lib/rubric-legend'
+import type { AdminEventEditorInput, ContestantEntryType, CreateEventInput, EventContestant, EventCriterion, EventJudge, EventPresentationSlot, EventProgramTag, EventScorer, EventScoringType, EventSubCriterion, EventSummary, JudgeSessionData, JudgeSubmission, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
 interface StoreShape {
 	events: EventScorer[]
@@ -18,6 +19,9 @@ interface DatabaseConfig {
 	password: string
 	database: string
 	connectionLimit: number
+	queueLimit: number
+	maxIdle: number
+	idleTimeoutMs: number
 }
 
 interface EventRow extends RowDataPacket {
@@ -26,6 +30,7 @@ interface EventRow extends RowDataPacket {
 	description: string | null
 	created_by: string | null
 	event_scoring_type: string | null
+	rubric_legend_json: string | null
 	created_at: string
 }
 
@@ -110,6 +115,11 @@ interface CountRow extends RowDataPacket {
 	total: number | string
 }
 
+interface MysqlSystemVariableRow extends RowDataPacket {
+	Variable_name: string
+	Value: number | string
+}
+
 interface PersistableScoreRow {
 	contestantId: string
 	subCriterionId: string
@@ -132,7 +142,11 @@ const TABLE_SUBMISSIONS = 'es_submissions'
 const TABLE_SUBMISSION_SAVED_CONTESTANTS = 'es_submission_saved_contestants'
 const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
 
-let poolPromise: Promise<Pool> | null = null
+interface EventScorerGlobalState {
+	__eventScorerPoolPromise?: Promise<Pool> | null
+}
+
+const eventScorerGlobalState = globalThis as typeof globalThis & EventScorerGlobalState
 
 function compactWhitespace(value: string): string {
 	return value.trim().replace(/\s+/g, ' ')
@@ -270,6 +284,23 @@ function normalizeEventScoringType(value: unknown): EventScoringType {
 	return parseEventScoringType(value) ?? 'standard'
 }
 
+function normalizeRubricLegendInput(value: unknown): RubricLegendItem[] {
+	return normalizeRubricLegend(value)
+}
+
+function parseStoredRubricLegend(value: unknown): RubricLegendItem[] {
+	if (typeof value !== 'string' || compactWhitespace(value).length === 0) {
+		return normalizeRubricLegendInput(undefined)
+	}
+
+	try {
+		const parsed = JSON.parse(value) as unknown
+		return normalizeRubricLegendInput(parsed)
+	} catch {
+		return normalizeRubricLegendInput(undefined)
+	}
+}
+
 function normalizeContestantParticipants(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		return []
@@ -277,6 +308,38 @@ function normalizeContestantParticipants(value: unknown): string[] {
 
 	const cleaned = value.map((participant) => compactWhitespace(String(participant ?? ''))).filter((participant) => participant.length > 0)
 	return uniqueCaseInsensitive(cleaned)
+}
+
+function normalizeUniqueIdCandidate(value: unknown, usedIds: Set<string>): string {
+	const candidate = compactWhitespace(String(value ?? ''))
+	if (candidate.length > 0 && !usedIds.has(candidate)) {
+		usedIds.add(candidate)
+		return candidate
+	}
+
+	let generated = randomUUID()
+	while (usedIds.has(generated)) {
+		generated = randomUUID()
+	}
+
+	usedIds.add(generated)
+	return generated
+}
+
+function normalizeUniqueTokenCandidate(value: unknown, usedTokens: Set<string>): string {
+	const candidate = compactWhitespace(String(value ?? ''))
+	if (candidate.length > 0 && !usedTokens.has(candidate)) {
+		usedTokens.add(candidate)
+		return candidate
+	}
+
+	let generated = randomBytes(24).toString('hex')
+	while (usedTokens.has(generated)) {
+		generated = randomBytes(24).toString('hex')
+	}
+
+	usedTokens.add(generated)
+	return generated
 }
 
 function normalizeContestants(contestants: CreateEventInput['contestants']): EventContestant[] {
@@ -545,6 +608,7 @@ function buildEvent(input: CreateEventInput): EventScorer {
 	const description = input.description ? compactWhitespace(input.description) : undefined
 	const createdBy = input.createdBy ? compactWhitespace(input.createdBy) : undefined
 	const eventScoringType = normalizeEventScoringType(input.eventScoringType)
+	const rubricLegend = normalizeRubricLegendInput(input.rubricLegend)
 
 	const normalizedContestants = normalizeContestants(input.contestants ?? [])
 	const normalizedJudges = normalizeJudges(input.judges ?? [])
@@ -557,11 +621,271 @@ function buildEvent(input: CreateEventInput): EventScorer {
 		description,
 		createdBy,
 		eventScoringType,
+		rubricLegend,
 		createdAt: new Date().toISOString(),
 		contestants: normalizedContestants,
 		judges: normalizedJudges,
 		criteria: normalizedCriteria,
 		presentationSlots: normalizedPresentationSlots,
+		submissions: [],
+	}
+}
+
+function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInput['contestants']): EventContestant[] {
+	if (!Array.isArray(rawContestants)) {
+		throw new Error('Contestants payload must be an array.')
+	}
+
+	const usedIds = new Set<string>()
+	const usedNames = new Set<string>()
+	const contestants: EventContestant[] = []
+
+	for (const rawContestant of rawContestants) {
+		if (!rawContestant || typeof rawContestant !== 'object') {
+			continue
+		}
+
+		const contestantName = compactWhitespace(String(rawContestant.name ?? ''))
+		if (contestantName.length === 0) {
+			continue
+		}
+
+		const nameKey = contestantName.toLowerCase()
+		if (usedNames.has(nameKey)) {
+			throw new Error(`Contestant name "${contestantName}" is duplicated.`)
+		}
+		usedNames.add(nameKey)
+
+		const entryType = normalizeContestantEntryType(rawContestant.entryType)
+		const participants = normalizeContestantParticipants(rawContestant.participants)
+		const programTag = normalizeContestantProgramTag(rawContestant.programTag)
+
+		contestants.push({
+			id: normalizeUniqueIdCandidate(rawContestant.id, usedIds),
+			name: contestantName,
+			entryType,
+			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
+			programTag: programTag ?? undefined,
+		})
+	}
+
+	if (contestants.length < 2) {
+		throw new Error('At least 2 contestants are required.')
+	}
+
+	return contestants
+}
+
+function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges']): EventJudge[] {
+	if (!Array.isArray(rawJudges)) {
+		throw new Error('Judges payload must be an array.')
+	}
+
+	const usedIds = new Set<string>()
+	const usedNames = new Set<string>()
+	const usedTokens = new Set<string>()
+	const judges: EventJudge[] = []
+
+	for (const rawJudge of rawJudges) {
+		if (!rawJudge || typeof rawJudge !== 'object') {
+			continue
+		}
+
+		const judgeName = compactWhitespace(String(rawJudge.name ?? ''))
+		if (judgeName.length === 0) {
+			continue
+		}
+
+		const nameKey = judgeName.toLowerCase()
+		if (usedNames.has(nameKey)) {
+			throw new Error(`Judge name "${judgeName}" is duplicated.`)
+		}
+		usedNames.add(nameKey)
+
+		const email = typeof rawJudge.email === 'string' ? compactWhitespace(rawJudge.email) : ''
+
+		judges.push({
+			id: normalizeUniqueIdCandidate(rawJudge.id, usedIds),
+			name: judgeName,
+			email: email.length > 0 ? email : undefined,
+			token: normalizeUniqueTokenCandidate(rawJudge.token, usedTokens),
+		})
+	}
+
+	if (judges.length === 0) {
+		throw new Error('At least 1 judge is required.')
+	}
+
+	return judges
+}
+
+function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['criteria'], contestants: EventContestant[]): EventCriterion[] {
+	if (!Array.isArray(rawCriteria)) {
+		throw new Error('Criteria payload must be an array.')
+	}
+
+	const usedCriterionIds = new Set<string>()
+	const usedSubCriterionIds = new Set<string>()
+	const criteria: EventCriterion[] = []
+
+	for (const rawCriterion of rawCriteria) {
+		if (!rawCriterion || typeof rawCriterion !== 'object') {
+			continue
+		}
+
+		const criterionName = compactWhitespace(String(rawCriterion.name ?? ''))
+		if (criterionName.length === 0) {
+			continue
+		}
+
+		const rawSubCriteria = Array.isArray(rawCriterion.subCriteria) ? rawCriterion.subCriteria : []
+		const baseSubCriteria = rawSubCriteria
+			.map((rawSubCriterion) => {
+				if (!rawSubCriterion || typeof rawSubCriterion !== 'object') {
+					return null
+				}
+
+				const subCriterionName = compactWhitespace(String(rawSubCriterion.name ?? ''))
+				if (subCriterionName.length === 0) {
+					return null
+				}
+
+				const maxScore = toPositiveNumber(rawSubCriterion.maxScore, `Subcriterion max score (${criterionName})`)
+				return {
+					name: subCriterionName,
+					maxScore,
+				}
+			})
+			.filter((subCriterion): subCriterion is { name: string; maxScore: number } => Boolean(subCriterion))
+
+		if (baseSubCriteria.length === 0) {
+			throw new Error(`Criterion "${criterionName}" must have at least one subcriterion.`)
+		}
+
+		const expandedSubCriteria = expandIndividualPresentationSubCriteriaIfNeeded(criterionName, baseSubCriteria, contestants)
+		const normalizedSubCriteria = expandedSubCriteria.map((subCriterion) => ({
+			id: normalizeUniqueIdCandidate(undefined, usedSubCriterionIds),
+			name: compactWhitespace(String(subCriterion.name ?? '')),
+			maxScore: toPositiveNumber(subCriterion.maxScore, `Subcriterion max score (${criterionName})`),
+		}))
+
+		const maxScore = Math.round(normalizedSubCriteria.reduce((sum, subCriterion) => sum + subCriterion.maxScore, 0) * 1000) / 1000
+		if (maxScore <= 0) {
+			throw new Error(`Criterion "${criterionName}" must have total max score greater than 0.`)
+		}
+
+		criteria.push({
+			id: normalizeUniqueIdCandidate(rawCriterion.id, usedCriterionIds),
+			name: criterionName,
+			maxScore,
+			subCriteria: normalizedSubCriteria,
+		})
+	}
+
+	if (criteria.length === 0) {
+		throw new Error('At least 1 parent criterion is required.')
+	}
+
+	return criteria
+}
+
+function normalizePresentationSlotsForAdminEditor(rawSlots: AdminEventEditorInput['presentationSlots'], contestants: EventContestant[], judges: EventJudge[]): EventPresentationSlot[] | undefined {
+	if (rawSlots === undefined) {
+		return undefined
+	}
+
+	if (!Array.isArray(rawSlots) || rawSlots.length === 0) {
+		return undefined
+	}
+
+	if (rawSlots.length !== contestants.length) {
+		throw new Error('Presentation slots must match the number of contestants.')
+	}
+
+	const usedSlotIds = new Set<string>()
+	const usedContestantIds = new Set<string>()
+	const validContestantIds = new Set(contestants.map((contestant) => contestant.id))
+	const validJudgeIds = new Set(judges.map((judge) => judge.id))
+	const judgeIdByName = new Map(judges.map((judge) => [judge.name.toLowerCase(), judge.id]))
+
+	const normalizedSlots = rawSlots.map((rawSlot, index) => {
+		if (!rawSlot || typeof rawSlot !== 'object') {
+			throw new Error('Invalid presentation slot payload.')
+		}
+
+		let contestantId = compactWhitespace(String(rawSlot.contestantId ?? ''))
+		if (!contestantId) {
+			const contestantIndex = Number(rawSlot.contestantIndex)
+			if (Number.isInteger(contestantIndex) && contestantIndex >= 0 && contestantIndex < contestants.length) {
+				contestantId = contestants[contestantIndex].id
+			}
+		}
+
+		if (!contestantId || !validContestantIds.has(contestantId)) {
+			throw new Error('Presentation slot contestant mapping is invalid.')
+		}
+
+		if (usedContestantIds.has(contestantId)) {
+			throw new Error('Each contestant can only be assigned to one presentation slot.')
+		}
+		usedContestantIds.add(contestantId)
+
+		let judgeIds: string[] = []
+
+		if (Array.isArray(rawSlot.judgeIds) && rawSlot.judgeIds.length > 0) {
+			judgeIds = uniqueCaseInsensitive(rawSlot.judgeIds.map((judgeId) => compactWhitespace(String(judgeId ?? ''))))
+			judgeIds = judgeIds.filter((judgeId) => validJudgeIds.has(judgeId))
+		} else if (Array.isArray(rawSlot.judgeNames) && rawSlot.judgeNames.length > 0) {
+			judgeIds = uniqueCaseInsensitive(rawSlot.judgeNames.map((judgeName) => compactWhitespace(String(judgeName ?? '').toLowerCase())))
+			judgeIds = judgeIds.map((judgeName) => judgeIdByName.get(judgeName) ?? '').filter((judgeId) => judgeId.length > 0)
+		}
+
+		return {
+			id: normalizeUniqueIdCandidate(rawSlot.id, usedSlotIds),
+			label: compactWhitespace(String(rawSlot.label ?? '')) || `Slot ${index + 1}`,
+			contestantId,
+			judgeIds,
+		}
+	})
+
+	if (usedContestantIds.size !== contestants.length) {
+		throw new Error('Each contestant must be assigned to a presentation slot.')
+	}
+
+	return normalizedSlots
+}
+
+function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown): EventScorer {
+	if (!rawInput || typeof rawInput !== 'object') {
+		throw new Error('Event editor payload is invalid.')
+	}
+
+	const source = rawInput as Partial<AdminEventEditorInput>
+	const title = compactWhitespace(String(source.title ?? ''))
+	if (!title) {
+		throw new Error('Event title is required.')
+	}
+
+	const description = typeof source.description === 'string' ? compactWhitespace(source.description) : ''
+	const createdBy = typeof source.createdBy === 'string' ? compactWhitespace(source.createdBy) : ''
+	const eventScoringType = normalizeEventScoringType(source.eventScoringType)
+	const rubricLegend = normalizeRubricLegendInput(source.rubricLegend)
+	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [])
+	const judges = normalizeJudgesForAdminEditor(source.judges ?? [])
+	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
+	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges)
+
+	return {
+		...previousEvent,
+		title,
+		description: description.length > 0 ? description : undefined,
+		createdBy: createdBy.length > 0 ? createdBy : undefined,
+		eventScoringType,
+		rubricLegend,
+		contestants,
+		judges,
+		criteria,
+		presentationSlots,
 		submissions: [],
 	}
 }
@@ -823,6 +1147,29 @@ function parseIntegerWithFallback(value: string | undefined, fallback: number): 
 	return parsed
 }
 
+function parseNonNegativeIntegerWithFallback(value: string | undefined, fallback: number): number {
+	if (!value) {
+		return fallback
+	}
+
+	const parsed = Number.parseInt(value, 10)
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return fallback
+	}
+
+	return parsed
+}
+
+function resolveEffectiveConnectionLimit(requestedLimit: number, serverMaxConnections: number | null): number {
+	if (!Number.isFinite(serverMaxConnections) || !serverMaxConnections || serverMaxConnections <= 0) {
+		return requestedLimit
+	}
+
+	const reservedConnections = parseIntegerWithFallback(process.env.EVENTSCORER_DB_RESERVED_CONNECTIONS, 5)
+	const availableConnections = Math.max(1, serverMaxConnections - reservedConnections)
+	return Math.max(1, Math.min(requestedLimit, availableConnections))
+}
+
 function normalizeDatabaseName(value: string | undefined): string {
 	const normalized = compactWhitespace(value ?? '')
 	if (!normalized) {
@@ -842,7 +1189,12 @@ function buildDatabaseConfig(): DatabaseConfig {
 	const user = compactWhitespace(process.env.EVENTSCORER_DB_USER ?? process.env.MYSQL_USER ?? process.env.DB_USER ?? '')
 	const password = process.env.EVENTSCORER_DB_PASSWORD ?? process.env.MYSQL_PASSWORD ?? process.env.DB_PASSWORD ?? ''
 	const database = normalizeDatabaseName(process.env.EVENTSCORER_DB_NAME ?? process.env.MYSQL_DATABASE ?? process.env.DB_NAME)
-	const connectionLimit = parseIntegerWithFallback(process.env.EVENTSCORER_DB_POOL_SIZE ?? process.env.MYSQL_POOL_SIZE, 10)
+	const connectionLimit = parseIntegerWithFallback(process.env.EVENTSCORER_DB_POOL_SIZE ?? process.env.MYSQL_POOL_SIZE, 4)
+	const queueLimit = parseNonNegativeIntegerWithFallback(process.env.EVENTSCORER_DB_QUEUE_LIMIT ?? process.env.MYSQL_QUEUE_LIMIT, 200)
+	const defaultMaxIdle = Math.min(connectionLimit, 2)
+	const requestedMaxIdle = parseNonNegativeIntegerWithFallback(process.env.EVENTSCORER_DB_MAX_IDLE ?? process.env.MYSQL_MAX_IDLE, defaultMaxIdle)
+	const maxIdle = Math.min(connectionLimit, Math.max(1, requestedMaxIdle))
+	const idleTimeoutMs = parseIntegerWithFallback(process.env.EVENTSCORER_DB_IDLE_TIMEOUT_MS ?? process.env.MYSQL_IDLE_TIMEOUT_MS, 15000)
 
 	if (!host) {
 		throw new Error('Database host is required.')
@@ -859,19 +1211,34 @@ function buildDatabaseConfig(): DatabaseConfig {
 		password,
 		database,
 		connectionLimit,
+		queueLimit,
+		maxIdle,
+		idleTimeoutMs,
 	}
 }
 
 async function getPool(): Promise<Pool> {
-	if (!poolPromise) {
-		poolPromise = initializePool()
+	const existingPoolPromise = eventScorerGlobalState.__eventScorerPoolPromise
+	if (existingPoolPromise) {
+		return existingPoolPromise
 	}
 
-	return poolPromise
+	let initializingPoolPromise: Promise<Pool>
+	initializingPoolPromise = initializePool().catch((error) => {
+		if (eventScorerGlobalState.__eventScorerPoolPromise === initializingPoolPromise) {
+			eventScorerGlobalState.__eventScorerPoolPromise = null
+		}
+
+		throw error
+	})
+
+	eventScorerGlobalState.__eventScorerPoolPromise = initializingPoolPromise
+	return initializingPoolPromise
 }
 
 async function initializePool(): Promise<Pool> {
 	const config = buildDatabaseConfig()
+	let serverMaxConnections: number | null = null
 
 	const bootstrap = await mysql.createConnection({
 		host: config.host,
@@ -882,9 +1249,22 @@ async function initializePool(): Promise<Pool> {
 
 	try {
 		await bootstrap.query(`CREATE DATABASE IF NOT EXISTS \`${config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
+
+		const [systemVariableRows] = await bootstrap.query<MysqlSystemVariableRow[]>(`SHOW VARIABLES LIKE 'max_connections'`)
+		const parsedMaxConnections = Number(systemVariableRows[0]?.Value ?? 0)
+		if (Number.isFinite(parsedMaxConnections) && parsedMaxConnections > 0) {
+			serverMaxConnections = parsedMaxConnections
+		}
 	} finally {
 		await bootstrap.end()
 	}
+
+	const effectiveConnectionLimit = resolveEffectiveConnectionLimit(config.connectionLimit, serverMaxConnections)
+	if (effectiveConnectionLimit < config.connectionLimit && serverMaxConnections) {
+		console.warn(`[eventscorer] MySQL max_connections=${serverMaxConnections}; capping pool size to ${effectiveConnectionLimit} (requested ${config.connectionLimit}).`)
+	}
+
+	const effectiveMaxIdle = Math.min(config.maxIdle, effectiveConnectionLimit)
 
 	const pool = mysql.createPool({
 		host: config.host,
@@ -893,8 +1273,10 @@ async function initializePool(): Promise<Pool> {
 		password: config.password,
 		database: config.database,
 		waitForConnections: true,
-		connectionLimit: config.connectionLimit,
-		queueLimit: 0,
+		connectionLimit: effectiveConnectionLimit,
+		queueLimit: config.queueLimit,
+		maxIdle: effectiveMaxIdle,
+		idleTimeout: config.idleTimeoutMs,
 		decimalNumbers: true,
 		dateStrings: true,
 		enableKeepAlive: true,
@@ -914,6 +1296,7 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			description TEXT NULL,
 			created_by VARCHAR(255) NULL,
 			event_scoring_type VARCHAR(32) NOT NULL DEFAULT 'standard',
+			rubric_legend_json LONGTEXT NULL,
 			created_at DATETIME(3) NOT NULL,
 			PRIMARY KEY (id),
 			INDEX idx_${TABLE_EVENTS}_created_at (created_at)
@@ -1026,6 +1409,20 @@ async function ensureSchema(pool: Pool): Promise<void> {
 
 	for (const statement of statements) {
 		await pool.execute(statement)
+	}
+
+	const [legendColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_EVENTS, 'rubric_legend_json'],
+	)
+
+	const legendColumnExists = Number(legendColumnRows[0]?.total ?? 0) > 0
+	if (!legendColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN rubric_legend_json LONGTEXT NULL AFTER event_scoring_type`)
 	}
 }
 
@@ -1343,6 +1740,7 @@ function normalizeLegacyEventForImport(rawEvent: unknown): EventScorer | null {
 	const createdBy = compactWhitespace(String(sourceEvent.createdBy ?? '')) || undefined
 	const createdAt = normalizeIsoTimestamp(sourceEvent.createdAt)
 	const eventScoringType = parseEventScoringType(sourceEvent.eventScoringType) ?? inferEventScoringTypeFromCriteria(criteria)
+	const rubricLegend = normalizeRubricLegendInput(sourceEvent.rubricLegend)
 	const presentationSlots = normalizeLegacyPresentationSlots(sourceEvent.presentationSlots, contestants, judges)
 
 	const normalizedEvent: EventScorer = {
@@ -1351,6 +1749,7 @@ function normalizeLegacyEventForImport(rawEvent: unknown): EventScorer | null {
 		description,
 		createdBy,
 		eventScoringType,
+		rubricLegend,
 		createdAt,
 		contestants,
 		judges,
@@ -1546,9 +1945,9 @@ async function upsertSubmissionWithScores(connection: PoolConnection, event: Eve
 
 async function insertEventGraph(connection: PoolConnection, event: EventScorer): Promise<void> {
 	await connection.execute(
-		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), toMySqlDateTime(event.createdAt)],
+		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), toMySqlDateTime(event.createdAt)],
 	)
 
 	for (let contestantIndex = 0; contestantIndex < event.contestants.length; contestantIndex += 1) {
@@ -1674,7 +2073,7 @@ async function replacePresentationSlotsForEvent(connection: PoolConnection, even
 async function loadEventById(executor: SqlExecutor, eventId: string): Promise<EventScorer | undefined> {
 	const eventRows = await selectRows<EventRow>(
 		executor,
-		`SELECT id, title, description, created_by, event_scoring_type, created_at
+		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, created_at
 		 FROM ${TABLE_EVENTS}
 		 WHERE id = ?
 		 LIMIT 1`,
@@ -1879,6 +2278,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 	})
 
 	const eventScoringType = parseEventScoringType(eventRow.event_scoring_type) ?? inferEventScoringTypeFromCriteria(criteria)
+	const rubricLegend = parseStoredRubricLegend(eventRow.rubric_legend_json)
 
 	return {
 		id: eventRow.id,
@@ -1886,6 +2286,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		description: eventRow.description ?? undefined,
 		createdBy: eventRow.created_by ?? undefined,
 		eventScoringType,
+		rubricLegend,
 		createdAt: fromMySqlDateTime(eventRow.created_at),
 		contestants,
 		judges,
@@ -2055,6 +2456,33 @@ export async function updateContestantProgramTags(eventId: string, rawAssignment
 	}
 }
 
+export async function updateEventDefinition(eventId: string, rawInput: unknown): Promise<EventScorer> {
+	const pool = await getPool()
+	const connection = await pool.getConnection()
+
+	try {
+		await connection.beginTransaction()
+
+		const existingEvent = await loadEventById(connection, eventId)
+		if (!existingEvent) {
+			throw new Error('Event not found.')
+		}
+
+		const normalizedEvent = normalizeEventEditorInput(existingEvent, rawInput)
+
+		await connection.execute(`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`, [eventId])
+		await insertEventGraph(connection, normalizedEvent)
+
+		await connection.commit()
+		return normalizedEvent
+	} catch (error) {
+		await connection.rollback()
+		throw error
+	} finally {
+		connection.release()
+	}
+}
+
 export async function getJudgeSessionByToken(token: string): Promise<JudgeSessionData | undefined> {
 	const normalizedToken = compactWhitespace(token)
 	if (!normalizedToken) {
@@ -2098,6 +2526,7 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 			title: event.title,
 			description: event.description,
 			eventScoringType: event.eventScoringType,
+			rubricLegend: event.rubricLegend,
 			contestants: orderedContestants,
 			criteria: event.criteria,
 			presentationSlots: assignedSlots ?? allSlots,

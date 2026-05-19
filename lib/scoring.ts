@@ -19,6 +19,22 @@ function criterionMaxScore(criterion: EventScorer['criteria'][number]): number {
 	return round(computedMaxScore)
 }
 
+function isIndividualCriterion(criterion: EventScorer['criteria'][number]): boolean {
+	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
+		return true
+	}
+
+	return criterion.subCriteria.some((subCriterion) => {
+		const separatorIndex = subCriterion.name.indexOf(' - ')
+		if (separatorIndex === -1) {
+			return false
+		}
+
+		const memberLabel = subCriterion.name.slice(0, separatorIndex).trim()
+		return /(\d+)\s*$/.test(memberLabel)
+	})
+}
+
 function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
 	const separatorIndex = name.indexOf(' - ')
 	if (separatorIndex === -1) {
@@ -295,14 +311,35 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const maxPossibleScore = round(event.criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0))
 	const normalizeLabel = (value: string) => value.trim().toLowerCase()
 	const groupCriterionIds = new Set(event.criteria.filter((criterion) => normalizeLabel(criterion.name) === 'group presentation').map((criterion) => criterion.id))
-	const individualCriterionIds = new Set(event.criteria.filter((criterion) => normalizeLabel(criterion.name) === 'individual presentation').map((criterion) => criterion.id))
+	const individualCriterionIds = new Set(event.criteria.filter((criterion) => isIndividualCriterion(criterion)).map((criterion) => criterion.id))
 	const hasFinalOralCriteria = groupCriterionIds.size > 0 && individualCriterionIds.size > 0
 	const isFinalOralDefenseEvent = event.eventScoringType ? event.eventScoringType === 'final-oral-defense' : hasFinalOralCriteria
 	const hasWeightedScores = isFinalOralDefenseEvent && hasFinalOralCriteria
 	const groupMaxScore = hasWeightedScores ? round(event.criteria.filter((criterion) => groupCriterionIds.has(criterion.id)).reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)) : undefined
-	const individualMaxScore = hasWeightedScores ? round(event.criteria.filter((criterion) => individualCriterionIds.has(criterion.id)).reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)) : undefined
 	const individualContestantConfigById = buildIndividualContestantConfig(event, individualCriterionIds)
 	const individualParticipantConfigByContestantId = buildIndividualParticipantConfig(event, individualCriterionIds)
+	const individualMaxScore = hasWeightedScores
+		? (() => {
+				const participantMaxScores = Array.from(individualParticipantConfigByContestantId.values())
+					.flat()
+					.map((config) => Number(config.maxScore))
+					.filter((value) => Number.isFinite(value) && value > 0)
+
+				if (participantMaxScores.length > 0) {
+					return round(participantMaxScores.reduce((sum, value) => sum + value, 0) / participantMaxScores.length)
+				}
+
+				const contestantMaxScores = Array.from(individualContestantConfigById.values())
+					.map((config) => Number(config.maxScore))
+					.filter((value) => Number.isFinite(value) && value > 0)
+
+				if (contestantMaxScores.length > 0) {
+					return round(contestantMaxScores.reduce((sum, value) => sum + value, 0) / contestantMaxScores.length)
+				}
+
+				return undefined
+			})()
+		: undefined
 	const individualAllowedSubCriterionIdsByContestant = new Map(Array.from(individualContestantConfigById.entries()).map(([contestantId, config]) => [contestantId, config.allowedSubCriterionIds]))
 
 	const aggregateByContestant = new Map(
@@ -393,6 +430,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const results: CompiledContestantResult[] = event.contestants
 		.map((contestant) => {
 			const aggregate = aggregateByContestant.get(contestant.id)
+			const individualContestantConfig = individualContestantConfigById.get(contestant.id)
 
 			if (!aggregate) {
 				return {
@@ -413,18 +451,23 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			const participantScores = participantConfigs.map((participantConfig) => {
 				const accumulated = aggregate.participantTotals[participantConfig.memberKey] ?? 0
 				const participantAverage = aggregate.judgeCount > 0 ? round(accumulated / aggregate.judgeCount) : 0
+				const participantMax = Number(participantConfig.maxScore)
+				const participantRating = hasWeightedScores && Number.isFinite(participantMax) && participantMax > 0 ? round((participantAverage / participantMax) * 100) : undefined
 
 				return {
 					participantLabel: participantConfig.displayLabel,
 					averageScore: participantAverage,
 					maxScore: participantConfig.maxScore,
-					rating: hasWeightedScores ? round((participantAverage / 36) * 100) : undefined,
+					rating: participantRating,
 				}
 			})
 
 			const participantAverageBase = participantScores.length > 0 ? round(participantScores.reduce((sum, participant) => sum + participant.averageScore, 0) / participantScores.length) : individualAverageScore
-			const groupRating = hasWeightedScores ? round((groupAverageScore / 110) * 100) : undefined
-			const individualRating = hasWeightedScores ? round((participantAverageBase / 36) * 100) : undefined
+			const participantMaxBase = participantScores.length > 0 ? round(participantScores.reduce((sum, participant) => sum + participant.maxScore, 0) / participantScores.length) : round(Number(individualContestantConfig?.maxScore ?? 0))
+			const effectiveGroupMaxScore = hasWeightedScores && groupMaxScore !== undefined && groupMaxScore > 0 ? groupMaxScore : undefined
+			const effectiveIndividualMaxScore = hasWeightedScores ? (participantMaxBase > 0 ? participantMaxBase : individualMaxScore !== undefined && individualMaxScore > 0 ? individualMaxScore : undefined) : undefined
+			const groupRating = effectiveGroupMaxScore !== undefined ? round((groupAverageScore / effectiveGroupMaxScore) * 100) : undefined
+			const individualRating = effectiveIndividualMaxScore !== undefined ? round((participantAverageBase / effectiveIndividualMaxScore) * 100) : undefined
 			const weightedScore = hasWeightedScores && aggregate.judgeCount > 0 && groupRating !== undefined && individualRating !== undefined ? round(groupRating * 0.6 + individualRating * 0.4) : undefined
 
 			return {
