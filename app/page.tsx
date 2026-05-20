@@ -1,5 +1,6 @@
 import Link from 'next/link'
 
+import DeleteEventButton from '@/components/delete-event-button'
 import UpdateDataButton from '@/components/update-data-button'
 
 import { listEventSummaries } from '@/lib/storage'
@@ -28,6 +29,9 @@ export default async function HomePage() {
 						<Link href='/create' className='inline-flex items-center rounded-full bg-emerald-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-800'>
 							Create New Scorer
 						</Link>
+						<Link href='/rating-sheet' className='inline-flex items-center rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2.5 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+							Create Rating Sheet
+						</Link>
 					</div>
 				</header>
 
@@ -52,10 +56,27 @@ export default async function HomePage() {
 											</p>
 										</div>
 										<div className='flex flex-wrap items-center gap-2 self-center sm:self-auto'>
-											<Link href={`/admin/${event.id}`} className='inline-flex items-center rounded-full border border-transparent bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white shadow-[var(--shadow-soft)] transition hover:bg-[var(--brand-strong)]'>
+											<Link href={`/admin/${event.id}`} className='inline-flex items-center rounded-full border border-transparent bg-(--brand) px-4 py-2 text-sm font-semibold text-white shadow-(--shadow-soft) transition hover:bg-(--brand-strong)'>
 												Open Admin Results
 											</Link>
-											<UpdateDataButton eventId={event.id} className='inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-200' />
+											{event.isDirectRating ? (
+												<Link href={`/rating-sheet?editEventId=${encodeURIComponent(event.id)}`} className='inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100'>
+													Edit Rating Sheet
+												</Link>
+											) : null}
+											<div className='group relative'>
+												<button type='button' aria-label={`Open actions for ${event.title}`} aria-haspopup='menu' className='inline-flex h-10 w-10 items-center justify-center rounded-full border border-cyan-200 bg-white text-cyan-900 shadow-sm transition hover:bg-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300'>
+													<svg viewBox='0 0 24 24' fill='currentColor' className='h-5 w-5' aria-hidden='true'>
+														<circle cx='12' cy='5.5' r='1.7' />
+														<circle cx='12' cy='12' r='1.7' />
+														<circle cx='12' cy='18.5' r='1.7' />
+													</svg>
+												</button>
+												<div className='pointer-events-none absolute right-0 top-full z-20 mt-2 flex w-56 max-w-[calc(100vw-2rem)] flex-col gap-1 rounded-xl border border-cyan-200 bg-white p-2 opacity-0 shadow-lg shadow-cyan-900/10 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'>
+													<UpdateDataButton eventId={event.id} className='inline-flex w-full items-center justify-start rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100' />
+													<DeleteEventButton eventId={event.id} eventTitle={event.title} className='inline-flex w-full items-center justify-start rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 transition hover:bg-rose-100' />
+												</div>
+											</div>
 										</div>
 									</div>
 								</article>

@@ -1,12 +1,54 @@
 export type ScoreMatrix = Record<string, Record<string, number>>
 
+export interface JudgeContestantDetails {
+	strand?: string
+	remark?: string
+	additionalInfo?: string
+}
+
+export type JudgeContestantDetailsMap = Record<string, JudgeContestantDetails>
+
 export interface JudgeInput {
 	name: string
 	email?: string
 }
 
+export interface JudgeDirectoryItem {
+	name: string
+	email?: string
+	usageCount: number
+	lastUsedAt: string
+}
+
 export type EventScoringType = 'standard' | 'final-oral-defense'
 export type EventProgramTag = 'BSINT' | 'BSCS'
+
+export type DirectScoreFieldKey = 'aveGpa' | 'noat' | 'interview'
+
+export interface DirectRatingMaxScores {
+	aveGpa: number
+	noat: number
+	interview: number
+}
+
+export interface DirectRatingScoreWeights {
+	aveGpa: number
+	noat: number
+	interview: number
+}
+
+export interface DirectRatingStrandBonusConfig {
+	singleAlignedBonusPoints: number
+	multiAlignedBonusPoints: number
+	singleAlignedStrands: string[]
+	multiAlignedStrands: string[]
+}
+
+export interface DirectRatingConfig {
+	maxScores: DirectRatingMaxScores
+	scoreWeights?: DirectRatingScoreWeights
+	strandBonus: DirectRatingStrandBonusConfig
+}
 
 export type ContestantEntryType = 'group' | 'individual'
 
@@ -80,6 +122,7 @@ export interface AdminEventEditorInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	directRatingConfig?: DirectRatingConfig
 	contestants: AdminContestantEditorInput[]
 	judges: AdminJudgeEditorInput[]
 	criteria: AdminCriterionEditorInput[]
@@ -92,6 +135,7 @@ export interface CreateEventInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	directRatingConfig?: DirectRatingConfig
 	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
 	criteria: CriterionInput[]
@@ -138,6 +182,7 @@ export interface JudgeSubmission {
 	submittedAt: string
 	scores: ScoreMatrix
 	savedContestantIds?: string[]
+	contestantDetails?: JudgeContestantDetailsMap
 }
 
 export interface EventScorer {
@@ -147,6 +192,7 @@ export interface EventScorer {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	directRatingConfig?: DirectRatingConfig
 	createdAt: string
 	contestants: EventContestant[]
 	judges: EventJudge[]
@@ -162,6 +208,7 @@ export interface EventSummary {
 	contestantCount: number
 	judgeCount: number
 	submittedJudgeCount: number
+	isDirectRating: boolean
 }
 
 export interface JudgeProfile {
@@ -171,7 +218,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'contestants' | 'criteria' | 'presentationSlots'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }
@@ -194,6 +241,9 @@ export interface CompiledContestantResult {
 	contestantId: string
 	contestantName: string
 	averageScore: number
+	finalRating?: number
+	baseFinalRating?: number
+	bonusPoints?: number
 	groupAverageScore?: number
 	individualAverageScore?: number
 	groupRating?: number

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
+import { buildFinalOralDefenseCriteria, DIRECT_RATING_CONTESTANT_SAMPLES, DIRECT_RATING_CRITERIA, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
 
@@ -285,6 +285,19 @@ export function CreateScorerForm() {
 		setContestants(contestantsFromNames(sampleContestants, 'group'))
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
 		setCriteria(toCriterionDraft(buildFinalOralDefenseCriteria()))
+		setRubricLegend(defaultRubricLegendDrafts())
+		setShowPreview(false)
+		setError(null)
+	}
+
+	function loadDirectRatingTemplate(): void {
+		const sampleContestants = [...DIRECT_RATING_CONTESTANT_SAMPLES]
+		setTitle('Direct Rating Sheet')
+		setDescription('Judges enter AVE/GPA, NOAT, and Interview directly for each applicant.')
+		setEventScoringType('standard')
+		setContestants(contestantsFromNames(sampleContestants, 'individual'))
+		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
+		setCriteria(toCriterionDraft(DIRECT_RATING_CRITERIA))
 		setRubricLegend(defaultRubricLegendDrafts())
 		setShowPreview(false)
 		setError(null)
@@ -608,6 +621,9 @@ export function CreateScorerForm() {
 						</button>
 						<button type='button' onClick={loadFinalOralTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
 							Use Final Oral Defense Template
+						</button>
+						<button type='button' onClick={loadDirectRatingTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+							Use Direct Rating Template
 						</button>
 					</div>
 				</div>
@@ -1190,9 +1206,6 @@ export function CreateScorerForm() {
 					{error ? <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
 
 					<div className='flex flex-wrap items-center gap-3'>
-						<button type='button' onClick={() => setShowPreview(true)} className='rounded-full border border-cyan-400 bg-cyan-50 px-6 py-3 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100'>
-							Preview Draft
-						</button>
 						<button type='submit' disabled={isSaving} className='rounded-full bg-emerald-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
 							{isSaving ? 'Publishing Event...' : 'Publish Event and Generate Judge Links'}
 						</button>

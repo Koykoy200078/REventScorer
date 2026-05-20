@@ -128,13 +128,13 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response> {
 	try {
 		const { token } = await context.params
-		const body = (await request.json()) as { scores?: unknown; contestantId?: unknown }
+		const body = (await request.json()) as { scores?: unknown; contestantId?: unknown; contestantDetails?: unknown }
 
 		if (typeof body.contestantId !== 'string' || body.contestantId.trim().length === 0) {
 			throw new Error('Contestant ID is required.')
 		}
 
-		const submission = await submitJudgeScoresByToken(token, body.scores, body.contestantId)
+		const submission = await submitJudgeScoresByToken(token, body.scores, body.contestantId, body.contestantDetails)
 
 		const realtimePayload: AdminScoreRealtimeUpdate = {
 			eventId: submission.event.id,

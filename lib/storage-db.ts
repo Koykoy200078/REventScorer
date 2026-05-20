@@ -3,10 +3,31 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import mysql from 'mysql2/promise.js'
-import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise.js'
+import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
-import type { AdminEventEditorInput, ContestantEntryType, CreateEventInput, EventContestant, EventCriterion, EventJudge, EventPresentationSlot, EventProgramTag, EventScorer, EventScoringType, EventSubCriterion, EventSummary, JudgeSessionData, JudgeSubmission, RubricLegendItem, ScoreMatrix } from '@/lib/types'
+import type {
+	AdminEventEditorInput,
+	ContestantEntryType,
+	CreateEventInput,
+	DirectRatingConfig,
+	EventContestant,
+	EventCriterion,
+	EventJudge,
+	EventPresentationSlot,
+	EventProgramTag,
+	EventScorer,
+	EventScoringType,
+	EventSubCriterion,
+	EventSummary,
+	JudgeDirectoryItem,
+	JudgeContestantDetailsMap,
+	JudgeSessionData,
+	JudgeSubmission,
+	RubricLegendItem,
+	ScoreMatrix,
+} from '@/lib/types'
 
 interface StoreShape {
 	events: EventScorer[]
@@ -31,6 +52,7 @@ interface EventRow extends RowDataPacket {
 	created_by: string | null
 	event_scoring_type: string | null
 	rubric_legend_json: string | null
+	direct_rating_config_json: string | null
 	created_at: string
 }
 
@@ -102,9 +124,23 @@ interface SubmissionScoreRow extends RowDataPacket {
 	score: number | string
 }
 
+interface SubmissionContestantDetailRow extends RowDataPacket {
+	submission_id: number
+	contestant_id: string
+	strand: string | null
+	remark: string | null
+	additional_info: string | null
+}
+
 interface JudgeLookupRow extends RowDataPacket {
 	id: string
 	event_id: string
+}
+
+interface JudgeDirectoryRow extends RowDataPacket {
+	name: string
+	email: string | null
+	created_at: string | Date
 }
 
 interface EventIdRow extends RowDataPacket {
@@ -126,7 +162,15 @@ interface PersistableScoreRow {
 	score: number
 }
 
+interface PersistableContestantDetailRow {
+	contestantId: string
+	strand?: string
+	remark?: string
+	additionalInfo?: string
+}
+
 type SqlExecutor = Pick<Pool, 'execute'> | PoolConnection
+type SqlExecuteValues = Parameters<Pool['execute']>[1]
 
 const LEGACY_DATA_FILE = path.join(process.cwd(), 'data', 'events.json')
 
@@ -141,9 +185,13 @@ const TABLE_PRESENTATION_SLOT_JUDGES = 'es_presentation_slot_judges'
 const TABLE_SUBMISSIONS = 'es_submissions'
 const TABLE_SUBMISSION_SAVED_CONTESTANTS = 'es_submission_saved_contestants'
 const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
+const TABLE_SUBMISSION_CONTESTANT_DETAILS = 'es_submission_contestant_details'
+const EVENTSCORER_SCHEMA_VERSION = 3
 
 interface EventScorerGlobalState {
 	__eventScorerPoolPromise?: Promise<Pool> | null
+	__eventScorerSchemaVersion?: number
+	__eventScorerSchemaPromise?: Promise<void> | null
 }
 
 const eventScorerGlobalState = globalThis as typeof globalThis & EventScorerGlobalState
@@ -298,6 +346,21 @@ function parseStoredRubricLegend(value: unknown): RubricLegendItem[] {
 		return normalizeRubricLegendInput(parsed)
 	} catch {
 		return normalizeRubricLegendInput(undefined)
+	}
+}
+
+function parseStoredDirectRatingConfig(value: unknown, criteria: EventCriterion[]): DirectRatingConfig | undefined {
+	const derived = deriveDirectRatingConfigFromCriteria(criteria)
+
+	if (typeof value !== 'string' || compactWhitespace(value).length === 0) {
+		return derived ?? undefined
+	}
+
+	try {
+		const parsed = JSON.parse(value) as unknown
+		return normalizeDirectRatingConfig(parsed, derived ?? undefined)
+	} catch {
+		return derived ?? undefined
 	}
 }
 
@@ -614,6 +677,8 @@ function buildEvent(input: CreateEventInput): EventScorer {
 	const normalizedJudges = normalizeJudges(input.judges ?? [])
 	const normalizedCriteria = normalizeCriteria(input.criteria ?? [], normalizedContestants)
 	const normalizedPresentationSlots = normalizePresentationSlots(input.presentationSlots, normalizedContestants, normalizedJudges)
+	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(normalizedCriteria)
+	const directRatingConfig = input.directRatingConfig !== undefined || derivedDirectRatingConfig ? normalizeDirectRatingConfig(input.directRatingConfig, derivedDirectRatingConfig ?? undefined) : undefined
 
 	return {
 		id: randomUUID(),
@@ -622,6 +687,7 @@ function buildEvent(input: CreateEventInput): EventScorer {
 		createdBy,
 		eventScoringType,
 		rubricLegend,
+		directRatingConfig,
 		createdAt: new Date().toISOString(),
 		contestants: normalizedContestants,
 		judges: normalizedJudges,
@@ -874,6 +940,8 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const judges = normalizeJudgesForAdminEditor(source.judges ?? [])
 	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
 	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges)
+	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
+	const directRatingConfig = source.directRatingConfig !== undefined || previousEvent.directRatingConfig || derivedDirectRatingConfig ? normalizeDirectRatingConfig(source.directRatingConfig, derivedDirectRatingConfig ?? previousEvent.directRatingConfig ?? undefined) : undefined
 
 	return {
 		...previousEvent,
@@ -882,6 +950,7 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 		createdBy: createdBy.length > 0 ? createdBy : undefined,
 		eventScoringType,
 		rubricLegend,
+		directRatingConfig,
 		contestants,
 		judges,
 		criteria,
@@ -917,6 +986,56 @@ function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown): ScoreMatr
 
 				normalized[contestant.id][subCriterion.id] = Math.round(numeric * 1000) / 1000
 			}
+		}
+	}
+
+	return normalized
+}
+
+function normalizeContestantDetailText(value: unknown, maxLength: number): string | undefined {
+	if (typeof value !== 'string') {
+		return undefined
+	}
+
+	const normalized = value.trim()
+	if (!normalized) {
+		return undefined
+	}
+
+	return normalized.slice(0, maxLength)
+}
+
+function normalizeContestantDetails(event: EventScorer, rawDetails: unknown): JudgeContestantDetailsMap {
+	if (rawDetails === undefined || rawDetails === null) {
+		return {}
+	}
+
+	if (typeof rawDetails !== 'object') {
+		throw new Error('Contestant details payload must be an object.')
+	}
+
+	const sourceDetails = rawDetails as Record<string, unknown>
+	const normalized: JudgeContestantDetailsMap = {}
+
+	for (const contestant of event.contestants) {
+		const rawContestantDetails = sourceDetails[contestant.id]
+		if (!rawContestantDetails || typeof rawContestantDetails !== 'object') {
+			continue
+		}
+
+		const rawDetailsRecord = rawContestantDetails as Record<string, unknown>
+		const strand = normalizeContestantDetailText(rawDetailsRecord.strand, 255)
+		const remark = normalizeContestantDetailText(rawDetailsRecord.remark, 255)
+		const additionalInfo = normalizeContestantDetailText(rawDetailsRecord.additionalInfo, 2000)
+
+		if (!strand && !remark && !additionalInfo) {
+			continue
+		}
+
+		normalized[contestant.id] = {
+			...(strand ? { strand } : {}),
+			...(remark ? { remark } : {}),
+			...(additionalInfo ? { additionalInfo } : {}),
 		}
 	}
 
@@ -1220,11 +1339,12 @@ function buildDatabaseConfig(): DatabaseConfig {
 async function getPool(): Promise<Pool> {
 	const existingPoolPromise = eventScorerGlobalState.__eventScorerPoolPromise
 	if (existingPoolPromise) {
-		return existingPoolPromise
+		const pool = await existingPoolPromise
+		await ensureSchemaVersion(pool)
+		return pool
 	}
 
-	let initializingPoolPromise: Promise<Pool>
-	initializingPoolPromise = initializePool().catch((error) => {
+	const initializingPoolPromise = initializePool().catch((error) => {
 		if (eventScorerGlobalState.__eventScorerPoolPromise === initializingPoolPromise) {
 			eventScorerGlobalState.__eventScorerPoolPromise = null
 		}
@@ -1233,7 +1353,35 @@ async function getPool(): Promise<Pool> {
 	})
 
 	eventScorerGlobalState.__eventScorerPoolPromise = initializingPoolPromise
-	return initializingPoolPromise
+	const pool = await initializingPoolPromise
+	await ensureSchemaVersion(pool)
+	return pool
+}
+
+async function ensureSchemaVersion(pool: Pool): Promise<void> {
+	const currentVersion = eventScorerGlobalState.__eventScorerSchemaVersion ?? 0
+	if (currentVersion >= EVENTSCORER_SCHEMA_VERSION) {
+		return
+	}
+
+	const existingSchemaPromise = eventScorerGlobalState.__eventScorerSchemaPromise
+	if (existingSchemaPromise) {
+		await existingSchemaPromise
+		return
+	}
+
+	const schemaPromise = ensureSchema(pool)
+		.then(() => {
+			eventScorerGlobalState.__eventScorerSchemaVersion = EVENTSCORER_SCHEMA_VERSION
+		})
+		.finally(() => {
+			if (eventScorerGlobalState.__eventScorerSchemaPromise === schemaPromise) {
+				eventScorerGlobalState.__eventScorerSchemaPromise = null
+			}
+		})
+
+	eventScorerGlobalState.__eventScorerSchemaPromise = schemaPromise
+	await schemaPromise
 }
 
 async function initializePool(): Promise<Pool> {
@@ -1283,7 +1431,7 @@ async function initializePool(): Promise<Pool> {
 		keepAliveInitialDelay: 0,
 	})
 
-	await ensureSchema(pool)
+	await ensureSchemaVersion(pool)
 	await migrateLegacyJsonIfNeeded(pool)
 	return pool
 }
@@ -1297,6 +1445,7 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			created_by VARCHAR(255) NULL,
 			event_scoring_type VARCHAR(32) NOT NULL DEFAULT 'standard',
 			rubric_legend_json LONGTEXT NULL,
+			direct_rating_config_json LONGTEXT NULL,
 			created_at DATETIME(3) NOT NULL,
 			PRIMARY KEY (id),
 			INDEX idx_${TABLE_EVENTS}_created_at (created_at)
@@ -1405,6 +1554,17 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			CONSTRAINT fk_${TABLE_SUBMISSION_SCORES}_contestant FOREIGN KEY (contestant_id) REFERENCES ${TABLE_CONTESTANTS}(id) ON DELETE CASCADE,
 			CONSTRAINT fk_${TABLE_SUBMISSION_SCORES}_subcriterion FOREIGN KEY (subcriterion_id) REFERENCES ${TABLE_SUBCRITERIA}(id) ON DELETE CASCADE
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS ${TABLE_SUBMISSION_CONTESTANT_DETAILS} (
+			submission_id BIGINT UNSIGNED NOT NULL,
+			contestant_id VARCHAR(36) NOT NULL,
+			strand VARCHAR(255) NULL,
+			remark VARCHAR(255) NULL,
+			additional_info TEXT NULL,
+			PRIMARY KEY (submission_id, contestant_id),
+			INDEX idx_${TABLE_SUBMISSION_CONTESTANT_DETAILS}_contestant (contestant_id),
+			CONSTRAINT fk_${TABLE_SUBMISSION_CONTESTANT_DETAILS}_submission FOREIGN KEY (submission_id) REFERENCES ${TABLE_SUBMISSIONS}(id) ON DELETE CASCADE,
+			CONSTRAINT fk_${TABLE_SUBMISSION_CONTESTANT_DETAILS}_contestant FOREIGN KEY (contestant_id) REFERENCES ${TABLE_CONTESTANTS}(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	]
 
 	for (const statement of statements) {
@@ -1424,9 +1584,23 @@ async function ensureSchema(pool: Pool): Promise<void> {
 	if (!legendColumnExists) {
 		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN rubric_legend_json LONGTEXT NULL AFTER event_scoring_type`)
 	}
+
+	const [directConfigColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_EVENTS, 'direct_rating_config_json'],
+	)
+
+	const directConfigColumnExists = Number(directConfigColumnRows[0]?.total ?? 0) > 0
+	if (!directConfigColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN direct_rating_config_json LONGTEXT NULL AFTER rubric_legend_json`)
+	}
 }
 
-async function selectRows<T extends RowDataPacket>(executor: SqlExecutor, statement: string, params: any[] = []): Promise<T[]> {
+async function selectRows<T extends RowDataPacket>(executor: SqlExecutor, statement: string, params: SqlExecuteValues = []): Promise<T[]> {
 	const [rows] = await executor.execute<T[]>(statement, params)
 	return rows
 }
@@ -1684,12 +1858,20 @@ function normalizeLegacySubmissions(event: EventScorer, value: unknown): JudgeSu
 
 		const submittedAt = normalizeIsoTimestamp(sourceSubmission.submittedAt, event.createdAt)
 		const savedContestantIds = Array.isArray(sourceSubmission.savedContestantIds) ? Array.from(new Set(sourceSubmission.savedContestantIds.map((contestantId) => compactWhitespace(String(contestantId ?? ''))).filter((contestantId) => validContestantIds.has(contestantId)))) : []
+		let contestantDetails: JudgeContestantDetailsMap = {}
+
+		try {
+			contestantDetails = normalizeContestantDetails(event, sourceSubmission.contestantDetails)
+		} catch {
+			contestantDetails = {}
+		}
 
 		const normalizedSubmission: JudgeSubmission = {
 			judgeId,
 			submittedAt,
 			scores: normalizedScores,
 			savedContestantIds: savedContestantIds.length > 0 ? savedContestantIds : undefined,
+			contestantDetails: Object.keys(contestantDetails).length > 0 ? contestantDetails : undefined,
 		}
 
 		const existingSubmission = latestSubmissionByJudge.get(judgeId)
@@ -1741,6 +1923,8 @@ function normalizeLegacyEventForImport(rawEvent: unknown): EventScorer | null {
 	const createdAt = normalizeIsoTimestamp(sourceEvent.createdAt)
 	const eventScoringType = parseEventScoringType(sourceEvent.eventScoringType) ?? inferEventScoringTypeFromCriteria(criteria)
 	const rubricLegend = normalizeRubricLegendInput(sourceEvent.rubricLegend)
+	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
+	const directRatingConfig = sourceEvent.directRatingConfig !== undefined || derivedDirectRatingConfig ? normalizeDirectRatingConfig(sourceEvent.directRatingConfig, derivedDirectRatingConfig ?? undefined) : undefined
 	const presentationSlots = normalizeLegacyPresentationSlots(sourceEvent.presentationSlots, contestants, judges)
 
 	const normalizedEvent: EventScorer = {
@@ -1750,6 +1934,7 @@ function normalizeLegacyEventForImport(rawEvent: unknown): EventScorer | null {
 		createdBy,
 		eventScoringType,
 		rubricLegend,
+		directRatingConfig,
 		createdAt,
 		contestants,
 		judges,
@@ -1880,6 +2065,34 @@ function buildPersistableScoreRows(event: EventScorer, scores: ScoreMatrix): Per
 	return rows
 }
 
+function buildPersistableContestantDetailRows(event: EventScorer, contestantDetails: JudgeContestantDetailsMap): PersistableContestantDetailRow[] {
+	const rows: PersistableContestantDetailRow[] = []
+
+	for (const contestant of event.contestants) {
+		const details = contestantDetails[contestant.id]
+		if (!details || typeof details !== 'object') {
+			continue
+		}
+
+		const strand = normalizeContestantDetailText(details.strand, 255)
+		const remark = normalizeContestantDetailText(details.remark, 255)
+		const additionalInfo = normalizeContestantDetailText(details.additionalInfo, 2000)
+
+		if (!strand && !remark && !additionalInfo) {
+			continue
+		}
+
+		rows.push({
+			contestantId: contestant.id,
+			...(strand ? { strand } : {}),
+			...(remark ? { remark } : {}),
+			...(additionalInfo ? { additionalInfo } : {}),
+		})
+	}
+
+	return rows
+}
+
 async function ensureSubmissionRow(connection: PoolConnection, eventId: string, judgeId: string, submittedAt: string): Promise<number> {
 	await connection.execute(
 		`INSERT INTO ${TABLE_SUBMISSIONS} (event_id, judge_id, submitted_at)
@@ -1935,19 +2148,36 @@ async function replaceSubmissionScores(connection: PoolConnection, submissionId:
 	}
 }
 
-async function upsertSubmissionWithScores(connection: PoolConnection, event: EventScorer, judgeId: string, submittedAt: string, scores: ScoreMatrix, savedContestantIds: string[]): Promise<void> {
+async function replaceSubmissionContestantDetails(connection: PoolConnection, submissionId: number, detailRows: PersistableContestantDetailRow[]): Promise<void> {
+	await connection.execute(`DELETE FROM ${TABLE_SUBMISSION_CONTESTANT_DETAILS} WHERE submission_id = ?`, [submissionId])
+
+	if (detailRows.length === 0) {
+		return
+	}
+
+	const chunks = chunkArray(detailRows, 250)
+	for (const chunk of chunks) {
+		const placeholders = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ')
+		const params = chunk.flatMap((row) => [submissionId, row.contestantId, row.strand ?? null, row.remark ?? null, row.additionalInfo ?? null])
+		await connection.execute(`INSERT INTO ${TABLE_SUBMISSION_CONTESTANT_DETAILS} (submission_id, contestant_id, strand, remark, additional_info) VALUES ${placeholders}`, params)
+	}
+}
+
+async function upsertSubmissionWithScores(connection: PoolConnection, event: EventScorer, judgeId: string, submittedAt: string, scores: ScoreMatrix, savedContestantIds: string[], contestantDetails: JudgeContestantDetailsMap): Promise<void> {
 	const submissionId = await ensureSubmissionRow(connection, event.id, judgeId, submittedAt)
 	const scoreRows = buildPersistableScoreRows(event, scores)
+	const detailRows = buildPersistableContestantDetailRows(event, contestantDetails)
 
 	await replaceSubmissionScores(connection, submissionId, scoreRows)
+	await replaceSubmissionContestantDetails(connection, submissionId, detailRows)
 	await replaceSavedContestantIds(connection, submissionId, savedContestantIds)
 }
 
 async function insertEventGraph(connection: PoolConnection, event: EventScorer): Promise<void> {
 	await connection.execute(
-		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), toMySqlDateTime(event.createdAt)],
+		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), event.directRatingConfig ? JSON.stringify(normalizeDirectRatingConfig(event.directRatingConfig)) : null, toMySqlDateTime(event.createdAt)],
 	)
 
 	for (let contestantIndex = 0; contestantIndex < event.contestants.length; contestantIndex += 1) {
@@ -2044,7 +2274,7 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 
 	for (const submission of event.submissions) {
 		const savedContestantIds = Array.from(savedContestantIdsForSubmission(event, submission))
-		await upsertSubmissionWithScores(connection, event, submission.judgeId, submission.submittedAt, submission.scores, savedContestantIds)
+		await upsertSubmissionWithScores(connection, event, submission.judgeId, submission.submittedAt, submission.scores, savedContestantIds, submission.contestantDetails ?? {})
 	}
 }
 
@@ -2073,7 +2303,7 @@ async function replacePresentationSlotsForEvent(connection: PoolConnection, even
 async function loadEventById(executor: SqlExecutor, eventId: string): Promise<EventScorer | undefined> {
 	const eventRows = await selectRows<EventRow>(
 		executor,
-		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, created_at
+		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at
 		 FROM ${TABLE_EVENTS}
 		 WHERE id = ?
 		 LIMIT 1`,
@@ -2181,6 +2411,16 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		[eventId],
 	)
 
+	const submissionContestantDetailRows = await selectRows<SubmissionContestantDetailRow>(
+		executor,
+		`SELECT scd.submission_id, scd.contestant_id, scd.strand, scd.remark, scd.additional_info
+		 FROM ${TABLE_SUBMISSION_CONTESTANT_DETAILS} scd
+		 INNER JOIN ${TABLE_SUBMISSIONS} s ON s.id = scd.submission_id
+		 WHERE s.event_id = ?
+		 ORDER BY scd.contestant_id ASC`,
+		[eventId],
+	)
+
 	const participantsByContestantId = new Map<string, string[]>()
 	for (const participantRow of contestantParticipantRows) {
 		const participantList = participantsByContestantId.get(participantRow.contestant_id) ?? []
@@ -2265,20 +2505,42 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		scoresBySubmissionId.set(scoreRow.submission_id, submissionScores)
 	}
 
+	const contestantDetailsBySubmissionId = new Map<number, JudgeContestantDetailsMap>()
+	for (const detailRow of submissionContestantDetailRows) {
+		const strand = normalizeContestantDetailText(detailRow.strand, 255)
+		const remark = normalizeContestantDetailText(detailRow.remark, 255)
+		const additionalInfo = normalizeContestantDetailText(detailRow.additional_info, 2000)
+
+		if (!strand && !remark && !additionalInfo) {
+			continue
+		}
+
+		const submissionDetails = contestantDetailsBySubmissionId.get(detailRow.submission_id) ?? {}
+		submissionDetails[detailRow.contestant_id] = {
+			...(strand ? { strand } : {}),
+			...(remark ? { remark } : {}),
+			...(additionalInfo ? { additionalInfo } : {}),
+		}
+		contestantDetailsBySubmissionId.set(detailRow.submission_id, submissionDetails)
+	}
+
 	const submissions: JudgeSubmission[] = submissionRows.map((submissionRow) => {
 		const scores = scoresBySubmissionId.get(submissionRow.id) ?? {}
 		const savedContestantIds = savedContestantIdsBySubmissionId.get(submissionRow.id) ?? []
+		const contestantDetails = contestantDetailsBySubmissionId.get(submissionRow.id)
 
 		return {
 			judgeId: submissionRow.judge_id,
 			submittedAt: fromMySqlDateTime(submissionRow.submitted_at),
 			scores,
 			savedContestantIds: savedContestantIds.length > 0 ? Array.from(new Set(savedContestantIds)) : undefined,
+			contestantDetails: contestantDetails && Object.keys(contestantDetails).length > 0 ? contestantDetails : undefined,
 		}
 	})
 
 	const eventScoringType = parseEventScoringType(eventRow.event_scoring_type) ?? inferEventScoringTypeFromCriteria(criteria)
 	const rubricLegend = parseStoredRubricLegend(eventRow.rubric_legend_json)
+	const directRatingConfig = parseStoredDirectRatingConfig(eventRow.direct_rating_config_json, criteria)
 
 	return {
 		id: eventRow.id,
@@ -2287,6 +2549,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		createdBy: eventRow.created_by ?? undefined,
 		eventScoringType,
 		rubricLegend,
+		directRatingConfig,
 		createdAt: fromMySqlDateTime(eventRow.created_at),
 		contestants,
 		judges,
@@ -2321,7 +2584,51 @@ export async function listEventSummaries(): Promise<EventSummary[]> {
 		contestantCount: event.contestants.length,
 		judgeCount: event.judges.length,
 		submittedJudgeCount: countSubmittedJudges(event),
+		isDirectRating: detectDirectRatingScoreFields(event.criteria).length > 0,
 	}))
+}
+
+export async function listJudgeDirectory(): Promise<JudgeDirectoryItem[]> {
+	const pool = await getPool()
+	const rows = await selectRows<JudgeDirectoryRow>(
+		pool,
+		`SELECT j.name, j.email, e.created_at
+		 FROM ${TABLE_JUDGES} AS j
+		 INNER JOIN ${TABLE_EVENTS} AS e ON e.id = j.event_id
+		 WHERE TRIM(j.name) <> ''
+		 ORDER BY e.created_at DESC, j.sort_order ASC`,
+	)
+
+	const byName = new Map<string, JudgeDirectoryItem>()
+
+	for (const row of rows) {
+		const name = compactWhitespace(row.name)
+		if (!name) {
+			continue
+		}
+
+		const key = name.toLowerCase()
+		const normalizedEmail = row.email ? compactWhitespace(row.email) : ''
+		const lastUsedAt = fromMySqlDateTime(row.created_at)
+		const existing = byName.get(key)
+
+		if (!existing) {
+			byName.set(key, {
+				name,
+				...(normalizedEmail ? { email: normalizedEmail } : {}),
+				usageCount: 1,
+				lastUsedAt,
+			})
+			continue
+		}
+
+		existing.usageCount += 1
+		if (!existing.email && normalizedEmail) {
+			existing.email = normalizedEmail
+		}
+	}
+
+	return Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }))
 }
 
 export async function createEvent(input: CreateEventInput): Promise<EventScorer> {
@@ -2345,6 +2652,21 @@ export async function createEvent(input: CreateEventInput): Promise<EventScorer>
 export async function getEventById(eventId: string): Promise<EventScorer | undefined> {
 	const pool = await getPool()
 	return loadEventById(pool, eventId)
+}
+
+export async function deleteEventById(eventId: string): Promise<void> {
+	const normalizedEventId = compactWhitespace(eventId)
+	if (!normalizedEventId) {
+		throw new Error('Event ID is required.')
+	}
+
+	const pool = await getPool()
+	const existingEvent = await loadEventById(pool, normalizedEventId)
+	if (!existingEvent) {
+		throw new Error('Event not found.')
+	}
+
+	await pool.execute(`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`, [normalizedEventId])
 }
 
 export async function updateContestantJudgeAssignments(eventId: string, contestantId: string, rawJudgeIds: unknown): Promise<EventScorer> {
@@ -2527,6 +2849,7 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 			description: event.description,
 			eventScoringType: event.eventScoringType,
 			rubricLegend: event.rubricLegend,
+			directRatingConfig: event.directRatingConfig,
 			contestants: orderedContestants,
 			criteria: event.criteria,
 			presentationSlots: assignedSlots ?? allSlots,
@@ -2540,7 +2863,7 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 	}
 }
 
-export async function submitJudgeScoresByToken(token: string, rawScores: unknown, savedContestantId: string): Promise<{ event: EventScorer; judge: EventJudge; submittedAt: string }> {
+export async function submitJudgeScoresByToken(token: string, rawScores: unknown, savedContestantId: string, rawContestantDetails?: unknown): Promise<{ event: EventScorer; judge: EventJudge; submittedAt: string }> {
 	const normalizedToken = compactWhitespace(token)
 	if (!normalizedToken) {
 		throw new Error('Judge link not found.')
@@ -2584,6 +2907,7 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 		const submittedAt = new Date().toISOString()
 		const submissionIndex = event.submissions.findIndex((submission) => submission.judgeId === judge.id)
 		const previousSubmission = submissionIndex >= 0 ? event.submissions[submissionIndex] : undefined
+		const normalizedContestantDetails = rawContestantDetails === undefined ? (previousSubmission?.contestantDetails ?? {}) : normalizeContestantDetails(event, rawContestantDetails)
 		const savedContestantIds = buildSavedContestantIds(event, previousSubmission, savedContestantId)
 
 		if (submissionIndex >= 0) {
@@ -2592,6 +2916,7 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 				scores: normalizedScores,
 				submittedAt,
 				savedContestantIds,
+				contestantDetails: Object.keys(normalizedContestantDetails).length > 0 ? normalizedContestantDetails : undefined,
 			}
 		} else {
 			event.submissions.push({
@@ -2599,10 +2924,11 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 				scores: normalizedScores,
 				submittedAt,
 				savedContestantIds,
+				contestantDetails: Object.keys(normalizedContestantDetails).length > 0 ? normalizedContestantDetails : undefined,
 			})
 		}
 
-		await upsertSubmissionWithScores(connection, event, judge.id, submittedAt, normalizedScores, savedContestantIds)
+		await upsertSubmissionWithScores(connection, event, judge.id, submittedAt, normalizedScores, savedContestantIds, normalizedContestantDetails)
 
 		await connection.commit()
 		return { event, judge, submittedAt }

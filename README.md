@@ -56,6 +56,32 @@ npm run eventscorer:db:migrate
 
 `eventscorer:db:migrate` now applies schema and imports `data/events.json` when the target database has no events yet.
 
+Merge a SQL dump with upsert behavior (new rows inserted, changed rows updated):
+
+```bash
+npm run eventscorer:db:merge -- --source "C:\Users\Franc\Desktop\dump1.sql"
+```
+
+Merge multiple dumps in one pass (older -> newer):
+
+```bash
+npm run eventscorer:db:merge -- --source "C:\Users\Franc\Desktop\dump.sql" --source "C:\Users\Franc\Desktop\dump1.sql" --source "C:\Users\Franc\Desktop\aw.sql"
+```
+
+Run schema migration and dump merge in one step:
+
+```bash
+npm run eventscorer:db:migrate -- --merge-dump "C:\Users\Franc\Desktop\dump1.sql"
+```
+
+Useful merge flags:
+
+- `--dry-run` validates and reports without applying row changes.
+- `--batch-size <number>` controls rows per upsert batch (default `200`).
+- `--table-prefix <prefix>` limits merge to matching tables (default `es_`).
+- `--all-tables` processes all dump tables.
+- `--timezone <offset>` sets DB session timezone during merge/migration (default `+08:00`, Philippines).
+
 Rollback requires explicit confirmation:
 
 ```bash

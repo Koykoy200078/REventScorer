@@ -318,6 +318,10 @@ function formatPercent(value: number): string {
 }
 
 function rankingScore(result: EventCompiledResults['rankings'][number], _useWeighted: boolean): number {
+	if (typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)) {
+		return result.finalRating
+	}
+
 	return _useWeighted ? (result.weightedScore ?? result.averageScore) : result.averageScore
 }
 
@@ -1270,6 +1274,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const adminAutoSyncInFlight = useRef(false)
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
+	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
 	const analyticsPreviewLimit = 3
 	const compiledTableColumnCount = useWeightedScores ? 9 : 6
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
@@ -1976,7 +1981,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								<p className='text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]'>Admin Console</p>
 								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl'>{event.title}</h1>
 								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]'>{event.description}</p> : null}
-								<p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p>
+								{!useDirectFinalRating ? <p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p> : null}
 								<p className='mt-3 text-xs text-[var(--text-muted)]'>
 									Created {formatDate(event.createdAt)}
 									{event.createdBy ? ` by ${event.createdBy}` : ''}
@@ -2014,7 +2019,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
 							</div>
 							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : 'Score Scale'}</p>
+								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
 								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
 							</div>
 						</div>
@@ -2656,7 +2661,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>{useWeightedScores ? 'Final Oral Defense is shown separately by Group and Individual scoring. Final Score = (Group Rating x 60%) + (Individual Rating x 40%).' : 'Final Score is computed as Total Score / Total Judges.'}</p>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>
+							{useDirectFinalRating
+								? 'Final Rating = weighted normalized score (configured AVE/GPA, NOAT, Interview percentages). Aligned strand bonus is applied to Interview points only.'
+								: useWeightedScores
+									? 'Final Oral Defense is shown separately by Group and Individual scoring. Final Score = (Group Rating x 60%) + (Individual Rating x 40%).'
+									: 'Final Score is computed as Total Score / Total Judges.'}
+						</p>
 
 						{winners.length > 0 ? (
 							<div className='mt-4 grid gap-3 sm:grid-cols-3'>
@@ -2678,6 +2689,15 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													</p>
 													<p className='text-xs text-[var(--text-muted)]'>
 														Group Avg: {formatScore(winner.groupAverageScore ?? 0)} · Individual Avg: {formatScore(winner.individualAverageScore ?? 0)}
+													</p>
+												</>
+											) : useDirectFinalRating ? (
+												<>
+													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+														Final Rating: <span className='font-semibold'>{formatScore(winner.finalRating ?? winner.averageScore)}</span>
+													</p>
+													<p className='text-xs text-[var(--text-muted)]'>
+														Base: {formatScore(winner.baseFinalRating ?? 0)} · Interview Bonus Applied: +{formatScore(winner.bonusPoints ?? 0)}
 													</p>
 												</>
 											) : (
@@ -2868,7 +2888,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
-						{useWeightedScores ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p> : null}
+						{useWeightedScores ? (
+							<p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p>
+						) : useDirectFinalRating ? (
+							<p className='mt-1 text-xs text-[var(--text-secondary)]'>Direct Rating: Final Rating = normalized average (AVE/GPA, NOAT, Interview), with aligned strand bonus applied to Interview points only.</p>
+						) : null}
 						<div className='mt-4 overflow-x-auto rounded-2xl border border-[var(--border-soft)]'>
 							<table className='min-w-full border-collapse text-sm'>
 								<thead>
@@ -2912,7 +2936,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 											</>
 										) : (
 											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Average Score</th>
+												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{useDirectFinalRating ? 'Final Rating' : 'Average Score'}</th>
 												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
 											</>
 										)}
@@ -2988,7 +3012,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														</>
 													) : (
 														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
 														</>
 													)}
@@ -3102,7 +3126,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
-						<p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p>
+						{!useDirectFinalRating ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
 						<div className='mt-4 grid gap-4'>
 							{event.criteria.map((criterion) => {
 								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
@@ -3181,7 +3205,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									{j.name}
 								</th>
 							))}
-							<th className='border border-black p-2 font-bold uppercase'>Final Score</th>
+							<th className='border border-black p-2 font-bold uppercase'>{useDirectFinalRating ? 'Final Rating' : 'Final Score'}</th>
 							<th className='border border-black p-2 font-bold uppercase'>Rank</th>
 						</tr>
 					</thead>
@@ -3194,7 +3218,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										{result.perJudgeTotals[j.id] !== undefined ? formatScore(result.perJudgeTotals[j.id]) : ''}
 									</td>
 								))}
-								<td className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : result.averageScore)}</td>
+								<td className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
 								<td className='border border-black p-2 font-bold'>{result.rank}</td>
 							</tr>
 						))}

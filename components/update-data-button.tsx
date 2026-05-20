@@ -68,11 +68,11 @@ export default function UpdateDataButton({ eventId, className }: UpdateDataButto
 	return (
 		<>
 			<button type='button' onClick={openModal} className={className}>
-				Edit
+				Update
 			</button>
 			{isOpen ? (
 				<div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4'>
-					<div role='dialog' aria-modal='true' aria-labelledby={titleId} aria-describedby={descriptionId} className='w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl'>
+					<div role='dialog' aria-modal='true' aria-labelledby={titleId} aria-describedby={descriptionId} className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
 						<h3 id={titleId} className='text-lg font-semibold text-slate-900'>
 							Confirm Update
 						</h3>
