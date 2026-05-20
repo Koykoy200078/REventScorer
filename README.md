@@ -2,7 +2,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Storage
 
-EventScorer now uses a normalized MySQL schema instead of `data/events.json` for runtime persistence.
+EventScorer now uses a normalized MySQL schema for runtime persistence.
 
 Configure MySQL credentials in the root `.env` file (`C:\Projects\ShareME\.env`) with:
 
@@ -33,8 +33,6 @@ Protect the "Update Data" editor behind a password by setting this in the root `
 
 - `EVENTSCORER_UPDATE_PASSWORD`
 
-On first startup, if MySQL has zero events and `data/events.json` exists, EventScorer auto-imports legacy JSON data into MySQL.
-
 ## API Ownership
 
 EventScorer API routes are owned by the root Express server (`server.js`) under:
@@ -46,7 +44,7 @@ EventScorer API routes are owned by the root Express server (`server.js`) under:
 
 The EventScorer Next.js app uses a rewrite so client calls to `/api/eventscorer/*` are forwarded to the root backend origin.
 
-## DB Migration and Rollback
+## DB Migration
 
 Run from the workspace root (`C:\Projects\ShareME`):
 
@@ -54,69 +52,11 @@ Run from the workspace root (`C:\Projects\ShareME`):
 npm run eventscorer:db:migrate
 ```
 
-`eventscorer:db:migrate` now applies schema and imports `data/events.json` when the target database has no events yet.
-
-Merge a SQL dump with upsert behavior (new rows inserted, changed rows updated):
-
-```bash
-npm run eventscorer:db:merge -- --source "C:\Users\Franc\Desktop\dump1.sql"
-```
-
-Merge multiple dumps in one pass (older -> newer):
-
-```bash
-npm run eventscorer:db:merge -- --source "C:\Users\Franc\Desktop\dump.sql" --source "C:\Users\Franc\Desktop\dump1.sql" --source "C:\Users\Franc\Desktop\aw.sql"
-```
-
-Run schema migration and dump merge in one step:
-
-```bash
-npm run eventscorer:db:migrate -- --merge-dump "C:\Users\Franc\Desktop\dump1.sql"
-```
-
-Useful merge flags:
-
-- `--dry-run` validates and reports without applying row changes.
-- `--batch-size <number>` controls rows per upsert batch (default `200`).
-- `--table-prefix <prefix>` limits merge to matching tables (default `es_`).
-- `--all-tables` processes all dump tables.
-- `--timezone <offset>` sets DB session timezone during merge/migration (default `+08:00`, Philippines).
-
-Rollback requires explicit confirmation:
-
-```bash
-npm run eventscorer:db:rollback -- --yes
-```
+`eventscorer:db:migrate` applies schema only (tables, keys, and indexes). It does not import or seed data.
 
 SQL files used by these scripts:
 
 - `scripts/sql/eventscorer-migration.sql`
-- `scripts/sql/eventscorer-rollback.sql`
-
-## DB Pressure Monitoring
-
-Check live MySQL connection pressure from the workspace root:
-
-```bash
-npm run eventscorer:db:pressure
-```
-
-Strict mode (exit non-zero on warning/critical):
-
-```bash
-npm run eventscorer:db:pressure:strict
-```
-
-Runtime health endpoint (served by root Express backend):
-
-- `/api/eventscorer/health/db-pressure`
-- `/api/eventscorer/health/db-pressure?strict=1`
-
-Reported metrics include:
-
-- `threadsConnected`
-- `maxUsedConnectionsDelta` (headroom from `max_connections`)
-- `connectionErrorsMaxConnections`
 
 ## Getting Started
 
