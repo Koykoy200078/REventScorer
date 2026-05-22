@@ -44,6 +44,7 @@ export interface ContestantInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 }
 
 export interface SubCriterionInput {
@@ -73,6 +74,7 @@ export interface AdminContestantEditorInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 }
 
 export interface AdminJudgeEditorInput {
@@ -138,6 +140,7 @@ export interface EventContestant {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 }
 
 export interface EventJudge {

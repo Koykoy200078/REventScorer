@@ -12,6 +12,7 @@ type ContestantDraft = {
 	entryType: ContestantEntryType
 	participants: string[]
 	programTag: EventProgramTag | null
+	section?: string
 }
 
 type JudgeDraft = {
@@ -65,9 +66,9 @@ function createJudge(): JudgeDraft {
 	return { id: localId(), name: '', email: '' }
 }
 
-function createContestant(entryType: ContestantEntryType = 'group', name = '', participants?: string[], programTag: EventProgramTag | null = null): ContestantDraft {
+function createContestant(entryType: ContestantEntryType = 'group', name = '', participants?: string[], programTag: EventProgramTag | null = null, section = ''): ContestantDraft {
 	const defaultParticipants = entryType === 'group' ? [''] : []
-	return { id: localId(), name, entryType, participants: participants ?? defaultParticipants, programTag }
+	return { id: localId(), name, entryType, participants: participants ?? defaultParticipants, programTag, section }
 }
 
 function contestantsFromNames(names: string[], entryType: ContestantEntryType = 'group', programTag: EventProgramTag | null = null): ContestantDraft[] {
@@ -205,6 +206,7 @@ export function CreateScorerForm() {
 	const [bulkContestantText, setBulkContestantText] = useState('')
 	const [bulkContestantEntryType, setBulkContestantEntryType] = useState<ContestantEntryType>('group')
 	const [bulkContestantProgramTag, setBulkContestantProgramTag] = useState<EventProgramTag | null>(null)
+	const [bulkContestantSection, setBulkContestantSection] = useState('')
 	const [judges, setJudges] = useState<JudgeDraft[]>([createJudge()])
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
@@ -238,6 +240,17 @@ export function CreateScorerForm() {
 	const judgeNameById = useMemo(() => {
 		return new Map(judges.map((judge) => [judge.id, judge.name.trim()]))
 	}, [judges])
+
+	const uniqueSections = useMemo(() => {
+		const sections = new Set<string>()
+		for (const contestant of contestants) {
+			const section = contestant.section?.trim()
+			if (section) {
+				sections.add(section)
+			}
+		}
+		return Array.from(sections).sort()
+	}, [contestants])
 
 	function loadPaperTemplate(): void {
 		const sampleContestants = [...PAPER_PRESENTATION_CONTESTANT_SAMPLES]
@@ -283,7 +296,7 @@ export function CreateScorerForm() {
 		setRubricLegend(defaultRubricLegendDrafts())
 	}
 
-	function updateContestant(index: number, value: Partial<Pick<ContestantDraft, 'name'>>): void {
+	function updateContestant(index: number, value: Partial<Pick<ContestantDraft, 'name' | 'section'>>): void {
 		setContestants((previous) => previous.map((contestant, contestantIndex) => (contestantIndex === index ? { ...contestant, ...value } : contestant)))
 	}
 
@@ -379,7 +392,7 @@ export function CreateScorerForm() {
 		}
 
 		setError(null)
-		const importedContestants = contestantsFromNames(names, bulkContestantEntryType, bulkContestantProgramTag)
+		const importedContestants = names.map((name) => createContestant(bulkContestantEntryType, name, bulkContestantEntryType === 'group' ? [''] : [], bulkContestantProgramTag, bulkContestantSection))
 		const shouldReplaceEmptyStarters = contestants.every((contestant) => isEmptyContestantDraft(contestant))
 
 		if (shouldReplaceEmptyStarters) {
@@ -533,6 +546,7 @@ export function CreateScorerForm() {
 				name: contestant.name,
 				entryType: contestant.entryType,
 				programTag: contestant.programTag,
+				section: contestant.section,
 				participants: contestant.entryType === 'group' ? contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0) : undefined,
 			})),
 			judges: judges.map((judge) => ({
@@ -566,6 +580,14 @@ export function CreateScorerForm() {
 
 			if (!response.ok) {
 				throw new Error(responseData.error ?? 'Unable to create scorer event.')
+			}
+
+			if (typeof window !== 'undefined') {
+				const origin = window.location.origin
+				responseData.adminUrl = responseData.adminUrl.replace(/^https?:\/\/[^/]+/, origin)
+				for (const link of responseData.judgeLinks) {
+					link.url = link.url.replace(/^https?:\/\/[^/]+/, origin)
+				}
 			}
 
 			setCreated(responseData)
@@ -649,6 +671,13 @@ export function CreateScorerForm() {
 										<option value='BSINT'>BSINT</option>
 										<option value='BSCS'>BSCS</option>
 									</select>
+									<input
+										value={bulkContestantSection}
+										onChange={(event) => setBulkContestantSection(event.target.value)}
+										placeholder='Section (e.g. A, B)'
+										list='section-options'
+										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2 w-32'
+									/>
 									<button type='button' onClick={addContestantsFromNewLines} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
 										Add Entries from New Lines
 									</button>
@@ -662,7 +691,7 @@ export function CreateScorerForm() {
 										<p className='text-xs text-emerald-900/80'>Entry {index + 1}</p>
 										<span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${contestant.entryType === 'individual' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'}`}>{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}</span>
 									</div>
-									<div className='grid gap-2 sm:grid-cols-[1fr_170px_150px_auto]'>
+									<div className='grid gap-2 sm:grid-cols-[1fr_170px_150px_120px_auto]'>
 										<input
 											value={contestant.name}
 											onChange={(event) => updateContestant(index, { name: event.target.value })}
@@ -678,6 +707,13 @@ export function CreateScorerForm() {
 											<option value='BSINT'>BSINT</option>
 											<option value='BSCS'>BSCS</option>
 										</select>
+										<input
+											value={contestant.section ?? ''}
+											onChange={(event) => updateContestant(index, { section: event.target.value })}
+											placeholder='Section'
+											list='section-options'
+											className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+										/>
 										{contestants.length > 1 ? (
 											<button type='button' onClick={() => removeContestant(index)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
 												Remove
@@ -715,6 +751,11 @@ export function CreateScorerForm() {
 								</div>
 							))}
 						</div>
+						<datalist id='section-options'>
+							{uniqueSections.map((section) => (
+								<option key={section} value={section} />
+							))}
+						</datalist>
 					</section>
 
 					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>

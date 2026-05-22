@@ -127,7 +127,6 @@ export function RatingSheet() {
 	const [created, setCreated] = useState<CreateEventResponse | null>(null)
 	const [publishedAt, setPublishedAt] = useState<string | null>(null)
 	const [copiedValue, setCopiedValue] = useState<string | null>(null)
-	const [showRubricLegend, setShowRubricLegend] = useState(false)
 
 	const totalEntries = entries.length
 	const selectedAlignedStrandSet = useMemo(() => new Set([...directRatingConfig.strandBonus.singleAlignedStrands, ...directRatingConfig.strandBonus.multiAlignedStrands].map((strand) => strand.toLowerCase())), [directRatingConfig.strandBonus.singleAlignedStrands, directRatingConfig.strandBonus.multiAlignedStrands])
@@ -330,7 +329,6 @@ export function RatingSheet() {
 			createdBy: createdBy.trim() || undefined,
 			eventScoringType: 'standard' as const,
 			rubricLegend: DEFAULT_RUBRIC_LEGEND,
-			showRubricLegend,
 			directRatingConfig: normalizedDirectRatingConfig,
 			contestants,
 			judges: normalizedJudges,
@@ -348,6 +346,14 @@ export function RatingSheet() {
 
 			if (!response.ok) {
 				throw new Error(responseData.error ?? 'Unable to publish rating sheet.')
+			}
+
+			if (typeof window !== 'undefined') {
+				const origin = window.location.origin
+				responseData.adminUrl = responseData.adminUrl.replace(/^https?:\/\/[^/]+/, origin)
+				for (const link of responseData.judgeLinks) {
+					link.url = link.url.replace(/^https?:\/\/[^/]+/, origin)
+				}
 			}
 
 			setCreated(responseData)
@@ -535,11 +541,6 @@ export function RatingSheet() {
 				<p className='mt-4 text-xs text-cyan-900/80'>Rows are used to build the contestant list when publishing. Judges will submit scores and details using their generated links.</p>
 
 				{error ? <div className='mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
-
-				<label className='mt-4 flex items-center gap-2 text-sm font-medium text-emerald-900'>
-					<input type='checkbox' checked={showRubricLegend} onChange={(event) => setShowRubricLegend(event.target.checked)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
-					Enable Rubric Legend
-				</label>
 
 				<div className='mt-4 flex flex-wrap items-center gap-3'>
 					<button

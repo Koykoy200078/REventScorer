@@ -160,7 +160,7 @@ const TABLE_SUBMISSIONS = 'es_submissions'
 const TABLE_SUBMISSION_SAVED_CONTESTANTS = 'es_submission_saved_contestants'
 const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
 const TABLE_SUBMISSION_CONTESTANT_DETAILS = 'es_submission_contestant_details'
-const EVENTSCORER_SCHEMA_VERSION = 4
+const EVENTSCORER_SCHEMA_VERSION = 5
 
 interface EventScorerGlobalState {
 	__eventScorerPoolPromise?: Promise<Pool> | null
@@ -405,12 +405,13 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 				entryType: normalizeContestantEntryType(contestant.entryType),
 				participants: normalizeContestantParticipants(contestant.participants),
 				programTag: normalizeContestantProgramTag(contestant.programTag),
+				section: typeof contestant === 'object' && contestant !== null && 'section' in contestant && typeof contestant.section === 'string' ? compactWhitespace(contestant.section) : undefined,
 			}
 		})
 		.filter((contestant) => contestant.name.length > 0)
 
 	const seen = new Set<string>()
-	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null }>
+	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null; section?: string }>
 
 	for (const contestant of cleaned) {
 		const key = `${contestant.entryType}|${contestant.programTag ?? 'none'}|${contestant.name.toLowerCase()}`
@@ -426,12 +427,13 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 		throw new Error('At least 2 contestants are required.')
 	}
 
-	return unique.map((contestant) => ({
+	return unique.map((contestant, index) => ({
 		id: randomUUID(),
 		name: contestant.name,
 		entryType: contestant.entryType,
 		participants: contestant.entryType === 'group' && contestant.participants.length > 0 ? contestant.participants : undefined,
 		programTag: contestant.programTag ?? undefined,
+		section: contestant.section,
 	}))
 }
 
@@ -707,6 +709,7 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
+			section: rawContestant.section ? compactWhitespace(String(rawContestant.section)) : undefined,
 		})
 	}
 
@@ -1472,6 +1475,7 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			name VARCHAR(255) NOT NULL,
 			entry_type VARCHAR(32) NOT NULL DEFAULT 'group',
 			program_tag VARCHAR(16) NULL,
+			section VARCHAR(64) NULL,
 			sort_order INT NOT NULL,
 			PRIMARY KEY (id),
 			INDEX idx_${TABLE_CONTESTANTS}_event_order (event_id, sort_order),
@@ -1628,6 +1632,20 @@ async function ensureSchema(pool: Pool): Promise<void> {
 	if (!showRubricColumnExists) {
 		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN show_rubric_legend TINYINT(1) NOT NULL DEFAULT 0 AFTER rubric_legend_json`)
 	}
+
+	const [sectionColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_CONTESTANTS, 'section'],
+	)
+
+	const sectionColumnExists = Number(sectionColumnRows[0]?.total ?? 0) > 0
+	if (!sectionColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN section VARCHAR(64) NULL AFTER program_tag`)
+	}
 }
 
 async function selectRows<T extends RowDataPacket>(executor: SqlExecutor, statement: string, params: SqlExecuteValues = []): Promise<T[]> {
@@ -1676,6 +1694,7 @@ function normalizeLegacyContestants(value: unknown): EventContestant[] {
 		const entryType = normalizeContestantEntryType(source.entryType)
 		const participants = normalizeContestantParticipants(source.participants)
 		const programTag = parseProgramTag(source.programTag) ?? inferProgramTagFromContestantName(name)
+		const section = source.section ? compactWhitespace(String(source.section)) : undefined
 
 		normalized.push({
 			id: contestantId,
@@ -1683,6 +1702,7 @@ function normalizeLegacyContestants(value: unknown): EventContestant[] {
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
+			section,
 		})
 	}
 
@@ -2226,9 +2246,9 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 		const programTag = normalizeContestantProgramTag(contestant.programTag)
 
 		await connection.execute(
-			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, sort_order)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			[contestant.id, event.id, contestant.name, entryType, programTag, contestantIndex],
+			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, section, sort_order)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			[contestant.id, event.id, contestant.name, entryType, programTag, contestant.section ?? null, contestantIndex],
 		)
 
 		const participants = entryType === 'group' && Array.isArray(contestant.participants) ? contestant.participants : []
@@ -2358,7 +2378,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 
 	const contestantRows = await selectRows<ContestantRow>(
 		executor,
-		`SELECT id, name, entry_type, program_tag, sort_order
+		`SELECT id, name, entry_type, program_tag, section, sort_order
 		 FROM ${TABLE_CONTESTANTS}
 		 WHERE event_id = ?
 		 ORDER BY sort_order ASC, id ASC`,
@@ -2472,6 +2492,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		const entryType = normalizeContestantEntryType(contestantRow.entry_type)
 		const participants = participantsByContestantId.get(contestantRow.id) ?? []
 		const programTag = parseProgramTag(contestantRow.program_tag) ?? inferProgramTagFromContestantName(contestantRow.name)
+		const section = contestantRow.section ? compactWhitespace(String(contestantRow.section)) : undefined
 
 		return {
 			id: contestantRow.id,
@@ -2479,6 +2500,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
+			section,
 		}
 	})
 
