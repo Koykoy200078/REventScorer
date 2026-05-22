@@ -69,19 +69,6 @@ export const FINAL_ORAL_DEFENSE_INDIVIDUAL_CRITERIA = [
 
 export const FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES = ['Team Alpha (BSCS)', 'Team Bravo (BSINT)', 'Team Charlie']
 
-export const DIRECT_RATING_CRITERIA: CriterionInput[] = [
-	{
-		name: 'Direct Rating',
-		subCriteria: [
-			{ name: 'AVE/GPA', maxScore: 100 },
-			{ name: 'NOAT', maxScore: 100 },
-			{ name: 'Interview', maxScore: 100 },
-		],
-	},
-]
-
-export const DIRECT_RATING_CONTESTANT_SAMPLES = ['Applicant 1', 'Applicant 2', 'Applicant 3']
-
 export function buildFinalOralDefenseCriteria(): CriterionInput[] {
 	return [
 		FINAL_ORAL_DEFENSE_GROUP_CRITERIA,

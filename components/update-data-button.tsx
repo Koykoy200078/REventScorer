@@ -25,6 +25,9 @@ export default function UpdateDataButton({ eventId, className }: UpdateDataButto
 	}
 
 	const closeModal = () => {
+		if (isSubmitting) {
+			return
+		}
 		setIsOpen(false)
 		setPassword('')
 		setError('')

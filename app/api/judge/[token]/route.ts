@@ -88,6 +88,7 @@ function countSubmittedJudges(event: EventScorer): number {
 
 async function broadcastScoreUpdate(request: Request, payload: AdminScoreRealtimeUpdate): Promise<void> {
 	const body = JSON.stringify(payload)
+	const broadcastSecret = (process.env.EVENTSCORER_ADMIN_SECRET ?? '').trim()
 	let lastError: unknown = null
 
 	for (const origin of getBroadcastOrigins(request)) {
@@ -96,7 +97,10 @@ async function broadcastScoreUpdate(request: Request, payload: AdminScoreRealtim
 		try {
 			const response = await fetch(targetUrl, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: {
+					'Content-Type': 'application/json',
+					...(broadcastSecret ? { 'x-eventscorer-admin-secret': broadcastSecret } : {}),
+				},
 				body,
 				cache: 'no-store',
 			})
@@ -114,7 +118,8 @@ async function broadcastScoreUpdate(request: Request, payload: AdminScoreRealtim
 	throw lastError instanceof Error ? lastError : new Error('Broadcast failed for all backend origins')
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ token: string }> }): Promise<Response> {
+export async function GET(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response> {
+	void request
 	const { token } = await context.params
 	const session = await getJudgeSessionByToken(token)
 

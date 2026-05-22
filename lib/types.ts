@@ -13,25 +13,12 @@ export interface JudgeInput {
 	email?: string
 }
 
-export interface JudgeDirectoryItem {
-	name: string
-	email?: string
-	usageCount: number
-	lastUsedAt: string
-}
-
 export type EventScoringType = 'standard' | 'final-oral-defense'
 export type EventProgramTag = 'BSINT' | 'BSCS'
 
 export type DirectScoreFieldKey = 'aveGpa' | 'noat' | 'interview'
 
 export interface DirectRatingMaxScores {
-	aveGpa: number
-	noat: number
-	interview: number
-}
-
-export interface DirectRatingScoreWeights {
 	aveGpa: number
 	noat: number
 	interview: number
@@ -46,7 +33,7 @@ export interface DirectRatingStrandBonusConfig {
 
 export interface DirectRatingConfig {
 	maxScores: DirectRatingMaxScores
-	scoreWeights?: DirectRatingScoreWeights
+	scoreWeights?: Record<DirectScoreFieldKey, number>
 	strandBonus: DirectRatingStrandBonusConfig
 }
 
@@ -122,7 +109,9 @@ export interface AdminEventEditorInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
+	resetScores?: boolean
 	contestants: AdminContestantEditorInput[]
 	judges: AdminJudgeEditorInput[]
 	criteria: AdminCriterionEditorInput[]
@@ -135,6 +124,7 @@ export interface CreateEventInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
@@ -192,6 +182,7 @@ export interface EventScorer {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	createdAt: string
 	contestants: EventContestant[]
@@ -208,7 +199,7 @@ export interface EventSummary {
 	contestantCount: number
 	judgeCount: number
 	submittedJudgeCount: number
-	isDirectRating: boolean
+	isDirectRating?: boolean
 }
 
 export interface JudgeProfile {
@@ -218,7 +209,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'showRubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }

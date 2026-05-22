@@ -1,4 +1,4 @@
-import { applyDirectRatingConfigMaxScores, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightTotal, directScoreWeightsFromConfig, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import type { CompiledContestantResult, EventCompiledResults, EventScorer, JudgeBreakdown, JudgeSubmission } from '@/lib/types'
 
 function round(value: number): number {
@@ -9,13 +9,36 @@ function criterionMaxScore(criterion: EventScorer['criteria'][number]): number {
 	const directMaxScore = Number(criterion.maxScore)
 
 	if (Number.isFinite(directMaxScore) && directMaxScore > 0) {
-		return round(directMaxScore)
+		if (!isIndividualCriterion(criterion)) {
+			return round(directMaxScore)
+		}
 	}
 
-	const computedMaxScore = criterion.subCriteria.reduce((sum, subCriterion) => {
+	if (!isIndividualCriterion(criterion)) {
+		const computedMaxScore = criterion.subCriteria.reduce((sum, subCriterion) => {
+			const subCriterionMaxScore = Number(subCriterion.maxScore)
+			return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
+		}, 0)
+		return round(computedMaxScore)
+	}
+
+	const seenDisplayNames = new Set<string>()
+	let computedMaxScore = 0
+
+	for (const subCriterion of criterion.subCriteria) {
+		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		const normalizedName = memberIndex ? displayName.trim() : subCriterion.name.trim()
+		const key = normalizedName.toLowerCase()
+
+		if (seenDisplayNames.has(key)) {
+			continue
+		}
+
+		seenDisplayNames.add(key)
 		const subCriterionMaxScore = Number(subCriterion.maxScore)
-		return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
-	}, 0)
+		computedMaxScore += Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0
+	}
 
 	return round(computedMaxScore)
 }
@@ -261,7 +284,12 @@ function scoreJudgeSubmission(
 	return { totals, groupTotals, individualTotals }
 }
 
-function directFinalRatingComponentsFromSubmission(submission: JudgeSubmission, contestantId: string, directScoreFields: DirectScoreField[], scoreWeights: Record<DirectScoreField['key'], number>, interviewBonusPoints: number): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number } {
+function directFinalRatingComponentsFromSubmission(
+	submission: JudgeSubmission,
+	contestantId: string,
+	directScoreFields: DirectScoreField[],
+	interviewBonusPoints: number,
+): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number } {
 	if (directScoreFields.length === 0) {
 		return {
 			baseFinalRating: 0,
@@ -281,25 +309,27 @@ function directFinalRatingComponentsFromSubmission(submission: JudgeSubmission, 
 		const validMaxScore = Number.isFinite(maxScore) && maxScore > 0 ? maxScore : 0
 		const validScore = Number.isFinite(rawScore) && rawScore > 0 ? rawScore : 0
 		const clampedScore = Math.max(0, Math.min(validScore, validMaxScore))
-		const weight = scoreWeights[field.key] ?? 0
 
-		if (validMaxScore <= 0 || weight <= 0) {
+		if (validMaxScore <= 0) {
 			continue
 		}
 
-		const adjustedScore = field.key === 'interview' ? Math.min(validMaxScore, clampedScore + sanitizedInterviewBonus) : clampedScore
+		const adjustedScore =
+			field.key === 'interview'
+				? Math.min(validMaxScore, clampedScore + sanitizedInterviewBonus)
+				: clampedScore
 
 		if (field.key === 'interview') {
 			appliedInterviewBonus = round(adjustedScore - clampedScore)
 		}
 
-		baseTotalPercentage += (clampedScore / validMaxScore) * weight
-		finalTotalPercentage += (adjustedScore / validMaxScore) * weight
+		baseTotalPercentage += (clampedScore / validMaxScore) * 100
+		finalTotalPercentage += (adjustedScore / validMaxScore) * 100
 	}
 
 	return {
-		baseFinalRating: round(baseTotalPercentage),
-		finalRating: round(finalTotalPercentage),
+		baseFinalRating: round(baseTotalPercentage / directScoreFields.length),
+		finalRating: round(finalTotalPercentage / directScoreFields.length),
 		appliedInterviewBonus,
 	}
 }
@@ -357,10 +387,9 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const normalizeLabel = (value: string) => value.trim().toLowerCase()
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(event.criteria)
 	const directRatingConfig = normalizeDirectRatingConfig(event.directRatingConfig, derivedDirectRatingConfig ?? undefined)
-	const directScoreWeights = directScoreWeightsFromConfig(directRatingConfig)
-	const directScoreFields = applyDirectRatingConfigMaxScores(detectDirectRatingScoreFields(event.criteria), directRatingConfig)
+	const directScoreFields = detectDirectRatingScoreFields(event.criteria, directRatingConfig)
 	const isDirectRatingEvent = directScoreFields.length > 0
-	const maxPossibleScore = isDirectRatingEvent ? directScoreWeightTotal(directScoreWeights) : round(event.criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0))
+	const maxPossibleScore = isDirectRatingEvent ? 100 : round(event.criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0))
 	const groupCriterionIds = new Set(event.criteria.filter((criterion) => normalizeLabel(criterion.name) === 'group presentation').map((criterion) => criterion.id))
 	const individualCriterionIds = new Set(event.criteria.filter((criterion) => isIndividualCriterion(criterion)).map((criterion) => criterion.id))
 	const hasFinalOralCriteria = groupCriterionIds.size > 0 && individualCriterionIds.size > 0
@@ -449,7 +478,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 
 				const strand = submission.contestantDetails?.[contestant.id]?.strand ?? ''
 				const bonusPoints = round(resolveStrandAlignmentBonus(strand, directRatingConfig).bonusPoints)
-				const directRatingComponents = directFinalRatingComponentsFromSubmission(submission, contestant.id, directScoreFields, directScoreWeights, bonusPoints)
+				const directRatingComponents = directFinalRatingComponentsFromSubmission(submission, contestant.id, directScoreFields, bonusPoints)
 
 				directComponentsByContestant.set(contestant.id, {
 					baseFinalRating: directRatingComponents.baseFinalRating,
@@ -459,7 +488,9 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			}
 		}
 
-		const totalsByContestant = isDirectRatingEvent ? Object.fromEntries(Array.from(directComponentsByContestant.entries()).map(([contestantId, components]) => [contestantId, components.finalRating])) : Object.fromEntries(Object.entries(judgeTotals.totals).filter(([contestantId]) => savedContestantIds.has(contestantId)))
+		const totalsByContestant = isDirectRatingEvent
+			? Object.fromEntries(Array.from(directComponentsByContestant.entries()).map(([contestantId, components]) => [contestantId, components.finalRating]))
+			: Object.fromEntries(Object.entries(judgeTotals.totals).filter(([contestantId]) => savedContestantIds.has(contestantId)))
 
 		for (const contestant of event.contestants) {
 			if (!savedContestantIds.has(contestant.id)) {

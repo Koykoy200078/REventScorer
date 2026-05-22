@@ -4,10 +4,7 @@ import { RatingSheet } from '@/components/rating-sheet'
 
 export const dynamic = 'force-dynamic'
 
-export default async function RatingSheetPage({ searchParams }: { searchParams?: Promise<{ editEventId?: string }> }) {
-	const resolvedSearchParams = searchParams ? await searchParams : undefined
-	const editEventId = typeof resolvedSearchParams?.editEventId === 'string' ? resolvedSearchParams.editEventId : undefined
-
+export default function RatingSheetPage() {
 	return (
 		<div className='min-h-screen bg-transparent pb-10'>
 			<div className='mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8'>
@@ -15,7 +12,7 @@ export default async function RatingSheetPage({ searchParams }: { searchParams?:
 					Back to Dashboard
 				</Link>
 			</div>
-			<RatingSheet editEventId={editEventId} />
+			<RatingSheet />
 		</div>
 	)
 }

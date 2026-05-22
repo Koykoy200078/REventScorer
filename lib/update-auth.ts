@@ -60,13 +60,17 @@ export function verifyUpdateAuthCookieValue(value: string | undefined | null): b
 	return timingSafeEqualStrings(value, expected)
 }
 
-export function getUpdateAuthCookieOptions() {
+type UpdateAuthCookieOverrides = {
+	secure?: boolean
+}
+
+export function getUpdateAuthCookieOptions(overrides: UpdateAuthCookieOverrides = {}) {
 	return {
 		name: UPDATE_AUTH_COOKIE_NAME,
 		value: getUpdateAuthCookieValue() ?? '',
 		httpOnly: true,
 		sameSite: 'lax' as const,
-		secure: process.env.NODE_ENV === 'production',
+		secure: overrides.secure ?? process.env.NODE_ENV === 'production',
 		path: '/',
 		maxAge: UPDATE_AUTH_COOKIE_MAX_AGE_SECONDS,
 	}

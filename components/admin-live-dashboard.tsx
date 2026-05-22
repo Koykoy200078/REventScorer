@@ -57,6 +57,7 @@ interface AdminLiveDashboardProps {
 	baseUrl: string
 	initialOpenEditor?: boolean
 	allowEventEditor?: boolean
+	wsAuthToken?: string
 }
 
 interface AdminEventResponse {
@@ -326,16 +327,35 @@ function rankingScore(result: EventCompiledResults['rankings'][number], _useWeig
 }
 
 function criterionMaxScore(criterion: EventCriterion): number {
-	const directMaxScore = Number(criterion.maxScore)
+	if (!isIndividualPresentationCriterion(criterion)) {
+		const directMaxScore = Number(criterion.maxScore)
+		if (Number.isFinite(directMaxScore) && directMaxScore > 0) {
+			return directMaxScore
+		}
 
-	if (Number.isFinite(directMaxScore) && directMaxScore > 0) {
-		return directMaxScore
+		return criterion.subCriteria.reduce((sum, subCriterion) => {
+			const subCriterionMaxScore = Number(subCriterion.maxScore)
+			return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
+		}, 0)
 	}
 
-	return criterion.subCriteria.reduce((sum, subCriterion) => {
+	const seenDisplayNames = new Set<string>()
+	let computedMaxScore = 0
+
+	for (const subCriterion of criterion.subCriteria) {
+		const { displayName } = splitMemberCriterionName(subCriterion.name)
+		const key = displayName.toLowerCase()
+
+		if (seenDisplayNames.has(key)) {
+			continue
+		}
+
+		seenDisplayNames.add(key)
 		const subCriterionMaxScore = Number(subCriterion.maxScore)
-		return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
-	}, 0)
+		computedMaxScore += Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0
+	}
+
+	return Math.round(computedMaxScore * 1000) / 1000
 }
 
 function isIndividualPresentationCriterion(criterion: EventCriterion): boolean {
@@ -913,21 +933,31 @@ function subCriteriaRankingsByProgram(event: EventScorer, manualAssignments: Rec
 }
 
 function assignedJudgeIdsForContestant(event: EventScorer, contestantId: string): string[] {
-	if (!Array.isArray(event.presentationSlots) || event.presentationSlots.length === 0) {
-		return event.judges.map((judge) => judge.id)
+	const assignedIds = new Set<string>()
+
+	if (Array.isArray(event.presentationSlots) && event.presentationSlots.length > 0) {
+		const hasAnyJudgeAssigned = event.presentationSlots.some((slot) => slot.judgeIds.length > 0)
+		if (!hasAnyJudgeAssigned) {
+			return event.judges.map((judge) => judge.id)
+		}
+
+		const slot = event.presentationSlots.find((candidate) => candidate.contestantId === contestantId)
+		if (slot) {
+			slot.judgeIds.forEach((id) => assignedIds.add(id))
+		} else {
+			event.judges.forEach((judge) => assignedIds.add(judge.id))
+		}
+	} else {
+		event.judges.forEach((judge) => assignedIds.add(judge.id))
 	}
 
-	const hasAnyJudgeAssigned = event.presentationSlots.some((slot) => slot.judgeIds.length > 0)
-	if (!hasAnyJudgeAssigned) {
-		return event.judges.map((judge) => judge.id)
+	for (const submission of event.submissions) {
+		if (Array.isArray(submission.savedContestantIds) && submission.savedContestantIds.includes(contestantId)) {
+			assignedIds.add(submission.judgeId)
+		}
 	}
 
-	const slot = event.presentationSlots.find((candidate) => candidate.contestantId === contestantId)
-	if (!slot) {
-		return event.judges.map((judge) => judge.id)
-	}
-
-	return slot.judgeIds
+	return Array.from(assignedIds)
 }
 
 function buildJudgeAssignmentDrafts(event: EventScorer): Record<string, string[]> {
@@ -1180,6 +1210,8 @@ function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEd
 		createdBy: typeof draft.createdBy === 'string' ? draft.createdBy : '',
 		eventScoringType: draft.eventScoringType === 'final-oral-defense' ? 'final-oral-defense' : 'standard',
 		rubricLegend: normalizeRubricLegend(draft.rubricLegend),
+		showRubricLegend: Boolean(draft.showRubricLegend),
+		resetScores: Boolean(draft.resetScores),
 		contestants,
 		judges,
 		criteria,
@@ -1233,45 +1265,76 @@ function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInpu
 		createdBy: event.createdBy ?? '',
 		eventScoringType: event.eventScoringType ?? 'standard',
 		rubricLegend: normalizeRubricLegend(event.rubricLegend),
+		showRubricLegend: event.showRubricLegend,
+		resetScores: false,
 		contestants,
 		judges,
 		criteria,
-		presentationSlots: sourceSlots.map((slot) => ({
-			id: slot.id,
-			label: slot.label,
-			contestantId: slot.contestantId,
-			judgeIds: [...slot.judgeIds],
-		})),
+		presentationSlots: sourceSlots.map((slot) => {
+			const judgeIdSet = new Set(slot.judgeIds)
+			for (const submission of event.submissions) {
+				if (Array.isArray(submission.savedContestantIds) && submission.savedContestantIds.includes(slot.contestantId)) {
+					judgeIdSet.add(submission.judgeId)
+				}
+			}
+
+			return {
+				id: slot.id,
+				label: slot.label,
+				contestantId: slot.contestantId,
+				judgeIds: Array.from(judgeIdSet),
+			}
+		}),
 	}
 }
 
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false }: AdminLiveDashboardProps) {
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
 	const [lastSignalAt, setLastSignalAt] = useState<string | null>(null)
 	const [refreshError, setRefreshError] = useState<string | null>(null)
-	const [isRefreshing, setIsRefreshing] = useState(false)
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
-	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>(() => buildProgramAssignmentsFromEvent(initialEvent))
+	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>(() => {
+		const assignments = buildProgramAssignmentsFromEvent(initialEvent)
+		const queued = listQueuedAdminSaveActionsForEvent(initialEvent.id)
+		for (const action of queued) {
+			if (isProgramAssignmentQueuedAction(action)) {
+				assignments[action.requestBody.contestantId] = action.requestBody.programTag
+			}
+		}
+		return assignments
+	})
 	const [isSavingProgramAssignments, setIsSavingProgramAssignments] = useState(false)
-	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>(() => buildJudgeAssignmentDrafts(initialEvent))
+	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>(() => {
+		const drafts = buildJudgeAssignmentDrafts(initialEvent)
+		const queued = listQueuedAdminSaveActionsForEvent(initialEvent.id)
+		for (const action of queued) {
+			if (isJudgeAssignmentQueuedAction(action)) {
+				drafts[action.requestBody.contestantId] = [...action.requestBody.judgeIds]
+			}
+		}
+		return drafts
+	})
 	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
+	const [showDetailedAnalyticsByProgram, setShowDetailedAnalyticsByProgram] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
 	const [eventEditorNotice, setEventEditorNotice] = useState<string | null>(null)
 	const [isSavingEventEditor, setIsSavingEventEditor] = useState(false)
-	const [queuedAdminSaves, setQueuedAdminSaves] = useState<QueuedAdminSaveAction[]>([])
+	const [queuedAdminSaves, setQueuedAdminSaves] = useState<QueuedAdminSaveAction[]>(() => listQueuedAdminSaveActionsForEvent(initialEvent.id))
 	const [isAutoSyncingAdminSaves, setIsAutoSyncingAdminSaves] = useState(false)
 	const [adminQueueNotice, setAdminQueueNotice] = useState<string | null>(null)
 	const [pendingQueueFilter, setPendingQueueFilter] = useState<PendingQueueFilter>('all')
 	const refreshInFlight = useRef(false)
 	const adminAutoSyncInFlight = useRef(false)
+	const showEventEditorRef = useRef(showEventEditor)
+	showEventEditorRef.current = showEventEditor
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
@@ -1355,17 +1418,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		return pendingQueueRows.filter((row) => row.kind === pendingQueueFilter)
 	}, [pendingQueueFilter, pendingQueueRows])
 
-	useEffect(() => {
-		setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(event))
-	}, [event])
+	const syncJudgeAssignmentDrafts = useCallback((nextEvent: EventScorer) => {
+		setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(nextEvent))
+	}, [])
 
-	useEffect(() => {
-		if (showEventEditor) {
-			return
-		}
-
-		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event)))
-	}, [event, showEventEditor])
+	const syncEventEditorDraftFromEvent = useCallback((nextEvent: EventScorer) => {
+		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(nextEvent)))
+	}, [])
 
 	const updateEventEditorDraft = useCallback((updater: (previous: AdminEventEditorInput) => AdminEventEditorInput) => {
 		setEventEditorDraft((previous) => synchronizeEventEditorDraft(updater(previous)))
@@ -1406,7 +1465,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 
 		refreshInFlight.current = true
-		setIsRefreshing(true)
 		setRefreshError(null)
 
 		try {
@@ -1421,12 +1479,15 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			}
 
 			setEvent(responseBody.event)
+			syncJudgeAssignmentDrafts(responseBody.event)
+			if (!showEventEditorRef.current) {
+				syncEventEditorDraftFromEvent(responseBody.event)
+			}
 			setCompiled(responseBody.compiled)
 		} catch (error) {
 			setRefreshError(error instanceof Error ? error.message : 'Unable to refresh results.')
 		} finally {
 			refreshInFlight.current = false
-			setIsRefreshing(false)
 		}
 	}, [event.id])
 
@@ -1524,6 +1585,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						syncedCount += 1
 
 						setEvent(responseBody.event)
+						syncJudgeAssignmentDrafts(responseBody.event)
+						if (!showEventEditorRef.current) {
+							syncEventEditorDraftFromEvent(responseBody.event)
+						}
 						setCompiled(responseBody.compiled)
 
 						if (pendingSave.kind === 'event-editor') {
@@ -1614,6 +1679,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
+				setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(responseBody.event))
+				setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
 				setAdminQueueNotice(null)
 			} catch (error) {
 				if (shouldQueueAdminSave(error)) {
@@ -1723,6 +1790,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
+				setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(responseBody.event))
+				setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
 				setEditingJudgeAssignmentForContestantId(null)
 				setAdminQueueNotice(null)
 			} catch (error) {
@@ -1780,7 +1849,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
 			setEditingJudgeAssignmentForContestantId(null)
 			setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
-			setEventEditorNotice('Published event updated. Judge submissions were reset to keep scoring consistent with the new structure.')
+			setEventEditorNotice(preparedEditor.resetScores ? 'Published event updated and all scores were reset.' : 'Published event updated. Existing scores for untouched fields were successfully retained.')
 			setAdminQueueNotice(null)
 			setShowEventEditor(false)
 		} catch (error) {
@@ -1826,7 +1895,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		function buildSocketCandidates(): string[] {
 			const host = window.location.hostname
 			const isSecurePage = window.location.protocol === 'https:'
-			const query = `?eventId=${encodeURIComponent(eventId)}`
+			const params = new URLSearchParams({ eventId: String(eventId) })
+			if (wsAuthToken) {
+				params.set('auth', wsAuthToken)
+			}
+			const query = `?${params.toString()}`
 			const path = `/ws/admin-scores${query}`
 
 			const candidates: string[] = []
@@ -1968,21 +2041,29 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				}
 			}
 		}
-	}, [event.id, refreshDashboard])
+	}, [event.id, refreshDashboard, wsAuthToken])
+
+	const hasAnyScores = event.submissions.some((sub) => (sub.savedContestantIds ?? []).length > 0)
+	const scoredJudgeIds = new Set(event.submissions.filter((sub) => (sub.savedContestantIds ?? []).length > 0).map((sub) => sub.judgeId))
+	const scoredContestantIds = new Set(event.submissions.flatMap((sub) => sub.savedContestantIds ?? []))
 
 	return (
 		<>
 			{/* SCREEN VIEW */}
 			<div className='min-h-screen bg-transparent px-4 py-8 sm:px-8 print:hidden'>
 				<div className='mx-auto w-full max-w-7xl space-y-6'>
-					<header className='rounded-[30px] border border-[var(--border-soft)] bg-[var(--surface-strong)] p-6 shadow-[var(--shadow-soft)] backdrop-blur-xl sm:p-8'>
+					<header className='rounded-[30px] border border-(--border-soft) bg-(--surface-strong) p-6 shadow-(--shadow-soft) backdrop-blur-xl sm:p-8'>
 						<div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
 							<div>
-								<p className='text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]'>Admin Console</p>
-								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl'>{event.title}</h1>
-								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]'>{event.description}</p> : null}
-								{!useDirectFinalRating ? <p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p> : null}
-								<p className='mt-3 text-xs text-[var(--text-muted)]'>
+								<p className='text-xs uppercase tracking-[0.2em] text-(--text-muted)'>Admin Console</p>
+								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-(--text-primary) sm:text-4xl'>{event.title}</h1>
+								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-(--text-secondary)'>{event.description}</p> : null}
+								{event.showRubricLegend && (
+									<p className='mt-2 max-w-3xl text-xs text-(--text-secondary)'>
+										Rubric Legend: {rubricLegendText} {event.showRubricLegend ? <span className='ml-1 text-emerald-600'>(Visible to judges)</span> : <span className='ml-1 text-amber-600'>(Hidden from judges)</span>}
+									</p>
+								)}
+								<p className='mt-3 text-xs text-(--text-muted)'>
 									Created {formatDate(event.createdAt)}
 									{event.createdBy ? ` by ${event.createdBy}` : ''}
 								</p>
@@ -1990,37 +2071,37 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 							<div className='flex flex-wrap items-center gap-2 print:hidden'>
 								<span className={connectionBadgeClass(connectionState)}>{connectionLabel(connectionState)}</span>
-								{lastSignalAt ? <span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-secondary)]'>Last update {formatDate(lastSignalAt)}</span> : null}
+								{lastSignalAt ? <span className='rounded-full border border-(--border-soft) bg-(--surface-muted) px-3 py-1 text-xs text-(--text-secondary)'>Last update {formatDate(lastSignalAt)}</span> : null}
 								{queuedAdminSaves.length > 0 ? <span className='rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-800'>Pending saves {queuedAdminSaves.length}</span> : null}
 								{isAutoSyncingAdminSaves ? <span className='rounded-full border border-cyan-300 bg-cyan-50 px-3 py-1 text-xs text-cyan-800'>Auto-uploading pending saves...</span> : null}
-								<button type='button' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+								<button type='button' onClick={() => window.print()} className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-4 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface'>
 									Print Results
 								</button>
-								{/* <button type='button' onClick={refreshDashboard} disabled={isRefreshing} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-70'>
+								{/* <button type='button' onClick={refreshDashboard} disabled={isRefreshing} className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-4 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-70'>
 									{isRefreshing ? 'Refreshing...' : 'Refresh now'}
 								</button> */}
-								<Link href='/' className='inline-flex items-center rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+								<Link href='/' className='inline-flex items-center rounded-full border border-(--border-strong) bg-(--surface-muted) px-4 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface'>
 									Back to Dashboard
 								</Link>
 							</div>
 						</div>
 
 						<div className='mt-5 grid gap-3 sm:grid-cols-4'>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Contestants</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.contestants.length}</p>
+							<div className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-3'>
+								<p className='text-xs text-(--text-muted)'>Contestants</p>
+								<p className='text-xl font-semibold text-(--text-primary)'>{event.contestants.length}</p>
 							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Judges</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.judges.length}</p>
+							<div className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-3'>
+								<p className='text-xs text-(--text-muted)'>Judges</p>
+								<p className='text-xl font-semibold text-(--text-primary)'>{event.judges.length}</p>
 							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Submitted</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
+							<div className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-3'>
+								<p className='text-xs text-(--text-muted)'>Submitted</p>
+								<p className='text-xl font-semibold text-(--text-primary)'>{compiled.submittedJudgeCount}</p>
 							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
+							<div className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-3'>
+								<p className='text-xs text-(--text-muted)'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
+								<p className='text-xl font-semibold text-(--text-primary)'>{formatScore(compiled.maxPossibleScore)}</p>
 							</div>
 						</div>
 					</header>
@@ -2059,7 +2140,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									}}
 									disabled={isAutoSyncingAdminSaves}
 									className='rounded-full border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60'>
-									{isAutoSyncingAdminSaves ? 'Syncing Queue...' : 'Sync Queue Now'}
+									Sync Now
 								</button>
 							</div>
 
@@ -2084,12 +2165,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : null}
 
 					{allowEventEditor ? (
-						<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+						<section className='rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
 							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
 								<div>
-									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
-									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Edit judges, rubric criteria, contestants/participants, presentation slots, and rubric legend directly from this dashboard.</p>
-									<p className='mt-2 text-xs text-amber-700'>Saving this editor resets all current judge submissions so scoring stays consistent with the new structure.</p>
+									<h2 className='text-xl font-semibold text-(--text-primary)'>Edit After Publish</h2>
+									<p className='mt-1 text-sm text-(--text-secondary)'>Edit judges, rubric criteria, contestants/participants, presentation slots, and rubric legend directly from this dashboard.</p>
+									<p className='mt-2 text-xs text-amber-700'>Data retention is enabled. Edits to scored items are restricted. Turn on 'Reset All Scores' below to unlock full structural changes.</p>
 								</div>
 								<div className='flex flex-wrap items-center gap-2'>
 									<button
@@ -2100,10 +2181,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												loadEventEditorFromCurrentEvent()
 											}
 										}}
-										className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+										className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-4 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface'>
 										{showEventEditor ? 'Hide Editor' : 'Open Editor Fields'}
 									</button>
-									<button type='button' onClick={loadEventEditorFromCurrentEvent} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+									<button type='button' onClick={loadEventEditorFromCurrentEvent} className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-4 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface'>
 										Reload Snapshot
 									</button>
 								</div>
@@ -2114,10 +2195,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 							{showEventEditor ? (
 								<div className='mt-4 space-y-6'>
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Event Details</h3>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
+										<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Event Details</h3>
 										<div className='mt-3 grid gap-3 sm:grid-cols-2'>
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='text-xs text-(--text-secondary)'>
 												Title
 												<input
 													type='text'
@@ -2126,11 +2207,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														const value = event.target.value
 														updateEventEditorDraft((previous) => ({ ...previous, title: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 												/>
 											</label>
 
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='text-xs text-(--text-secondary)'>
 												Created By
 												<input
 													type='text'
@@ -2139,25 +2220,26 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														const value = event.target.value
 														updateEventEditorDraft((previous) => ({ ...previous, createdBy: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 												/>
 											</label>
 
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='text-xs text-(--text-secondary)'>
 												Scoring Type
 												<select
 													value={eventEditorDraft.eventScoringType ?? 'standard'}
+													disabled={hasAnyScores && !eventEditorDraft.resetScores}
 													onChange={(event) => {
 														const value = event.target.value === 'final-oral-defense' ? 'final-oral-defense' : 'standard'
 														updateEventEditorDraft((previous) => ({ ...previous, eventScoringType: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+													className='mt-1 w-full rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'>
 													<option value='standard'>Standard</option>
 													<option value='final-oral-defense'>Final Oral Defense</option>
 												</select>
 											</label>
 
-											<label className='sm:col-span-2 text-xs text-[var(--text-secondary)]'>
+											<label className='sm:col-span-2 text-xs text-(--text-secondary)'>
 												Description
 												<textarea
 													value={eventEditorDraft.description ?? ''}
@@ -2166,85 +2248,96 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														updateEventEditorDraft((previous) => ({ ...previous, description: value }))
 													}}
 													rows={3}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 												/>
 											</label>
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Legend</h3>
-											<div className='flex gap-2'>
-												<button
-													type='button'
-													onClick={() => {
-														updateEventEditorDraft((previous) => ({
-															...previous,
-															rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
-														}))
-													}}
-													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-													Add Legend Row
-												</button>
-												<button
-													type='button'
-													onClick={() => {
-														updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
-													}}
-													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-													Reset Default
-												</button>
-											</div>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Rubric Legend</h3>
+											<label className='flex items-center gap-2 text-sm font-medium text-(--text-primary)'>
+												<input type='checkbox' checked={Boolean(eventEditorDraft.showRubricLegend)} onChange={(changeEvent) => updateEventEditorDraft((previous) => ({ ...previous, showRubricLegend: changeEvent.target.checked }))} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+												Enable Rubric Legend
+											</label>
 										</div>
 
-										<div className='mt-3 space-y-2'>
-											{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
-												<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
-													<input
-														type='number'
-														step='1'
-														value={legendItem.score}
-														onChange={(event) => {
-															const numericScore = Number(event.target.value)
-															updateEventEditorDraft((previous) => ({
-																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
-															}))
-														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
-													/>
-													<input
-														type='text'
-														value={legendItem.label}
-														onChange={(event) => {
-															const value = event.target.value
-															updateEventEditorDraft((previous) => ({
-																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
-															}))
-														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
-													/>
+										{eventEditorDraft.showRubricLegend ? (
+											<>
+												<div className='mt-4 flex gap-2'>
 													<button
 														type='button'
 														onClick={() => {
 															updateEventEditorDraft((previous) => ({
 																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
+																rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
 															}))
 														}}
-														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
-														Remove
+														className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted)'>
+														Add Legend Row
+													</button>
+													<button
+														type='button'
+														onClick={() => {
+															updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
+														}}
+														className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted)'>
+														Reset Default
 													</button>
 												</div>
-											))}
-										</div>
+
+												<div className='mt-3 space-y-2'>
+													{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
+														<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
+															<input
+																type='number'
+																step='1'
+																value={legendItem.score}
+																onChange={(event) => {
+																	const numericScore = Number(event.target.value)
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
+																	}))
+																}}
+																className='rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
+															/>
+															<input
+																type='text'
+																value={legendItem.label}
+																onChange={(event) => {
+																	const value = event.target.value
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
+																	}))
+																}}
+																className='rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
+															/>
+															<button
+																type='button'
+																onClick={() => {
+																	updateEventEditorDraft((previous) => ({
+																		...previous,
+																		rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
+																	}))
+																}}
+																className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																Remove
+															</button>
+														</div>
+													))}
+												</div>
+											</>
+										) : (
+											<p className='mt-3 text-xs text-(--text-muted)'>Rubric Legend is disabled.</p>
+										)}
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Judges</h3>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Judges</h3>
 											<button
 												type='button'
 												onClick={() => {
@@ -2253,18 +2346,22 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														judges: [...previous.judges, { id: createLocalEditorId('judge'), name: '', email: '' }],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted)'>
 												Add Judge
 											</button>
 										</div>
 
 										<div className='mt-3 space-y-2'>
-											{eventEditorDraft.judges.map((judge, judgeIndex) => (
+											{eventEditorDraft.judges.map((judge, judgeIndex) => {
+												const isLocked = Boolean(!eventEditorDraft.resetScores && judge.id && scoredJudgeIds.has(judge.id))
+												
+												return (
 												<div key={judge.id ?? `judge-${judgeIndex}`} className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
 													<input
 														type='text'
 														placeholder='Judge name'
 														value={judge.name}
+														disabled={isLocked}
 														onChange={(event) => {
 															const value = event.target.value
 															updateEventEditorDraft((previous) => ({
@@ -2272,12 +2369,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, name: value } : item)),
 															}))
 														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														className='rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
 													/>
 													<input
 														type='text'
 														placeholder='Email (optional)'
 														value={judge.email ?? ''}
+														disabled={isLocked}
 														onChange={(event) => {
 															const value = event.target.value
 															updateEventEditorDraft((previous) => ({
@@ -2285,27 +2383,29 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, email: value } : item)),
 															}))
 														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														className='rounded-xl border border-(--border-soft) bg-surface px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
 													/>
 													<button
 														type='button'
+														disabled={isLocked}
 														onClick={() => {
 															updateEventEditorDraft((previous) => ({
 																...previous,
 																judges: previous.judges.filter((_, itemIndex) => itemIndex !== judgeIndex),
 															}))
 														}}
-														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
-														Remove
+														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed'>
+														{isLocked ? 'Scored' : 'Remove'}
 													</button>
 												</div>
-											))}
+												)
+											})}
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Contestants / Entries</h3>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Contestants / Entries</h3>
 											<button
 												type='button'
 												onClick={() => {
@@ -2314,19 +2414,23 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														contestants: [...previous.contestants, { id: createLocalEditorId('contestant'), name: '', entryType: 'group', participants: [], programTag: null }],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted)'>
 												Add Entry
 											</button>
 										</div>
 
 										<div className='mt-3 space-y-3'>
-											{eventEditorDraft.contestants.map((contestant, contestantIndex) => (
-												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+											{eventEditorDraft.contestants.map((contestant, contestantIndex) => {
+												const isLocked = Boolean(!eventEditorDraft.resetScores && contestant.id && scoredContestantIds.has(contestant.id))
+												
+												return (
+												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-(--border-soft) bg-surface p-3 space-y-2'>
 													<div className='grid gap-2 sm:grid-cols-[1fr_140px_120px_auto]'>
 														<input
 															type='text'
 															placeholder='Contestant or team name'
 															value={contestant.name}
+															disabled={isLocked}
 															onChange={(event) => {
 																const value = event.target.value
 																updateEventEditorDraft((previous) => ({
@@ -2334,10 +2438,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, name: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
 														/>
 														<select
 															value={contestant.entryType === 'individual' ? 'individual' : 'group'}
+															disabled={isLocked}
 															onChange={(event) => {
 																const value = event.target.value === 'individual' ? 'individual' : 'group'
 																updateEventEditorDraft((previous) => ({
@@ -2353,12 +2458,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'>
 															<option value='group'>Group</option>
 															<option value='individual'>Individual</option>
 														</select>
 														<select
 															value={contestant.programTag ?? ''}
+															disabled={isLocked}
 															onChange={(event) => {
 																const value = event.target.value === 'BSINT' || event.target.value === 'BSCS' ? event.target.value : null
 																updateEventEditorDraft((previous) => ({
@@ -2366,29 +2472,31 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, programTag: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'>
 															<option value=''>Program</option>
 															<option value='BSINT'>BSINT</option>
 															<option value='BSCS'>BSCS</option>
 														</select>
 														<button
 															type='button'
+															disabled={isLocked}
 															onClick={() => {
 																updateEventEditorDraft((previous) => ({
 																	...previous,
 																	contestants: previous.contestants.filter((_, itemIndex) => itemIndex !== contestantIndex),
 																}))
 															}}
-															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
-															Remove
+															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed'>
+															{isLocked ? 'Scored' : 'Remove'}
 														</button>
 													</div>
 
 													{contestant.entryType !== 'individual' ? (
-														<label className='block text-xs text-[var(--text-secondary)]'>
+														<label className='block text-xs text-(--text-secondary)'>
 															Participants (comma or new line separated)
 															<textarea
 																value={Array.isArray(contestant.participants) ? contestant.participants.join('\n') : ''}
+																disabled={isLocked}
 																onChange={(event) => {
 																	const value = event.target.value
 																	updateEventEditorDraft((previous) => ({
@@ -2397,20 +2505,22 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	}))
 																}}
 																rows={2}
-																className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																className='mt-1 w-full rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
 															/>
 														</label>
 													) : null}
 												</div>
-											))}
+												)
+											})}
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Criteria</h3>
+											<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Rubric Criteria</h3>
 											<button
 												type='button'
+												disabled={hasAnyScores && !eventEditorDraft.resetScores}
 												onClick={() => {
 													updateEventEditorDraft((previous) => ({
 														...previous,
@@ -2424,22 +2534,22 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted) disabled:opacity-50 disabled:cursor-not-allowed'>
 												Add Criterion
 											</button>
 										</div>
-										<p className='mt-2 text-xs text-[var(--text-secondary)]'>Subcriteria here are shared. Updates are applied automatically to all students/members.</p>
-										<p className='mt-1 text-xs text-[var(--text-secondary)]'>
-											Total Rubric Score: <span className='font-semibold text-[var(--text-primary)]'>{formatScore(eventEditorRubricTotalScore)}</span>
+										<p className='mt-2 text-xs text-(--text-secondary)'>Subcriteria here are shared. Updates are applied automatically to all students/members.</p>
+										<p className='mt-1 text-xs text-(--text-secondary)'>
+											Total Rubric Score: <span className='font-semibold text-(--text-primary)'>{formatScore(eventEditorRubricTotalScore)}</span>
 										</p>
-										<p className='mt-1 text-[11px] text-[var(--text-muted)]'>Totals shown here are based on the visible shared subcriteria values.</p>
+										<p className='mt-1 text-[11px] text-(--text-muted)'>Totals shown here are based on the visible shared subcriteria values.</p>
 
 										<div className='mt-3 space-y-3'>
 											{eventEditorDraft.criteria.map((criterion, criterionIndex) => {
 												const criterionTotalScore = criterionTotalScoreForEditor(criterion)
 
 												return (
-													<div key={criterion.id ?? `criterion-${criterionIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+													<div key={criterion.id ?? `criterion-${criterionIndex}`} className='rounded-xl border border-(--border-soft) bg-surface p-3 space-y-2'>
 														<div className='grid gap-2 sm:grid-cols-[1fr_auto_auto]'>
 															<input
 																type='text'
@@ -2452,18 +2562,19 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		criteria: previous.criteria.map((item, itemIndex) => (itemIndex === criterionIndex ? { ...item, name: value } : item)),
 																	}))
 																}}
-																className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 															/>
-															<p className='inline-flex items-center justify-center rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-xs font-semibold text-[var(--text-primary)]'>Total Score: {formatScore(criterionTotalScore)}</p>
+															<p className='inline-flex items-center justify-center rounded-full border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-xs font-semibold text-(--text-primary)'>Total Score: {formatScore(criterionTotalScore)}</p>
 															<button
 																type='button'
+																disabled={hasAnyScores && !eventEditorDraft.resetScores}
 																onClick={() => {
 																	updateEventEditorDraft((previous) => ({
 																		...previous,
 																		criteria: previous.criteria.filter((_, itemIndex) => itemIndex !== criterionIndex),
 																	}))
 																}}
-																className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed'>
 																Remove Criterion
 															</button>
 														</div>
@@ -2489,12 +2600,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																		className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 																	/>
 																	<input
 																		type='number'
 																		step='0.01'
 																		min='0'
+																		disabled={hasAnyScores && !eventEditorDraft.resetScores}
 																		value={subCriterion.maxScore}
 																		onChange={(event) => {
 																			const numericValue = Number(event.target.value)
@@ -2510,10 +2622,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																		className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
 																	/>
 																	<button
 																		type='button'
+																		disabled={hasAnyScores && !eventEditorDraft.resetScores}
 																		onClick={() => {
 																			updateEventEditorDraft((previous) => ({
 																				...previous,
@@ -2527,7 +2640,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																		className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed'>
 																		Remove
 																	</button>
 																</div>
@@ -2535,6 +2648,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 															<button
 																type='button'
+																disabled={hasAnyScores && !eventEditorDraft.resetScores}
 																onClick={() => {
 																	updateEventEditorDraft((previous) => ({
 																		...previous,
@@ -2548,7 +2662,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		),
 																	}))
 																}}
-																className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+																className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-surface disabled:opacity-50 disabled:cursor-not-allowed'>
 																Add Subcriterion
 															</button>
 														</div>
@@ -2558,17 +2672,17 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Presentation Assignments</h3>
-										<p className='mt-1 text-xs text-[var(--text-secondary)]'>Slots are auto-synced with entries. Edit slot labels and assigned judges below.</p>
+									<section className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
+										<h3 className='text-sm font-semibold uppercase tracking-wide text-(--text-secondary)'>Presentation Assignments</h3>
+										<p className='mt-1 text-xs text-(--text-secondary)'>Slots are auto-synced with entries. Edit slot labels and assigned judges below.</p>
 										<div className='mt-3 space-y-3'>
 											{(eventEditorDraft.presentationSlots ?? []).map((slot, slotIndex) => {
 												const contestantName = eventEditorDraft.contestants.find((contestant) => contestant.id === slot.contestantId)?.name || `Entry ${slotIndex + 1}`
 
 												return (
-													<div key={slot.id ?? `slot-${slotIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
-														<p className='text-xs text-[var(--text-secondary)]'>
-															Entry: <span className='font-semibold text-[var(--text-primary)]'>{contestantName}</span>
+													<div key={slot.id ?? `slot-${slotIndex}`} className='rounded-xl border border-(--border-soft) bg-surface p-3 space-y-2'>
+														<p className='text-xs text-(--text-secondary)'>
+															Entry: <span className='font-semibold text-(--text-primary)'>{contestantName}</span>
 														</p>
 														<input
 															type='text'
@@ -2581,7 +2695,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	presentationSlots: (previous.presentationSlots ?? []).map((item, itemIndex) => (itemIndex === slotIndex ? { ...item, label: value } : item)),
 																}))
 															}}
-															className='w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='w-full rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2'
 														/>
 
 														<div className='flex flex-wrap gap-2'>
@@ -2592,14 +2706,18 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																}
 
 																const isChecked = (slot.judgeIds ?? []).includes(judgeId)
+																const hasScored = event.submissions.some((sub) => sub.judgeId === judgeId && Array.isArray(sub.savedContestantIds) && sub.savedContestantIds.includes(String(slot.contestantId)))
+																const isLocked = hasScored && !eventEditorDraft.resetScores
 
 																return (
-																	<label key={`${judgeId}-${judgeIndex}`} className='inline-flex items-center gap-2 rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-primary)]'>
+																	<label key={`${judgeId}-${judgeIndex}`} className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${isLocked ? 'border-emerald-300 bg-emerald-50 text-emerald-900 cursor-not-allowed opacity-90' : 'border-(--border-soft) bg-(--surface-muted) text-(--text-primary)'}`}>
 																		<input
 																			type='checkbox'
-																			checked={isChecked}
-																			onChange={(event) => {
-																				const checked = event.target.checked
+																			checked={isChecked || isLocked}
+																			disabled={isLocked}
+																			onChange={(changeEvent) => {
+																				if (isLocked) return
+																				const checked = changeEvent.target.checked
 																				updateEventEditorDraft((previous) => ({
 																					...previous,
 																					presentationSlots: (previous.presentationSlots ?? []).map((item, itemIndex) => {
@@ -2621,8 +2739,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																					}),
 																				}))
 																			}}
+																			className={isLocked ? 'rounded border-emerald-400 text-emerald-700 disabled:opacity-100 disabled:cursor-not-allowed' : ''}
 																		/>
-																		{judge.name || `Judge ${judgeIndex + 1}`}
+																		{judge.name || `Judge ${judgeIndex + 1}`} {isLocked ? '(Scored)' : ''}
 																	</label>
 																)
 															})}
@@ -2630,6 +2749,24 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													</div>
 												)
 											})}
+										</div>
+									</section>
+
+									<section className='rounded-2xl border border-rose-200 bg-rose-50 p-4'>
+										<div className='flex items-center gap-3'>
+											<input
+												type='checkbox'
+												id='resetScoresToggle'
+												checked={Boolean(eventEditorDraft.resetScores)}
+												onChange={(changeEvent) => {
+													updateEventEditorDraft((previous) => ({ ...previous, resetScores: changeEvent.target.checked }))
+												}}
+												className='h-5 w-5 rounded border-rose-400 text-rose-700 focus:ring-rose-500'
+											/>
+											<div>
+												<label htmlFor='resetScoresToggle' className='text-sm font-semibold uppercase tracking-wide text-rose-900'>Unlock & Reset All Scores</label>
+												<p className='text-xs text-rose-800'>Checking this box will unlock all fields but WILL WIPE OUT all existing scores when you save.</p>
+											</div>
 										</div>
 									</section>
 
@@ -2650,7 +2787,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												setEventEditorError(null)
 											}}
 											disabled={isSavingEventEditor}
-											className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-60'>
+											className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-5 py-2 text-sm font-medium text-(--text-primary) transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60'>
 											Cancel
 										</button>
 									</div>
@@ -2659,11 +2796,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</section>
 					) : null}
 
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>
+					<section className='rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
+						<h2 className='text-xl font-semibold text-(--text-primary)'>Winners</h2>
+						<p className='mt-1 text-sm text-(--text-secondary)'>
 							{useDirectFinalRating
-								? 'Final Rating = weighted normalized score (configured AVE/GPA, NOAT, Interview percentages). Aligned strand bonus is applied to Interview points only.'
+								? 'Final Rating = normalized average (AVE/GPA, NOAT, Interview). Aligned strand bonus is applied to Interview points only.'
 								: useWeightedScores
 									? 'Final Oral Defense is shown separately by Group and Individual scoring. Final Score = (Group Rating x 60%) + (Individual Rating x 40%).'
 									: 'Final Score is computed as Total Score / Total Judges.'}
@@ -2676,48 +2813,48 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									const isIndividual = winnerContestant?.entryType === 'individual'
 
 									return (
-										<article key={winner.contestantId} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-											<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>Rank #{winner.rank}</p>
+										<article key={winner.contestantId} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
+											<p className='text-xs uppercase tracking-wide text-(--text-muted)'>Rank #{winner.rank}</p>
 											<div className='mt-1 flex items-center gap-2'>
-												<p className='text-lg font-semibold text-[var(--text-primary)]'>{winner.contestantName}</p>
+												<p className='text-lg font-semibold text-(--text-primary)'>{winner.contestantName}</p>
 												{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
 											</div>
 											{useWeightedScores ? (
 												<>
-													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+													<p className='mt-2 text-sm text-(--text-secondary)'>
 														Final Score: <span className='font-semibold'>{formatScore(winner.weightedScore ?? winner.averageScore)}</span>
 													</p>
-													<p className='text-xs text-[var(--text-muted)]'>
+													<p className='text-xs text-(--text-muted)'>
 														Group Avg: {formatScore(winner.groupAverageScore ?? 0)} · Individual Avg: {formatScore(winner.individualAverageScore ?? 0)}
 													</p>
 												</>
 											) : useDirectFinalRating ? (
 												<>
-													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+													<p className='mt-2 text-sm text-(--text-secondary)'>
 														Final Rating: <span className='font-semibold'>{formatScore(winner.finalRating ?? winner.averageScore)}</span>
 													</p>
-													<p className='text-xs text-[var(--text-muted)]'>
+													<p className='text-xs text-(--text-muted)'>
 														Base: {formatScore(winner.baseFinalRating ?? 0)} · Interview Bonus Applied: +{formatScore(winner.bonusPoints ?? 0)}
 													</p>
 												</>
 											) : (
-												<p className='mt-2 text-sm text-[var(--text-secondary)]'>
+												<p className='mt-2 text-sm text-(--text-secondary)'>
 													Average: <span className='font-semibold'>{formatScore(winner.averageScore)}</span>
 												</p>
 											)}
-											<p className='text-xs text-[var(--text-muted)]'>Judges counted: {winner.judgeCount}</p>
+											<p className='text-xs text-(--text-muted)'>Judges counted: {winner.judgeCount}</p>
 										</article>
 									)
 								})}
 							</div>
 						) : (
-							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
+							<p className='mt-3 text-sm text-(--text-secondary)'>No contestant data available.</p>
 						)}
 					</section>
 
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Program Analytics</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
+					<section className='rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
+						<h2 className='text-xl font-semibold text-(--text-primary)'>Program Analytics</h2>
+						<p className='mt-1 text-sm text-(--text-secondary)'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
 
 						<div className='mt-4 grid gap-6 sm:grid-cols-2'>
 							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
@@ -2732,16 +2869,22 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								const hasSubCriteriaOverflow = subCriteriaGroups.some((group) => group.entries.length > analyticsPreviewLimit)
 
 								return (
-									<article key={program} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] overflow-hidden'>
-										<div className='p-4 border-b border-[var(--border-soft)] bg-[var(--surface)]'>
-											<h3 className='text-lg font-bold uppercase tracking-wide text-[var(--text-primary)]'>{program} Rankings</h3>
+									<article key={program} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) overflow-hidden'>
+										<div className='flex items-center justify-between p-4 border-b border-(--border-soft) bg-surface'>
+											<h3 className='text-lg font-bold uppercase tracking-wide text-(--text-primary)'>{program} Rankings</h3>
+											<button
+												type='button'
+												onClick={() => setShowDetailedAnalyticsByProgram((previous) => ({ ...previous, [program]: !previous[program] }))}
+												className='rounded-full border border-(--border-strong) bg-(--surface-muted) px-3 py-1 text-[11px] font-semibold text-(--text-primary) transition hover:bg-surface'>
+												{showDetailedAnalyticsByProgram[program] ? 'Hide Detailed Analytics' : 'Show Detailed Analytics'}
+											</button>
 										</div>
 
 										<div className='p-4'>
 											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Team Rankings</p>
+												<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>Team Rankings</p>
 												{teams.length > analyticsPreviewLimit ? (
-													<button type='button' onClick={() => setShowAllTeamAnalytics((previous) => ({ ...previous, [program]: !showAllTeams }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+													<button type='button' onClick={() => setShowAllTeamAnalytics((previous) => ({ ...previous, [program]: !showAllTeams }))} className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-[11px] font-semibold text-(--text-primary) transition hover:bg-(--surface-muted)'>
 														{showAllTeams ? 'Show Top 3' : 'View All'}
 													</button>
 												) : null}
@@ -2749,167 +2892,171 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 											{teams.length > 0 ? (
 												<div className='mt-2 overflow-x-auto'>
 													<table className='min-w-full text-sm text-left'>
-														<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
+														<thead className='bg-(--surface-muted) text-(--text-secondary)'>
 															<tr>
 																<th className='px-4 py-2 font-semibold'>Rank</th>
 																<th className='px-4 py-2 font-semibold'>Team</th>
 																<th className='px-4 py-2 font-semibold text-right'>Score</th>
 															</tr>
 														</thead>
-														<tbody className='divide-y divide-[var(--border-soft)]'>
+														<tbody className='divide-y divide-(--border-soft)'>
 															{visibleTeams.map((team, idx) => (
-																<tr key={team.contestantName} className={idx === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
+																<tr key={team.contestantName} className={idx === 0 ? 'bg-surface font-medium' : ''}>
 																	<td className='px-4 py-3'>
-																		{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{idx + 1} <span className='text-[var(--text-muted)] text-xs ml-1'>(Overall #{team.rank})</span>
+																		{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{idx + 1} <span className='text-(--text-muted) text-xs ml-1'>(Overall #{team.rank})</span>
 																	</td>
 																	<td className='px-4 py-3'>
-																		<div className='text-[var(--text-primary)]'>{team.teamName}</div>
-																		<div className='text-[10px] text-[var(--text-muted)]'>{team.contestantName}</div>
+																		<div className='text-(--text-primary)'>{team.teamName}</div>
+																		<div className='text-[10px] text-(--text-muted)'>{team.contestantName}</div>
 																	</td>
-																	<td className='px-4 py-3 text-right text-[var(--text-primary)]'>{formatScore(team.score)}</td>
+																	<td className='px-4 py-3 text-right text-(--text-primary)'>{formatScore(team.score)}</td>
 																</tr>
 															))}
 														</tbody>
 													</table>
 												</div>
 											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3 text-center text-sm text-[var(--text-secondary)]'>No {program} teams found in Compiled Scores.</div>
+												<div className='mt-2 rounded-lg border border-(--border-soft) bg-surface p-3 text-center text-sm text-(--text-secondary)'>No {program} teams found in Compiled Scores.</div>
 											)}
 										</div>
 
-										<div className='border-t border-[var(--border-soft)] bg-[var(--surface)] p-4'>
-											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Per-Contestant Criteria Participant Rankings</p>
-												{participants.length > analyticsPreviewLimit ? (
-													<button type='button' onClick={() => setShowAllParticipantAnalytics((previous) => ({ ...previous, [program]: !showAllParticipants }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-														{showAllParticipants ? 'Show Top 3' : 'View All'}
-													</button>
-												) : null}
-											</div>
-											{participants.length > 0 ? (
-												<div className='mt-2 overflow-x-auto'>
-													<table className='min-w-full text-sm text-left'>
-														<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
-															<tr>
-																<th className='px-4 py-2 font-semibold'>Rank</th>
-																<th className='px-4 py-2 font-semibold'>Participant</th>
-																<th className='px-4 py-2 font-semibold'>Team</th>
-																<th className='px-4 py-2 font-semibold text-right'>Individual Score</th>
-															</tr>
-														</thead>
-														<tbody className='divide-y divide-[var(--border-soft)]'>
-															{visibleParticipants.map((participant, participantIndex) => (
-																<tr key={`${participant.contestantId}-${participant.participantLabel}-${participantIndex}`} className={participantIndex === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																	<td className='px-4 py-3'>
-																		{participant.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{participant.rank}
-																	</td>
-																	<td className='px-4 py-3'>
-																		<div className='text-[var(--text-primary)]'>{participant.participantLabel}</div>
-																		<div className='text-[10px] text-[var(--text-muted)]'>{participant.contestantName}</div>
-																	</td>
-																	<td className='px-4 py-3 text-[var(--text-primary)]'>{participant.teamName}</td>
-																	<td className='px-4 py-3 text-right text-[var(--text-primary)]'>
-																		{formatScore(participant.participantAverageScore)} / {formatScore(participant.participantMaxScore)} ({formatPercent(participant.participantRating)})
-																	</td>
-																</tr>
-															))}
-														</tbody>
-													</table>
+										{showDetailedAnalyticsByProgram[program] && (
+											<>
+												<div className='border-t border-(--border-soft) bg-surface p-4'>
+													<div className='flex items-center justify-between gap-2'>
+														<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>Per-Contestant Criteria Participant Rankings</p>
+														{participants.length > analyticsPreviewLimit ? (
+															<button type='button' onClick={() => setShowAllParticipantAnalytics((previous) => ({ ...previous, [program]: !showAllParticipants }))} className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-[11px] font-semibold text-(--text-primary) transition hover:bg-(--surface-muted)'>
+																{showAllParticipants ? 'Show Top 3' : 'View All'}
+															</button>
+														) : null}
+													</div>
+													{participants.length > 0 ? (
+														<div className='mt-2 overflow-x-auto'>
+															<table className='min-w-full text-sm text-left'>
+																<thead className='bg-(--surface-muted) text-(--text-secondary)'>
+																	<tr>
+																		<th className='px-4 py-2 font-semibold'>Rank</th>
+																		<th className='px-4 py-2 font-semibold'>Participant</th>
+																		<th className='px-4 py-2 font-semibold'>Team</th>
+																		<th className='px-4 py-2 font-semibold text-right'>Individual Score</th>
+																	</tr>
+																</thead>
+																<tbody className='divide-y divide-(--border-soft)'>
+																	{visibleParticipants.map((participant, participantIndex) => (
+																		<tr key={`${participant.contestantId}-${participant.participantLabel}-${participantIndex}`} className={participantIndex === 0 ? 'bg-surface font-medium' : ''}>
+																			<td className='px-4 py-3'>
+																				{participant.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{participant.rank}
+																			</td>
+																			<td className='px-4 py-3'>
+																				<div className='text-(--text-primary)'>{participant.participantLabel}</div>
+																				<div className='text-[10px] text-(--text-muted)'>{participant.contestantName}</div>
+																			</td>
+																			<td className='px-4 py-3 text-(--text-primary)'>{participant.teamName}</td>
+																			<td className='px-4 py-3 text-right text-(--text-primary)'>
+																				{formatScore(participant.participantAverageScore)} / {formatScore(participant.participantMaxScore)} ({formatPercent(participant.participantRating)})
+																			</td>
+																		</tr>
+																	))}
+																</tbody>
+															</table>
+														</div>
+													) : (
+														<div className='mt-2 rounded-lg border border-(--border-soft) bg-(--surface-muted) p-3 text-center text-sm text-(--text-secondary)'>No participant subcriteria scores found for {program}.</div>
+													)}
 												</div>
-											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3 text-center text-sm text-[var(--text-secondary)]'>No participant subcriteria scores found for {program}.</div>
-											)}
-										</div>
 
-										<div className='border-t border-[var(--border-soft)] bg-[var(--surface)] p-4'>
-											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Subcriteria Rankings (Per Subcriteria)</p>
-												{hasSubCriteriaOverflow ? (
-													<button type='button' onClick={() => setShowAllSubCriteriaAnalytics((previous) => ({ ...previous, [program]: !showAllSubCriteria }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-														{showAllSubCriteria ? 'Show Top 3' : 'View All'}
-													</button>
-												) : null}
-											</div>
-											{subCriteriaGroups.length > 0 ? (
-												<div className='mt-3 space-y-3'>
-													{subCriteriaGroups.map((group) => {
-														const visibleEntries = showAllSubCriteria ? group.entries : group.entries.slice(0, analyticsPreviewLimit)
+												<div className='border-t border-(--border-soft) bg-surface p-4'>
+													<div className='flex items-center justify-between gap-2'>
+														<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>Subcriteria Rankings (Per Subcriteria)</p>
+														{hasSubCriteriaOverflow ? (
+															<button type='button' onClick={() => setShowAllSubCriteriaAnalytics((previous) => ({ ...previous, [program]: !showAllSubCriteria }))} className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-[11px] font-semibold text-(--text-primary) transition hover:bg-(--surface-muted)'>
+																{showAllSubCriteria ? 'Show Top 3' : 'View All'}
+															</button>
+														) : null}
+													</div>
+													{subCriteriaGroups.length > 0 ? (
+														<div className='mt-3 space-y-3'>
+															{subCriteriaGroups.map((group) => {
+																const visibleEntries = showAllSubCriteria ? group.entries : group.entries.slice(0, analyticsPreviewLimit)
 
-														return (
-															<div key={`${program}-${group.subCriterionKey}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-																<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{group.subCriterionName}</p>
-																<div className='mt-2 overflow-x-auto'>
-																	<table className='min-w-full text-sm text-left'>
-																		<thead className='bg-[var(--surface)] text-[var(--text-secondary)]'>
-																			<tr>
-																				<th className='px-3 py-2 font-semibold'>Rank</th>
-																				<th className='px-3 py-2 font-semibold'>Participant</th>
-																				<th className='px-3 py-2 font-semibold'>Team</th>
-																				<th className='px-3 py-2 font-semibold text-right'>Subcriteria Score</th>
-																			</tr>
-																		</thead>
-																		<tbody className='divide-y divide-[var(--border-soft)]'>
-																			{visibleEntries.map((entry, entryIndex) => {
-																				const entryContestant = contestantsById.get(entry.contestantId)
-																				const teamLabel = entryContestant?.entryType === 'individual' ? 'N/A' : entry.teamName
-
-																				return (
-																					<tr key={`${group.subCriterionKey}-${entry.contestantId}-${entry.participantLabel}-${entryIndex}`} className={entryIndex === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																						<td className='px-3 py-2'>
-																							{entry.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{entry.rank}
-																						</td>
-																						<td className='px-3 py-2'>
-																							<div className='text-[var(--text-primary)]'>{entry.participantLabel}</div>
-																							<div className='text-[10px] text-[var(--text-muted)]'>{entry.contestantName}</div>
-																						</td>
-																						<td className='px-3 py-2 text-[var(--text-primary)]'>{teamLabel}</td>
-																						<td className='px-3 py-2 text-right text-[var(--text-primary)]'>
-																							{formatScore(entry.averageScore)} / {formatScore(entry.maxScore)} ({formatPercent(entry.rating)})
-																						</td>
+																return (
+																	<div key={`${program}-${group.subCriterionKey}`} className='rounded-lg border border-(--border-soft) bg-(--surface-muted) p-3'>
+																		<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>{group.subCriterionName}</p>
+																		<div className='mt-2 overflow-x-auto'>
+																			<table className='min-w-full text-sm text-left'>
+																				<thead className='bg-surface text-(--text-secondary)'>
+																					<tr>
+																						<th className='px-3 py-2 font-semibold'>Rank</th>
+																						<th className='px-3 py-2 font-semibold'>Participant</th>
+																						<th className='px-3 py-2 font-semibold'>Team</th>
+																						<th className='px-3 py-2 font-semibold text-right'>Subcriteria Score</th>
 																					</tr>
-																				)
-																			})}
-																		</tbody>
-																	</table>
-																</div>
-															</div>
-														)
-													})}
+																				</thead>
+																				<tbody className='divide-y divide-(--border-soft)'>
+																					{visibleEntries.map((entry, entryIndex) => {
+																						const entryContestant = contestantsById.get(entry.contestantId)
+																						const teamLabel = entryContestant?.entryType === 'individual' ? 'N/A' : entry.teamName
+
+																						return (
+																							<tr key={`${group.subCriterionKey}-${entry.contestantId}-${entry.participantLabel}-${entryIndex}`} className={entryIndex === 0 ? 'bg-surface font-medium' : ''}>
+																								<td className='px-3 py-2'>
+																									{entry.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{entry.rank}
+																								</td>
+																								<td className='px-3 py-2'>
+																									<div className='text-(--text-primary)'>{entry.participantLabel}</div>
+																									<div className='text-[10px] text-(--text-muted)'>{entry.contestantName}</div>
+																								</td>
+																								<td className='px-3 py-2 text-(--text-primary)'>{teamLabel}</td>
+																								<td className='px-3 py-2 text-right text-(--text-primary)'>
+																									{formatScore(entry.averageScore)} / {formatScore(entry.maxScore)} ({formatPercent(entry.rating)})
+																								</td>
+																							</tr>
+																						)
+																					})}
+																				</tbody>
+																			</table>
+																		</div>
+																	</div>
+																)
+															})}
+														</div>
+													) : (
+														<div className='mt-2 rounded-lg border border-(--border-soft) bg-(--surface-muted) p-3 text-center text-sm text-(--text-secondary)'>No subcriteria ranking data found for {program}.</div>
+													)}
 												</div>
-											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3 text-center text-sm text-[var(--text-secondary)]'>No subcriteria ranking data found for {program}.</div>
-											)}
-										</div>
+											</>
+										)}
 									</article>
 								)
 							})}
 						</div>
 					</section>
 
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
+					<section className='rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
+						<h2 className='text-xl font-semibold text-(--text-primary)'>Compiled Scores</h2>
 						{useWeightedScores ? (
-							<p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p>
+							<p className='mt-1 text-xs text-(--text-secondary)'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p>
 						) : useDirectFinalRating ? (
-							<p className='mt-1 text-xs text-[var(--text-secondary)]'>Direct Rating: Final Rating = normalized average (AVE/GPA, NOAT, Interview), with aligned strand bonus applied to Interview points only.</p>
+							<p className='mt-1 text-xs text-(--text-secondary)'>Direct Rating: Final Rating = normalized average (AVE/GPA, NOAT, Interview), with aligned strand bonus applied to Interview points only.</p>
 						) : null}
-						<div className='mt-4 overflow-x-auto rounded-2xl border border-[var(--border-soft)]'>
+						<div className='mt-4 overflow-x-auto rounded-2xl border border-(--border-soft)'>
 							<table className='min-w-full border-collapse text-sm'>
 								<thead>
-									<tr className='bg-[var(--surface-muted)] text-left text-[var(--text-primary)]'>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Rank</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Contestant</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>
+									<tr className='bg-(--surface-muted) text-left text-(--text-primary)'>
+										<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Rank</th>
+										<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Contestant</th>
+										<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>
 											<div className='flex flex-col gap-1'>
 												<span>Program</span>
-												<div className='flex items-center gap-3 text-[10px] font-normal text-[var(--text-secondary)]'>
+												<div className='flex items-center gap-3 text-[10px] font-normal text-(--text-secondary)'>
 													<label className='flex items-center gap-1 cursor-pointer'>
 														<input
 															type='checkbox'
 															checked={allContestantsBSINT}
 															disabled={isSavingProgramAssignments}
 															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSINT' : null)}
-															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+															className='rounded border-(--border-strong) text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
 														/>
 														All BSINT
 													</label>
@@ -2919,7 +3066,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															checked={allContestantsBSCS}
 															disabled={isSavingProgramAssignments}
 															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSCS' : null)}
-															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+															className='rounded border-(--border-strong) text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
 														/>
 														All BSCS
 													</label>
@@ -2928,19 +3075,19 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</th>
 										{useWeightedScores ? (
 											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Rating</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Rating</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Final Score</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Group Score</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Group Rating</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Individual Score</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Individual Rating</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Final Score</th>
 											</>
 										) : (
 											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{useDirectFinalRating ? 'Final Rating' : 'Average Score'}</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>{useDirectFinalRating ? 'Final Rating' : 'Average Score'}</th>
+												<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Total Score</th>
 											</>
 										)}
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Judges Counted</th>
+										<th className='border-b border-(--border-soft) px-3 py-3 font-semibold'>Judges Counted</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -2970,15 +3117,15 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 										return (
 											<Fragment key={result.contestantId}>
-												<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3 font-medium'>#{result.rank}</td>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
+												<tr className={index % 2 === 0 ? 'bg-surface' : 'bg-(--surface-muted)'}>
+													<td className='border-b border-(--border-soft) px-3 py-3 font-medium'>#{result.rank}</td>
+													<td className='border-b border-(--border-soft) px-3 py-3'>
 														<div className='flex items-center gap-2'>
 															<span>{result.contestantName}</span>
 															{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
 														</div>
 													</td>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
+													<td className='border-b border-(--border-soft) px-3 py-3'>
 														<div className='flex items-center gap-3'>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
 																<input
@@ -2986,48 +3133,42 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	checked={currentProgram === 'BSINT'}
 																	disabled={isSavingProgramAssignments}
 																	onChange={() => toggleContestantProgram(result.contestantId, 'BSINT')}
-																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+																	className='rounded border-(--border-strong) text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
 																/>
 																BSINT
 															</label>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
-																<input
-																	type='checkbox'
-																	checked={currentProgram === 'BSCS'}
-																	disabled={isSavingProgramAssignments}
-																	onChange={() => toggleContestantProgram(result.contestantId, 'BSCS')}
-																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
-																/>
+																<input type='checkbox' checked={currentProgram === 'BSCS'} disabled={isSavingProgramAssignments} onChange={() => toggleContestantProgram(result.contestantId, 'BSCS')} className='rounded border-(--border-strong) text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60' />
 																BSCS
 															</label>
 														</div>
 													</td>
 													{useWeightedScores ? (
 														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.groupAverageScore ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.groupRating ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.individualAverageScore ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.individualRating ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatScore(result.groupAverageScore ?? 0)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatPercent(result.groupRating ?? 0)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatScore(result.individualAverageScore ?? 0)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatPercent(result.individualRating ?? 0)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
 														</>
 													) : (
 														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatScore(useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
+															<td className='border-b border-(--border-soft) px-3 py-3'>{formatScore(result.totalScore)}</td>
 														</>
 													)}
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
+													<td className='border-b border-(--border-soft) px-3 py-3'>{result.judgeCount}</td>
 												</tr>
 												{hasParticipantScores ? (
-													<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
-														<td className='border-b border-[var(--border-soft)] px-3 py-2 text-xs text-[var(--text-secondary)]' colSpan={compiledTableColumnCount}>
+													<tr className={index % 2 === 0 ? 'bg-surface' : 'bg-(--surface-muted)'}>
+														<td className='border-b border-(--border-soft) px-3 py-2 text-xs text-(--text-secondary)' colSpan={compiledTableColumnCount}>
 															<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
-																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Participant Scores:</span>
+																<span className='font-semibold shrink-0 sm:min-w-30'>Participant Scores:</span>
 																<div className='flex flex-wrap items-center gap-2'>
 																	{result.participantScores?.map((participant, participantIndex) => {
 																		const participantRating = participantAnalyticsScore(participant)
 																		return (
-																			<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
+																			<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-(--border-soft) bg-surface px-2 py-1'>
 																				{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participantRating)})
 																			</span>
 																		)
@@ -3035,7 +3176,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																</div>
 															</div>
 															<div className='mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
-																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Judge Assignment:</span>
+																<span className='font-semibold shrink-0 sm:min-w-30'>Judge Assignment:</span>
 																<div className='relative inline-flex items-center gap-2'>
 																	<div className='flex flex-wrap items-center gap-1'>
 																		{assignedJudgeStatus.length > 0 ? (
@@ -3059,12 +3200,29 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		<div className='absolute left-0 top-full z-20 mt-2 w-max max-w-[min(92vw,560px)] rounded-2xl border border-cyan-300 bg-white p-3 shadow-xl'>
 																			<p className='text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>Swap Judges</p>
 																			<div className='mt-2 flex flex-wrap items-center gap-2'>
-																				{event.judges.map((judge) => (
-																					<label key={`${result.contestantId}-${judge.id}`} className='flex items-center gap-1 rounded-full border border-cyan-300 bg-white px-2 py-1 text-[11px] text-cyan-900'>
-																						<input type='checkbox' checked={assignmentDraftJudgeIds.includes(judge.id)} onChange={() => toggleJudgeAssignment(result.contestantId, judge.id)} className='rounded border-cyan-400 text-cyan-700 focus:ring-cyan-500' />
-																						<span>{judge.name}</span>
-																					</label>
-																				))}
+																				{event.judges.map((judge) => {
+																					const judgeBreakdown = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
+																					const hasScored = judgeBreakdown ? Object.prototype.hasOwnProperty.call(judgeBreakdown.totalsByContestant, result.contestantId) : false
+
+																					return (
+																						<label key={`${result.contestantId}-${judge.id}`} className={`flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${hasScored ? 'border-emerald-300 bg-emerald-50 text-emerald-900 cursor-not-allowed opacity-90' : 'border-cyan-300 bg-white text-cyan-900'}`}>
+																							<input
+																								type='checkbox'
+																								checked={assignmentDraftJudgeIds.includes(judge.id) || hasScored}
+																								onChange={() => {
+																									if (!hasScored) {
+																										toggleJudgeAssignment(result.contestantId, judge.id)
+																									}
+																								}}
+																								disabled={hasScored}
+																								className={`rounded ${hasScored ? 'border-emerald-400 text-emerald-700 disabled:opacity-100 disabled:cursor-not-allowed' : 'border-cyan-400 text-cyan-700 focus:ring-cyan-500'}`}
+																							/>
+																							<span>
+																								{judge.name} {hasScored ? '(Scored)' : ''}
+																							</span>
+																						</label>
+																					)
+																				})}
 																			</div>
 																			<div className='mt-3 flex flex-wrap items-center gap-2'>
 																				<button
@@ -3072,7 +3230,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																					onClick={() => saveJudgeAssignment(result.contestantId)}
 																					disabled={!hasAssignmentChanges || isSavingAssignment}
 																					className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
-																					{isSavingAssignment ? 'Saving...' : 'Save Swap'}
+																					{isSavingAssignment ? 'Saving...' : 'Save'}
 																				</button>
 																				<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId(null)} disabled={isSavingAssignment} className='rounded-full border border-cyan-300 bg-white px-3 py-1 text-[11px] font-semibold text-cyan-800 transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60'>
 																					Cancel
@@ -3093,8 +3251,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</section>
 
-					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Links and Submission Status</h2>
+					<section className='print:hidden rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
+						<h2 className='text-xl font-semibold text-(--text-primary)'>Judge Links and Submission Status</h2>
 						<div className='mt-4 space-y-3'>
 							{event.judges.map((judge) => {
 								const judgeResult = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
@@ -3103,19 +3261,19 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								const copyValue = baseUrl || typeof window === 'undefined' ? fullJudgeUrl : `${window.location.origin}${judgePath}`
 
 								return (
-									<article key={judge.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<article key={judge.id} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 											<div>
-												<p className='text-sm font-semibold text-[var(--text-primary)]'>{judge.name}</p>
-												<a href={fullJudgeUrl} className='block break-all text-sm text-[var(--text-secondary)] underline'>
+												<p className='text-sm font-semibold text-(--text-primary)'>{judge.name}</p>
+												<a href={fullJudgeUrl} className='block break-all text-sm text-(--text-secondary) underline'>
 													{fullJudgeUrl}
 												</a>
 											</div>
 											<div className='flex flex-wrap items-center gap-2'>
-												<button type='button' onClick={() => copyLink(copyValue)} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												<button type='button' onClick={() => copyLink(copyValue)} className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-xs font-medium text-(--text-primary) transition hover:bg-(--surface-muted)'>
 													{copiedLink === copyValue ? 'Copied' : 'Copy Link'}
 												</button>
-												<div className='text-sm text-[var(--text-secondary)]'>{judgeResult?.submitted ? <span>Submitted {judgeResult.submittedAt ? formatDate(judgeResult.submittedAt) : ''}</span> : <span>Not submitted yet</span>}</div>
+												<div className='text-sm text-(--text-secondary)'>{judgeResult?.submitted ? <span>Submitted {judgeResult.submittedAt ? formatDate(judgeResult.submittedAt) : ''}</span> : <span>Not submitted yet</span>}</div>
 											</div>
 										</div>
 									</article>
@@ -3124,21 +3282,25 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</section>
 
-					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
-						{!useDirectFinalRating ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
+					<section className='print:hidden rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
+						<h2 className='text-xl font-semibold text-(--text-primary)'>Rubric Breakdown</h2>
+						{event.showRubricLegend && (
+							<p className='mt-1 text-xs text-(--text-secondary)'>
+								Legend: {rubricLegendText} {event.showRubricLegend ? <span className='text-emerald-600'>(Visible to judges)</span> : <span className='text-amber-600'>(Hidden from judges)</span>}
+							</p>
+						)}
 						<div className='mt-4 grid gap-4'>
 							{event.criteria.map((criterion) => {
 								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
 								const criterionScopeLabel = showPerContestantParticipants ? 'Per Contestant (Individual)' : 'Group Criteria Only'
 
 								return (
-									<article key={criterion.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<article key={criterion.id} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) p-4'>
 										<div className='flex flex-wrap items-center justify-between gap-2'>
-											<p className='text-sm font-semibold text-[var(--text-primary)]'>
+											<p className='text-sm font-semibold text-(--text-primary)'>
 												{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
 											</p>
-											<span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-secondary)]'>Scope: {criterionScopeLabel}</span>
+											<span className='rounded-full border border-(--border-soft) bg-surface px-2 py-0.5 text-[11px] font-semibold text-(--text-secondary)'>Scope: {criterionScopeLabel}</span>
 										</div>
 
 										{showPerContestantParticipants ? (
@@ -3147,13 +3309,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													const mergedSubCriteria = mergedIndividualSubCriteriaForContestant(criterion, contestant)
 
 													return (
-														<div key={`${criterion.id}-${contestant.id}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3'>
-															<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{contestant.name}</p>
+														<div key={`${criterion.id}-${contestant.id}`} className='rounded-lg border border-(--border-soft) bg-surface p-3'>
+															<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>{contestant.name}</p>
 															<div className='mt-2 space-y-2'>
 																{mergedSubCriteria.map((item) => (
-																	<div key={`${contestant.id}-${item.id}`} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm sm:grid-cols-2'>
-																		<span className='text-[var(--text-primary)]'>{item.name}</span>
-																		<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(item.maxScore)}</span>
+																	<div key={`${contestant.id}-${item.id}`} className='grid gap-2 rounded-lg border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm sm:grid-cols-2'>
+																		<span className='text-(--text-primary)'>{item.name}</span>
+																		<span className='text-(--text-secondary)'>Max Score: {formatScore(item.maxScore)}</span>
 																	</div>
 																))}
 															</div>
@@ -3164,9 +3326,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										) : (
 											<div className='mt-2 space-y-2'>
 												{criterion.subCriteria.map((subCriterion) => (
-													<div key={subCriterion.id} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm sm:grid-cols-2'>
-														<span className='text-[var(--text-primary)]'>{subCriterion.name}</span>
-														<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
+													<div key={subCriterion.id} className='grid gap-2 rounded-lg border border-(--border-soft) bg-surface px-3 py-2 text-sm sm:grid-cols-2'>
+														<span className='text-(--text-primary)'>{subCriterion.name}</span>
+														<span className='text-(--text-secondary)'>Max Score: {formatScore(subCriterion.maxScore)}</span>
 													</div>
 												))}
 											</div>
