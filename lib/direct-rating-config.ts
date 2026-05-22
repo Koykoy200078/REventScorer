@@ -304,7 +304,7 @@ export function directScoreFieldKeyFromName(name: string): DirectScoreFieldKey |
 	return null
 }
 
-export function detectDirectRatingScoreFields(criteria: EventCriterion[] | CriterionLike[]): DirectRatingScoreField[] {
+export function detectDirectRatingScoreFields(criteria: EventCriterion[] | CriterionLike[], configValue?: DirectRatingConfig): DirectRatingScoreField[] {
 	const fieldsByKey = new Map<DirectScoreFieldKey, DirectRatingScoreField>()
 	let totalSubCriteria = 0
 
@@ -335,7 +335,8 @@ export function detectDirectRatingScoreFields(criteria: EventCriterion[] | Crite
 	}
 
 	const orderedFields = DIRECT_SCORE_FIELD_ORDER.map((fieldKey) => fieldsByKey.get(fieldKey)).filter((field): field is DirectRatingScoreField => Boolean(field))
-	return orderedFields.length === DIRECT_SCORE_FIELD_ORDER.length ? orderedFields : []
+	const detectedFields = orderedFields.length === DIRECT_SCORE_FIELD_ORDER.length ? orderedFields : []
+	return configValue ? applyDirectRatingConfigMaxScores(detectedFields, configValue) : detectedFields
 }
 
 export function applyDirectRatingConfigMaxScores(fields: DirectRatingScoreField[], configValue: DirectRatingConfig): DirectRatingScoreField[] {

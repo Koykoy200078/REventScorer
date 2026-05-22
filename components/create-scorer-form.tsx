@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { buildFinalOralDefenseCriteria, DIRECT_RATING_CONTESTANT_SAMPLES, DIRECT_RATING_CRITERIA, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
+import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
 
@@ -209,6 +209,7 @@ export function CreateScorerForm() {
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
 	const [rubricLegend, setRubricLegend] = useState<RubricLegendDraft[]>(() => defaultRubricLegendDrafts())
+	const [showRubricLegend, setShowRubricLegend] = useState(false)
 	const [isSaving, setIsSaving] = useState(false)
 	const [showPreview, setShowPreview] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -238,32 +239,6 @@ export function CreateScorerForm() {
 		return new Map(judges.map((judge) => [judge.id, judge.name.trim()]))
 	}, [judges])
 
-	useEffect(() => {
-		const activeJudgeIds = new Set(judges.map((judge) => judge.id))
-		const onlyJudgeId = judges.length === 1 ? judges[0].id : null
-		setPresentationSlots((previous) => {
-			let hasChanges = false
-
-			const nextSlots = previous.map((slot) => {
-				const filteredJudgeIds = slot.judgeIds.filter((judgeId) => activeJudgeIds.has(judgeId))
-				const nextJudgeIds = onlyJudgeId && filteredJudgeIds.length === 0 ? [onlyJudgeId] : filteredJudgeIds
-				const unchanged = nextJudgeIds.length === slot.judgeIds.length && nextJudgeIds.every((judgeId, index) => judgeId === slot.judgeIds[index])
-
-				if (unchanged) {
-					return slot
-				}
-
-				hasChanges = true
-				return {
-					...slot,
-					judgeIds: nextJudgeIds,
-				}
-			})
-
-			return hasChanges ? nextSlots : previous
-		})
-	}, [judges, presentationSlots])
-
 	function loadPaperTemplate(): void {
 		const sampleContestants = [...PAPER_PRESENTATION_CONTESTANT_SAMPLES]
 		setTitle('Paper Presentation')
@@ -273,6 +248,7 @@ export function CreateScorerForm() {
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
 		setCriteria(toCriterionDraft(PAPER_PRESENTATION_CRITERIA))
 		setRubricLegend(defaultRubricLegendDrafts())
+		setShowRubricLegend(false)
 		setShowPreview(false)
 		setError(null)
 	}
@@ -286,19 +262,7 @@ export function CreateScorerForm() {
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
 		setCriteria(toCriterionDraft(buildFinalOralDefenseCriteria()))
 		setRubricLegend(defaultRubricLegendDrafts())
-		setShowPreview(false)
-		setError(null)
-	}
-
-	function loadDirectRatingTemplate(): void {
-		const sampleContestants = [...DIRECT_RATING_CONTESTANT_SAMPLES]
-		setTitle('Direct Rating Sheet')
-		setDescription('Judges enter AVE/GPA, NOAT, and Interview directly for each applicant.')
-		setEventScoringType('standard')
-		setContestants(contestantsFromNames(sampleContestants, 'individual'))
-		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
-		setCriteria(toCriterionDraft(DIRECT_RATING_CRITERIA))
-		setRubricLegend(defaultRubricLegendDrafts())
+		setShowRubricLegend(false)
 		setShowPreview(false)
 		setError(null)
 	}
@@ -564,6 +528,7 @@ export function CreateScorerForm() {
 					}),
 				)
 				.filter((legendItem) => legendItem.label.length > 0),
+			showRubricLegend,
 			contestants: contestants.map((contestant) => ({
 				name: contestant.name,
 				entryType: contestant.entryType,
@@ -578,11 +543,16 @@ export function CreateScorerForm() {
 				name: criterion.name,
 				subCriteria: criterion.appliesTo === 'individual' ? expandSubCriteriaForIndividualCriteria(criterion.subCriteria, contestants) : normalizeSubCriteriaForPayload(criterion.subCriteria),
 			})),
-			presentationSlots: presentationSlots.map((slot, index) => ({
-				label: slot.label || `Slot ${index + 1}`,
-				contestantIndex: index,
-				judgeNames: slot.judgeIds.map((judgeId) => judgeNameById.get(judgeId) ?? '').filter((name) => name.length > 0),
-			})),
+			presentationSlots: presentationSlots.map((slot, index) => {
+				const activeJudgeIds = slot.judgeIds.filter((judgeId) => judgeNameById.has(judgeId))
+				const normalizedJudgeIds = activeJudgeIds.length === 0 && judges.length === 1 ? [judges[0].id] : activeJudgeIds
+
+				return {
+					label: slot.label || `Slot ${index + 1}`,
+					contestantIndex: index,
+					judgeNames: normalizedJudgeIds.map((judgeId) => judgeNameById.get(judgeId) ?? '').filter((name) => name.length > 0),
+				}
+			}),
 		}
 
 		try {
@@ -615,17 +585,13 @@ export function CreateScorerForm() {
 						<h1 className='text-3xl font-semibold tracking-tight text-emerald-950'>Create Scorer Event</h1>
 						<p className='mt-2 max-w-3xl text-sm text-emerald-800/80'>Build a fully dynamic rubric with parent criteria, subcriteria, judges, and contestant entries.</p>
 					</div>
-					<div className='flex flex-wrap items-center gap-3'>
-						<button type='button' onClick={loadPaperTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
-							Use Paper Presentation Template
-						</button>
-						<button type='button' onClick={loadFinalOralTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
-							Use Final Oral Defense Template
-						</button>
-						<button type='button' onClick={loadDirectRatingTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
-							Use Direct Rating Template
-						</button>
-					</div>
+
+					<button type='button' onClick={loadPaperTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+						Use Paper Presentation Template
+					</button>
+					<button type='button' onClick={loadFinalOralTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+						Use Final Oral Defense Template
+					</button>
 				</div>
 
 				<form onSubmit={onSubmit} className='mt-8 space-y-8'>
@@ -928,60 +894,71 @@ export function CreateScorerForm() {
 								<h2 className='text-lg font-semibold text-emerald-950'>Rubric Legend</h2>
 								<p className='mt-1 text-xs text-emerald-900/80'>Customize the score meanings shown to judges and in the admin dashboard.</p>
 							</div>
-							<div className='flex items-center gap-2'>
-								<button type='button' onClick={resetRubricLegend} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
-									Reset Default Legend
-								</button>
-								<button type='button' onClick={addRubricLegendItem} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
-									Add Legend Item
-								</button>
-							</div>
+							<label className='flex items-center gap-2 text-sm font-medium text-emerald-900'>
+								<input type='checkbox' checked={showRubricLegend} onChange={(event) => setShowRubricLegend(event.target.checked)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+								Enable Rubric Legend
+							</label>
 						</div>
 
-						<p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900'>Current Legend: {rubricLegendText}</p>
-
-						<div className='mt-3 space-y-2'>
-							{rubricLegend.map((legendItem, legendIndex) => (
-								<div key={legendItem.id} className='grid gap-2 rounded-xl border border-emerald-100 bg-white p-3 sm:grid-cols-[140px_1fr_auto]'>
-									<input
-										value={legendItem.score}
-										onChange={(event) =>
-											updateRubricLegendItem(legendItem.id, {
-												score: event.target.value,
-											})
-										}
-										type='number'
-										min={0}
-										step='0.01'
-										placeholder={`Score ${legendIndex + 1}`}
-										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
-									/>
-									<input
-										value={legendItem.label}
-										onChange={(event) =>
-											updateRubricLegendItem(legendItem.id, {
-												label: event.target.value,
-											})
-										}
-										placeholder={`Meaning for score ${legendIndex + 1}`}
-										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
-									/>
-									{rubricLegend.length > 1 ? (
-										<button type='button' onClick={() => removeRubricLegendItem(legendItem.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
-											Remove
-										</button>
-									) : null}
+						{showRubricLegend ? (
+							<>
+								<div className='mb-3 flex items-center gap-2'>
+									<button type='button' onClick={resetRubricLegend} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+										Reset Default Legend
+									</button>
+									<button type='button' onClick={addRubricLegendItem} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+										Add Legend Item
+									</button>
 								</div>
-							))}
-						</div>
 
-						<div className='mt-3 flex flex-wrap gap-2'>
-							{normalizedRubricLegend.map((legendItem) => (
-								<span key={`${legendItem.score}-${legendItem.label}`} className='rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900'>
-									{formatLegendScore(legendItem.score)} - {legendItem.label}
-								</span>
-							))}
-						</div>
+								<p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900'>Current Legend: {rubricLegendText}</p>
+
+								<div className='mt-3 space-y-2'>
+									{rubricLegend.map((legendItem, legendIndex) => (
+										<div key={legendItem.id} className='grid gap-2 rounded-xl border border-emerald-100 bg-white p-3 sm:grid-cols-[140px_1fr_auto]'>
+											<input
+												value={legendItem.score}
+												onChange={(event) =>
+													updateRubricLegendItem(legendItem.id, {
+														score: event.target.value,
+													})
+												}
+												type='number'
+												min={0}
+												step='0.01'
+												placeholder={`Score ${legendIndex + 1}`}
+												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
+											/>
+											<input
+												value={legendItem.label}
+												onChange={(event) =>
+													updateRubricLegendItem(legendItem.id, {
+														label: event.target.value,
+													})
+												}
+												placeholder={`Meaning for score ${legendIndex + 1}`}
+												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+											/>
+											{rubricLegend.length > 1 ? (
+												<button type='button' onClick={() => removeRubricLegendItem(legendItem.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+													Remove
+												</button>
+											) : null}
+										</div>
+									))}
+								</div>
+
+								<div className='mt-3 flex flex-wrap gap-2'>
+									{normalizedRubricLegend.map((legendItem) => (
+										<span key={`${legendItem.score}-${legendItem.label}`} className='rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900'>
+											{formatLegendScore(legendItem.score)} - {legendItem.label}
+										</span>
+									))}
+								</div>
+							</>
+						) : (
+							<p className='text-xs text-emerald-900/60'>Rubric Legend is disabled. Enable it to customize score meanings for judges.</p>
+						)}
 					</section>
 
 					<section className='rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
@@ -1023,10 +1000,12 @@ export function CreateScorerForm() {
 									<p className='mt-1 text-sm text-cyan-950'>{description.trim() || 'No description provided.'}</p>
 								</div>
 
-								<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-									<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Rubric Legend</p>
-									<p className='mt-1 text-sm text-cyan-950'>{rubricLegendText}</p>
-								</div>
+								{showRubricLegend && (
+									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
+										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Rubric Legend</p>
+										<p className='mt-1 text-sm text-cyan-950'>{rubricLegendText}</p>
+									</div>
+								)}
 
 								<div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
 									<div className='rounded-xl border border-cyan-200 bg-white p-3'>

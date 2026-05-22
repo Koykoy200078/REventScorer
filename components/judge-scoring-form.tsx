@@ -1,9 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Select, { type SingleValue, type StylesConfig } from 'react-select'
 
-import { applyDirectRatingConfigMaxScores, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightTotal, directScoreWeightsFromConfig, DIRECT_RATING_SELECT_GROUP_OPTIONS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus, type DirectRatingSelectOption } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_TRACK_STRAND_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -212,6 +211,7 @@ interface JudgeScoringFormProps {
 	criteria: EventCriterion[]
 	judge: JudgeProfile
 	rubricLegend?: RubricLegendItem[]
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	presentationSlots?: EventPresentationSlot[]
 	existingScores?: ScoreMatrix
@@ -493,7 +493,7 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, showRubricLegend = false, directRatingConfig, presentationSlots, existingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
@@ -521,30 +521,10 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		const derivedConfig = deriveDirectRatingConfigFromCriteria(criteria)
 		return normalizeDirectRatingConfig(directRatingConfig, derivedConfig ?? undefined)
 	}, [criteria, directRatingConfig])
-	const directScoreWeights = useMemo(() => directScoreWeightsFromConfig(resolvedDirectRatingConfig), [resolvedDirectRatingConfig])
-	const directScoreWeightMax = useMemo(() => directScoreWeightTotal(directScoreWeights), [directScoreWeights])
-	const strandOptionsByLowerValue = useMemo(() => {
-		const map = new Map<string, DirectRatingSelectOption>()
-
-		for (const group of DIRECT_RATING_SELECT_GROUP_OPTIONS) {
-			for (const option of group.options) {
-				map.set(option.value.toLowerCase(), option)
-			}
-		}
-
-		return map
-	}, [])
-	const baseDirectScoreFields = useMemo(() => detectDirectRatingScoreFields(criteria), [criteria])
-	const directScoreFields = useMemo(() => applyDirectRatingConfigMaxScores(baseDirectScoreFields, resolvedDirectRatingConfig), [baseDirectScoreFields, resolvedDirectRatingConfig])
+	const directScoreFields = useMemo(() => detectDirectRatingScoreFields(criteria, resolvedDirectRatingConfig), [criteria, resolvedDirectRatingConfig])
 	const isDirectScoreMode = directScoreFields.length > 0
 
-	const maxPossibleScore = useMemo(() => {
-		if (isDirectScoreMode) {
-			return round(directScoreFields.reduce((sum, field) => sum + field.maxScore, 0))
-		}
-
-		return round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0))
-	}, [activeContestant, criteria, directScoreFields, isDirectScoreMode])
+	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)), [criteria, activeContestant])
 	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).length, 0), [criteria, activeContestant])
 	const slotLabelsByContestant = useMemo(() => {
 		const labels = new Map<string, string>()
@@ -571,15 +551,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			return 0
 		}
 
-		if (isDirectScoreMode) {
-			return round(
-				directScoreFields.reduce((sum, field) => {
-					const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
-					return sum + parseAndClampScore(rawValue, field.maxScore)
-				}, 0),
-			)
-		}
-
 		return round(
 			criteria.reduce((total, criterion) => {
 				const criterionTotal = applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => {
@@ -590,34 +561,33 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 				return total + criterionTotal
 			}, 0),
 		)
-	}, [activeContestant, activeContestantId, criteria, directScoreFields, isDirectScoreMode, scores])
+	}, [activeContestant, activeContestantId, criteria, scores])
 
 	const directScoreMaxPossible = useMemo(() => {
 		if (!isDirectScoreMode || directScoreFields.length === 0) {
 			return 0
 		}
 
-		return directScoreWeightMax
-	}, [directScoreFields, directScoreWeightMax, isDirectScoreMode])
+		return 100
+	}, [directScoreFields, isDirectScoreMode])
 
 	const activeDirectBaseFinalRating = useMemo(() => {
 		if (!isDirectScoreMode || !activeContestantId || directScoreFields.length === 0) {
 			return 0
 		}
 
-		const totalWeightedPercent = directScoreFields.reduce((sum, field) => {
+		const totalPercent = directScoreFields.reduce((sum, field) => {
 			const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 			const score = parseAndClampScore(rawValue, field.maxScore)
-			const weight = directScoreWeights[field.key] ?? 0
-			if (field.maxScore <= 0 || weight <= 0) {
+			if (field.maxScore <= 0) {
 				return sum
 			}
 
-			return sum + (score / field.maxScore) * weight
+			return sum + (score / field.maxScore) * 100
 		}, 0)
 
-		return round(totalWeightedPercent)
-	}, [activeContestantId, directScoreFields, directScoreWeights, isDirectScoreMode, scores])
+		return round(totalPercent / directScoreFields.length)
+	}, [activeContestantId, directScoreFields, isDirectScoreMode, scores])
 	const activeDirectInterviewField = useMemo(() => directScoreFields.find((field) => field.key === 'interview') ?? null, [directScoreFields])
 	const activeDirectInterviewScore = useMemo(() => {
 		if (!isDirectScoreMode || !activeContestantId || !activeDirectInterviewField) {
@@ -629,36 +599,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	}, [activeContestantId, activeDirectInterviewField, isDirectScoreMode, scores])
 
 	const activeDirectStrand = activeContestantId ? (contestantDetails[activeContestantId]?.strand ?? '') : ''
-	const activeDirectStrandOption = useMemo<DirectRatingSelectOption | null>(() => {
-		const strandValue = activeDirectStrand.trim()
-		if (strandValue.length === 0) {
-			return null
-		}
-
-		return strandOptionsByLowerValue.get(strandValue.toLowerCase()) ?? { value: strandValue, label: strandValue, track: 'Custom' }
-	}, [activeDirectStrand, strandOptionsByLowerValue])
-	const judgeStrandSelectStyles = useMemo<StylesConfig<DirectRatingSelectOption, false>>(
-		() => ({
-			control: (base, state) => ({
-				...base,
-				minHeight: 42,
-				borderColor: state.isFocused ? '#0891b2' : '#67e8f9',
-				boxShadow: state.isFocused ? '0 0 0 2px rgba(8,145,178,0.2)' : 'none',
-				':hover': {
-					borderColor: '#22d3ee',
-				},
-			}),
-			menu: (base) => ({
-				...base,
-				zIndex: 50,
-			}),
-			menuPortal: (base) => ({
-				...base,
-				zIndex: 60,
-			}),
-		}),
-		[],
-	)
 	const activeDirectBonusPoints = useMemo(() => {
 		if (!isDirectScoreMode || activeDirectStrand.trim().length === 0) {
 			return 0
@@ -679,27 +619,26 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 			return 0
 		}
 
-		const totalWeightedPercent = directScoreFields.reduce((sum, field) => {
+		const totalPercent = directScoreFields.reduce((sum, field) => {
 			const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 			const score = parseAndClampScore(rawValue, field.maxScore)
-			const weight = directScoreWeights[field.key] ?? 0
-			if (field.maxScore <= 0 || weight <= 0) {
+			if (field.maxScore <= 0) {
 				return sum
 			}
 
 			const adjustedScore = field.key === 'interview' ? Math.min(field.maxScore, score + activeDirectBonusPoints) : score
-			return sum + (adjustedScore / field.maxScore) * weight
+			return sum + (adjustedScore / field.maxScore) * 100
 		}, 0)
 
-		return round(totalWeightedPercent)
-	}, [activeContestantId, activeDirectBonusPoints, directScoreFields, directScoreWeights, isDirectScoreMode, scores])
+		return round(totalPercent / directScoreFields.length)
+	}, [activeContestantId, activeDirectBonusPoints, directScoreFields, isDirectScoreMode, scores])
 	const directFinalRatingMaxPossible = useMemo(() => {
 		if (!isDirectScoreMode) {
 			return 0
 		}
 
-		return directScoreWeightMax
-	}, [directScoreWeightMax, isDirectScoreMode])
+		return 100
+	}, [isDirectScoreMode])
 
 	const scoredFieldCount = useMemo(() => {
 		if (!activeContestantId) {
@@ -867,13 +806,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	)
 
 	useEffect(() => {
-		const timeoutId = window.setTimeout(() => {
-			void syncQueuedUploads(false)
-		}, 0)
-
-		return () => {
-			window.clearTimeout(timeoutId)
-		}
+		void syncQueuedUploads(false)
 	}, [syncQueuedUploads])
 
 	useEffect(() => {
@@ -1095,9 +1028,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 										<div>
 											<h3 className='text-base font-semibold text-cyan-950'>Direct Score Entry</h3>
-											<p className='text-[11px] font-medium text-cyan-900/85'>
-												Enter AVE/GPA, NOAT, and Interview directly. Final Rating uses configured weights (AVE/GPA {directScoreWeights.aveGpa.toFixed(2)}%, NOAT {directScoreWeights.noat.toFixed(2)}%, Interview {directScoreWeights.interview.toFixed(2)}%). Strand bonus is applied to Interview only.
-											</p>
+											<p className='text-[11px] font-medium text-cyan-900/85'>Enter AVE/GPA, NOAT, and Interview directly. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
+											{showRubricLegend ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
 										</div>
 										<div className='text-right'>
 											<p className='text-xs font-semibold text-emerald-800'>
@@ -1140,18 +1072,21 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									<div className='mt-3 grid gap-3 md:grid-cols-3'>
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 											<span className='block text-sm font-semibold text-cyan-950'>Strand</span>
-											<Select<DirectRatingSelectOption, false>
-												value={activeDirectStrandOption}
-												onChange={(selectedOption: SingleValue<DirectRatingSelectOption>) => updateContestantDetailsField(activeContestantId, 'strand', selectedOption?.value ?? '')}
-												options={DIRECT_RATING_SELECT_GROUP_OPTIONS}
-												instanceId='judge-strand-selection'
-												inputId='judge-strand-selection-input'
-												placeholder='Search track/strand/specialization'
-												isClearable
-												className='mt-2 text-sm'
-												classNamePrefix='strand-select2'
-												styles={judgeStrandSelectStyles}
-											/>
+											<select
+												value={contestantDetails[activeContestantId]?.strand ?? ''}
+												onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
+												className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
+												<option value=''>Select track/strand</option>
+												{DIRECT_RATING_TRACK_STRAND_GROUPS.map((group) => (
+													<optgroup key={group.track} label={group.track}>
+														{group.strands.map((option) => (
+															<option key={`${group.track}-${option}`} value={option}>
+																{option}
+															</option>
+														))}
+													</optgroup>
+												))}
+											</select>
 										</label>
 
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
@@ -1181,10 +1116,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 										</label>
 									</div>
 
-									<p className='mt-3 text-xs text-cyan-900/80'>
-										Final Rating formula: ((AVE/GPA / Max AVE) x {directScoreWeights.aveGpa.toFixed(2)}) + ((NOAT / Max NOAT) x {directScoreWeights.noat.toFixed(2)}) + (((Interview + aligned strand bonus) / Max Interview) x {directScoreWeights.interview.toFixed(2)}), with Interview capped at its max score. Total configured weight:{' '}
-										{directScoreWeightMax.toFixed(2)}.
-									</p>
+									<p className='mt-3 text-xs text-cyan-900/80'>Final Rating formula: ((AVE/GPA / Max AVE) x 100 + (NOAT / Max NOAT) x 100 + ((Interview + aligned strand bonus) / Max Interview) x 100) / 3, with Interview capped at its max score.</p>
 								</article>
 							) : (
 								criteria.map((criterion) => {
@@ -1204,7 +1136,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 												<div>
 													<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
 													<p className='text-[11px] font-medium text-cyan-900/85'>Scope: {scopeLabel}</p>
-													{!isDirectScoreMode ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
+													{showRubricLegend ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
 												</div>
 												<p className='text-xs text-cyan-900/90'>
 													Parent Max: {parentMaxScore.toFixed(2)} | Current: {parentCurrentTotal.toFixed(2)}
