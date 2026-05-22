@@ -10,7 +10,7 @@ type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnect
 type ProgramLabel = EventProgramTag
 
 interface ProgramTopTeam {
-	program: ProgramLabel
+	program: ProgramLabel | string
 	teamName: string
 	contestantName: string
 	rank: number
@@ -622,6 +622,44 @@ function teamsByProgram(rankings: EventCompiledResults['rankings'], contestantsB
 
 	grouped.BSINT.sort((a, b) => b.score - a.score)
 	grouped.BSCS.sort((a, b) => b.score - a.score)
+
+	return grouped
+}
+
+function teamsBySection(rankings: EventCompiledResults['rankings'], contestantsById: Map<string, EventContestant>, useWeighted: boolean): Record<string, ProgramTopTeam[]> {
+	const grouped: Record<string, ProgramTopTeam[]> = {}
+
+	for (const result of rankings) {
+		const contestant = contestantsById.get(result.contestantId)
+		const section = contestant?.section?.trim()
+
+		if (!section) {
+			continue
+		}
+
+		if (!grouped[section]) {
+			grouped[section] = []
+		}
+
+		const score = rankingScore(result, useWeighted)
+		if (!Number.isFinite(score) || score <= 0) {
+			continue
+		}
+
+		grouped[section].push({
+			program: section, // reuse program field for section label
+			teamName: extractDynamicTeamName(result.contestantName),
+			contestantName: result.contestantName,
+			rank: result.rank,
+			score,
+			totalScore: result.totalScore,
+			judgeCount: result.judgeCount,
+		})
+	}
+
+	for (const sectionKey of Object.keys(grouped)) {
+		grouped[sectionKey].sort((a, b) => b.score - a.score)
+	}
 
 	return grouped
 }
@@ -1318,10 +1356,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	})
 	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
-	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showDetailedAnalyticsByProgram, setShowDetailedAnalyticsByProgram] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
+	const [showDetailedAnalyticsByProgram, setShowDetailedAnalyticsByProgram] = useState<Record<ProgramLabel | string, boolean>>({ BSINT: false, BSCS: false })
+	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel | string, boolean>>({ BSINT: false, BSCS: false })
+	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel | string, boolean>>({ BSINT: false, BSCS: false })
+	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel | string, boolean>>({ BSINT: false, BSCS: false })
+	const [showDetailedAnalyticsBySection, setShowDetailedAnalyticsBySection] = useState<Record<string, boolean>>({})
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
@@ -1362,6 +1401,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
 	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, contestantsById, manualAssignments), [compiled.rankings, contestantsById, manualAssignments])
 	const subCriteriaAnalyticsByProgram = useMemo(() => subCriteriaRankingsByProgram(event, manualAssignments), [event, manualAssignments])
+	const analyticsBySection = useMemo(() => teamsBySection(compiled.rankings, contestantsById, useWeightedScores), [compiled.rankings, contestantsById, useWeightedScores])
 	const eventEditorRubricTotalScore = useMemo(() => eventEditorDraft.criteria.reduce((sum, criterion) => sum + criterionTotalScoreForEditor(criterion), 0), [eventEditorDraft.criteria])
 	const pendingQueueRows = useMemo(
 		() =>
@@ -2425,7 +2465,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												
 												return (
 												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-(--border-soft) bg-surface p-3 space-y-2'>
-													<div className='grid gap-2 sm:grid-cols-[1fr_140px_120px_auto]'>
+													<div className='grid gap-2 sm:grid-cols-[1fr_120px_100px_100px_auto]'>
 														<input
 															type='text'
 															placeholder='Contestant or team name'
@@ -2477,6 +2517,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															<option value='BSINT'>BSINT</option>
 															<option value='BSCS'>BSCS</option>
 														</select>
+														<input
+															type='text'
+															placeholder='Section'
+															value={contestant.section ?? ''}
+															disabled={isLocked}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, section: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-(--border-soft) bg-(--surface-muted) px-3 py-2 text-sm text-(--text-primary) outline-none ring-emerald-500 focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed'
+														/>
 														<button
 															type='button'
 															disabled={isLocked}
@@ -2854,7 +2908,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					<section className='rounded-[28px] border border-(--border-soft) bg-surface p-6 shadow-(--shadow-soft) sm:p-8'>
 						<h2 className='text-xl font-semibold text-(--text-primary)'>Program Analytics</h2>
-						<p className='mt-1 text-sm text-(--text-secondary)'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
+						<p className='mt-1 text-sm text-(--text-secondary)'>Top teams and per-contestant participant rankings separated for BSINT, BSCS, and assigned Sections.</p>
 
 						<div className='mt-4 grid gap-6 sm:grid-cols-2'>
 							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
@@ -2867,6 +2921,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								const visibleTeams = showAllTeams ? teams : teams.slice(0, analyticsPreviewLimit)
 								const visibleParticipants = showAllParticipants ? participants : participants.slice(0, analyticsPreviewLimit)
 								const hasSubCriteriaOverflow = subCriteriaGroups.some((group) => group.entries.length > analyticsPreviewLimit)
+
+								if (teams.length === 0) {
+									return null
+								}
 
 								return (
 									<article key={program} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) overflow-hidden'>
@@ -3027,6 +3085,59 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												</div>
 											</>
 										)}
+									</article>
+								)
+							})}
+
+							{Object.entries(analyticsBySection).sort(([a], [b]) => a.localeCompare(b)).map(([section, teams]) => {
+								const showAllTeams = showAllTeamAnalytics[section]
+								const visibleTeams = showAllTeams ? teams : teams.slice(0, analyticsPreviewLimit)
+
+								return (
+									<article key={`section-${section}`} className='rounded-2xl border border-(--border-soft) bg-(--surface-muted) overflow-hidden'>
+										<div className='flex items-center justify-between p-4 border-b border-(--border-soft) bg-surface'>
+											<h3 className='text-lg font-bold uppercase tracking-wide text-(--text-primary)'>Section {section} Rankings</h3>
+										</div>
+
+										<div className='p-4'>
+											<div className='flex items-center justify-between gap-2'>
+												<p className='text-xs font-semibold uppercase tracking-wide text-(--text-secondary)'>Team Rankings</p>
+												{teams.length > analyticsPreviewLimit ? (
+													<button type='button' onClick={() => setShowAllTeamAnalytics((previous) => ({ ...previous, [section]: !showAllTeams }))} className='rounded-full border border-(--border-strong) bg-surface px-3 py-1 text-[11px] font-semibold text-(--text-primary) transition hover:bg-(--surface-muted)'>
+														{showAllTeams ? 'Show Top 3' : 'View All'}
+													</button>
+												) : null}
+											</div>
+											{teams.length > 0 ? (
+												<div className='mt-2 overflow-x-auto'>
+													<table className='min-w-full text-sm text-left'>
+														<thead className='bg-(--surface-muted) text-(--text-secondary)'>
+															<tr>
+																<th className='px-4 py-2 font-semibold'>Rank</th>
+																<th className='px-4 py-2 font-semibold'>Team</th>
+																<th className='px-4 py-2 font-semibold text-right'>Score</th>
+															</tr>
+														</thead>
+														<tbody className='divide-y divide-(--border-soft)'>
+															{visibleTeams.map((team, idx) => (
+																<tr key={team.contestantName} className={idx === 0 ? 'bg-surface font-medium' : ''}>
+																	<td className='px-4 py-3'>
+																		{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{idx + 1} <span className='text-(--text-muted) text-xs ml-1'>(Overall #{team.rank})</span>
+																	</td>
+																	<td className='px-4 py-3'>
+																		<div className='text-(--text-primary)'>{team.teamName}</div>
+																		<div className='text-[10px] text-(--text-muted)'>{team.contestantName}</div>
+																	</td>
+																	<td className='px-4 py-3 text-right text-(--text-primary)'>{formatScore(team.score)}</td>
+																</tr>
+															))}
+														</tbody>
+													</table>
+												</div>
+											) : (
+												<div className='mt-2 rounded-lg border border-(--border-soft) bg-surface p-3 text-center text-sm text-(--text-secondary)'>No teams found for this section.</div>
+											)}
+										</div>
 									</article>
 								)
 							})}
