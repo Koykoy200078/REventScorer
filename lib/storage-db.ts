@@ -5,7 +5,7 @@ import path from 'node:path'
 import mysql from 'mysql2/promise.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 
-import { deriveDirectRatingConfigFromCriteria, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
 import type {
 	AdminEventEditorInput,
@@ -21,6 +21,7 @@ import type {
 	EventScoringType,
 	EventSubCriterion,
 	EventSummary,
+	JudgeDirectoryItem,
 	JudgeContestantDetailsMap,
 	JudgeSessionData,
 	JudgeSubmission,
@@ -135,6 +136,12 @@ interface SubmissionContestantDetailRow extends RowDataPacket {
 interface JudgeLookupRow extends RowDataPacket {
 	id: string
 	event_id: string
+}
+
+interface JudgeDirectoryRow extends RowDataPacket {
+	name: string
+	email: string | null
+	created_at: string | Date
 }
 
 interface EventIdRow extends RowDataPacket {
@@ -2622,7 +2629,65 @@ export async function listEventSummaries(): Promise<EventSummary[]> {
 		contestantCount: event.contestants.length,
 		judgeCount: event.judges.length,
 		submittedJudgeCount: countSubmittedJudges(event),
+		isDirectRating: detectDirectRatingScoreFields(event.criteria).length > 0,
 	}))
+}
+
+export async function listJudgeDirectory(): Promise<JudgeDirectoryItem[]> {
+	const pool = await getPool()
+	const rows = await selectRows<JudgeDirectoryRow>(
+		pool,
+		`SELECT j.name, j.email, e.created_at
+		 FROM ${TABLE_JUDGES} AS j
+		 INNER JOIN ${TABLE_EVENTS} AS e ON e.id = j.event_id
+		 WHERE TRIM(j.name) <> ''
+		 ORDER BY e.created_at DESC, j.sort_order ASC`,
+	)
+
+	const byName = new Map<string, JudgeDirectoryItem>()
+
+	for (const row of rows) {
+		const name = compactWhitespace(row.name)
+		if (!name) {
+			continue
+		}
+
+		const key = name.toLowerCase()
+		const normalizedEmail = row.email ? compactWhitespace(row.email) : ''
+		const lastUsedAt = fromMySqlDateTime(row.created_at)
+		const existing = byName.get(key)
+
+		if (!existing) {
+			byName.set(key, {
+				name,
+				...(normalizedEmail ? { email: normalizedEmail } : {}),
+				lastUsedAt,
+				usageCount: 1,
+			})
+			continue
+		}
+
+		if (!existing.email && normalizedEmail) {
+			existing.email = normalizedEmail
+		}
+
+		if (new Date(lastUsedAt).getTime() > new Date(existing.lastUsedAt).getTime()) {
+			existing.lastUsedAt = lastUsedAt
+		}
+
+		existing.usageCount += 1
+	}
+
+	const judges = Array.from(byName.values())
+	judges.sort((left, right) => {
+		const dateDiff = new Date(right.lastUsedAt).getTime() - new Date(left.lastUsedAt).getTime()
+		if (dateDiff !== 0) {
+			return dateDiff
+		}
+		return left.name.localeCompare(right.name, 'en', { sensitivity: 'base' })
+	})
+
+	return judges
 }
 
 export async function createEvent(input: CreateEventInput): Promise<EventScorer> {

@@ -191,10 +191,11 @@ function flattenStrandNodesWithDepth(nodes: DirectRatingStrandNode[], depth = 0)
 	const result: DirectRatingStrandOption[] = []
 
 	for (const node of nodes) {
-		const hasChildren = Array.isArray(node.children) && node.children.length > 0
+		const children = node.children ?? []
+		const hasChildren = children.length > 0
 		result.push({ value: node.value, label: node.label, depth, hasChildren })
 		if (hasChildren) {
-			result.push(...flattenStrandNodesWithDepth(node.children, depth + 1))
+			result.push(...flattenStrandNodesWithDepth(children, depth + 1))
 		}
 	}
 

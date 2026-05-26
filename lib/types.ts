@@ -24,6 +24,8 @@ export interface DirectRatingMaxScores {
 	interview: number
 }
 
+export type DirectRatingScoreWeights = Record<DirectScoreFieldKey, number>
+
 export interface DirectRatingStrandBonusConfig {
 	singleAlignedBonusPoints: number
 	multiAlignedBonusPoints: number
@@ -33,6 +35,7 @@ export interface DirectRatingStrandBonusConfig {
 
 export interface DirectRatingConfig {
 	maxScores: DirectRatingMaxScores
+	scoreWeights?: DirectRatingScoreWeights
 	strandBonus: DirectRatingStrandBonusConfig
 }
 
@@ -73,7 +76,7 @@ export interface AdminContestantEditorInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
-	noatScore?: number | null
+	noatScore?: number | string | null
 }
 
 export interface AdminJudgeEditorInput {
@@ -197,6 +200,14 @@ export interface EventSummary {
 	contestantCount: number
 	judgeCount: number
 	submittedJudgeCount: number
+	isDirectRating: boolean
+}
+
+export interface JudgeDirectoryItem {
+	name: string
+	email?: string
+	lastUsedAt: string
+	usageCount: number
 }
 
 export interface JudgeProfile {
