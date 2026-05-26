@@ -57,6 +57,7 @@ interface AdminLiveDashboardProps {
 	baseUrl: string
 	initialOpenEditor?: boolean
 	allowEventEditor?: boolean
+	wsAuthToken?: string
 }
 
 interface AdminEventResponse {
@@ -1252,7 +1253,7 @@ function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInpu
 	}
 }
 
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false }: AdminLiveDashboardProps) {
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
@@ -1872,7 +1873,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		function buildSocketCandidates(): string[] {
 			const host = window.location.hostname
 			const isSecurePage = window.location.protocol === 'https:'
-			const query = `?eventId=${encodeURIComponent(eventId)}`
+			const queryParams = new URLSearchParams({ eventId })
+			if (wsAuthToken) {
+				queryParams.set('auth', wsAuthToken)
+			}
+			const query = `?${queryParams.toString()}`
 			const path = `/ws/admin-scores${query}`
 
 			const candidates: string[] = []
@@ -2014,7 +2019,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				}
 			}
 		}
-	}, [event.id, refreshDashboard])
+	}, [event.id, refreshDashboard, wsAuthToken])
 
 	return (
 		<>
