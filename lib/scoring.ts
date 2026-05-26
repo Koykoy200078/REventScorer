@@ -9,36 +9,13 @@ function criterionMaxScore(criterion: EventScorer['criteria'][number]): number {
 	const directMaxScore = Number(criterion.maxScore)
 
 	if (Number.isFinite(directMaxScore) && directMaxScore > 0) {
-		if (!isIndividualCriterion(criterion)) {
-			return round(directMaxScore)
-		}
+		return round(directMaxScore)
 	}
 
-	if (!isIndividualCriterion(criterion)) {
-		const computedMaxScore = criterion.subCriteria.reduce((sum, subCriterion) => {
-			const subCriterionMaxScore = Number(subCriterion.maxScore)
-			return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
-		}, 0)
-		return round(computedMaxScore)
-	}
-
-	const seenDisplayNames = new Set<string>()
-	let computedMaxScore = 0
-
-	for (const subCriterion of criterion.subCriteria) {
-		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
-		const memberIndex = memberIndexFromLabel(memberLabel)
-		const normalizedName = memberIndex ? displayName.trim() : subCriterion.name.trim()
-		const key = normalizedName.toLowerCase()
-
-		if (seenDisplayNames.has(key)) {
-			continue
-		}
-
-		seenDisplayNames.add(key)
+	const computedMaxScore = criterion.subCriteria.reduce((sum, subCriterion) => {
 		const subCriterionMaxScore = Number(subCriterion.maxScore)
-		computedMaxScore += Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0
-	}
+		return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
+	}, 0)
 
 	return round(computedMaxScore)
 }
@@ -437,6 +414,12 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				judgeCount: 0,
 				perJudgeTotals: {} as Record<string, number>,
 				participantTotals: {} as Record<string, number>,
+				totalAveGpa: 0,
+				totalNoat: 0,
+				totalInterview: 0,
+				strands: [] as string[],
+				remarks: [] as string[],
+				additionalInfos: [] as string[],
 			},
 		]),
 	)
@@ -512,6 +495,19 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			aggregate.perJudgeTotals[judge.id] = contestantJudgeTotal
 
 			if (isDirectRatingEvent) {
+				const aveGpaField = directScoreFields.find((f) => f.key === 'aveGpa')
+				const noatField = directScoreFields.find((f) => f.key === 'noat')
+				const interviewField = directScoreFields.find((f) => f.key === 'interview')
+
+				if (aveGpaField) aggregate.totalAveGpa += Number(submission.scores[contestant.id]?.[aveGpaField.subCriterionId] ?? 0)
+				if (noatField) aggregate.totalNoat += Number(submission.scores[contestant.id]?.[noatField.subCriterionId] ?? 0)
+				if (interviewField) aggregate.totalInterview += Number(submission.scores[contestant.id]?.[interviewField.subCriterionId] ?? 0)
+
+				const details = submission.contestantDetails?.[contestant.id]
+				if (details?.strand && !aggregate.strands.includes(details.strand)) aggregate.strands.push(details.strand)
+				if (details?.remark && !aggregate.remarks.includes(details.remark)) aggregate.remarks.push(details.remark)
+				if (details?.additionalInfo && !aggregate.additionalInfos.includes(details.additionalInfo)) aggregate.additionalInfos.push(details.additionalInfo)
+
 				continue
 			}
 
@@ -603,6 +599,16 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				judgeCount: aggregate.judgeCount,
 				perJudgeTotals: aggregate.perJudgeTotals,
 				participantScores,
+				directDetails: isDirectRatingEvent
+					? {
+							aveGpa: aggregate.judgeCount > 0 ? round(aggregate.totalAveGpa / aggregate.judgeCount) : 0,
+							noat: aggregate.judgeCount > 0 ? round(aggregate.totalNoat / aggregate.judgeCount) : 0,
+							interview: aggregate.judgeCount > 0 ? round(aggregate.totalInterview / aggregate.judgeCount) : 0,
+							strand: aggregate.strands.join(' / '),
+							remark: aggregate.remarks.join(' / '),
+							additionalInfo: aggregate.additionalInfos.join(' / '),
+						}
+					: undefined,
 			}
 		})
 		.sort((left, right) => {

@@ -5,9 +5,28 @@ import path from 'node:path'
 import mysql from 'mysql2/promise.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
-import type { AdminEventEditorInput, ContestantEntryType, CreateEventInput, DirectRatingConfig, EventContestant, EventCriterion, EventJudge, EventPresentationSlot, EventProgramTag, EventScorer, EventScoringType, EventSubCriterion, EventSummary, JudgeContestantDetailsMap, JudgeSessionData, JudgeSubmission, RubricLegendItem, ScoreMatrix } from '@/lib/types'
+import type {
+	AdminEventEditorInput,
+	ContestantEntryType,
+	CreateEventInput,
+	DirectRatingConfig,
+	EventContestant,
+	EventCriterion,
+	EventJudge,
+	EventPresentationSlot,
+	EventProgramTag,
+	EventScorer,
+	EventScoringType,
+	EventSubCriterion,
+	EventSummary,
+	JudgeContestantDetailsMap,
+	JudgeSessionData,
+	JudgeSubmission,
+	RubricLegendItem,
+	ScoreMatrix,
+} from '@/lib/types'
 
 interface StoreShape {
 	events: EventScorer[]
@@ -41,6 +60,7 @@ interface ContestantRow extends RowDataPacket {
 	name: string
 	entry_type: string
 	program_tag: string | null
+	noat_score: number | string | null
 	sort_order: number
 }
 
@@ -160,7 +180,7 @@ const TABLE_SUBMISSIONS = 'es_submissions'
 const TABLE_SUBMISSION_SAVED_CONTESTANTS = 'es_submission_saved_contestants'
 const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
 const TABLE_SUBMISSION_CONTESTANT_DETAILS = 'es_submission_contestant_details'
-const EVENTSCORER_SCHEMA_VERSION = 5
+const EVENTSCORER_SCHEMA_VERSION = 4
 
 interface EventScorerGlobalState {
 	__eventScorerPoolPromise?: Promise<Pool> | null
@@ -188,6 +208,24 @@ function toPositiveNumberOrNull(value: unknown): number | null {
 	const numericValue = typeof value === 'number' ? value : Number(value)
 
 	if (!Number.isFinite(numericValue) || numericValue <= 0) {
+		return null
+	}
+
+	return Math.round(numericValue * 1000) / 1000
+}
+
+function normalizeNoatScore(value: unknown): number | null {
+	if (value === null || value === undefined) {
+		return null
+	}
+
+	if (typeof value === 'string' && value.trim() === '') {
+		return null
+	}
+
+	const numericValue = typeof value === 'number' ? value : Number(value)
+
+	if (!Number.isFinite(numericValue) || numericValue < 0) {
 		return null
 	}
 
@@ -388,6 +426,7 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 					entryType: 'group' as ContestantEntryType,
 					participants: [] as string[],
 					programTag: null as EventProgramTag | null,
+					noatScore: null as number | null,
 				}
 			}
 
@@ -397,6 +436,7 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 					entryType: 'group' as ContestantEntryType,
 					participants: [] as string[],
 					programTag: null as EventProgramTag | null,
+					noatScore: null as number | null,
 				}
 			}
 
@@ -405,13 +445,13 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 				entryType: normalizeContestantEntryType(contestant.entryType),
 				participants: normalizeContestantParticipants(contestant.participants),
 				programTag: normalizeContestantProgramTag(contestant.programTag),
-				section: typeof contestant === 'object' && contestant !== null && 'section' in contestant && typeof contestant.section === 'string' ? compactWhitespace(contestant.section) : undefined,
+				noatScore: normalizeNoatScore(contestant.noatScore),
 			}
 		})
 		.filter((contestant) => contestant.name.length > 0)
 
 	const seen = new Set<string>()
-	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null; section?: string }>
+	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null; noatScore: number | null }>
 
 	for (const contestant of cleaned) {
 		const key = `${contestant.entryType}|${contestant.programTag ?? 'none'}|${contestant.name.toLowerCase()}`
@@ -427,13 +467,13 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 		throw new Error('At least 2 contestants are required.')
 	}
 
-	return unique.map((contestant, index) => ({
+	return unique.map((contestant) => ({
 		id: randomUUID(),
 		name: contestant.name,
 		entryType: contestant.entryType,
 		participants: contestant.entryType === 'group' && contestant.participants.length > 0 ? contestant.participants : undefined,
 		programTag: contestant.programTag ?? undefined,
-		section: contestant.section,
+		noatScore: contestant.noatScore ?? undefined,
 	}))
 }
 
@@ -663,7 +703,6 @@ function buildEvent(input: CreateEventInput): EventScorer {
 		createdBy,
 		eventScoringType,
 		rubricLegend,
-		showRubricLegend: Boolean(input.showRubricLegend),
 		directRatingConfig,
 		createdAt: new Date().toISOString(),
 		contestants: normalizedContestants,
@@ -702,6 +741,7 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 		const entryType = normalizeContestantEntryType(rawContestant.entryType)
 		const participants = normalizeContestantParticipants(rawContestant.participants)
 		const programTag = normalizeContestantProgramTag(rawContestant.programTag)
+		const noatScore = normalizeNoatScore(rawContestant.noatScore)
 
 		contestants.push({
 			id: normalizeUniqueIdCandidate(rawContestant.id, usedIds),
@@ -709,7 +749,7 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
-			section: rawContestant.section ? compactWhitespace(String(rawContestant.section)) : undefined,
+			noatScore: noatScore ?? undefined,
 		})
 	}
 
@@ -921,45 +961,6 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
 	const directRatingConfig = source.directRatingConfig !== undefined || previousEvent.directRatingConfig || derivedDirectRatingConfig ? normalizeDirectRatingConfig(source.directRatingConfig, derivedDirectRatingConfig ?? previousEvent.directRatingConfig ?? undefined) : undefined
 
-	let retainedSubmissions = previousEvent.submissions
-	if (source.resetScores) {
-		retainedSubmissions = []
-	} else if (retainedSubmissions.length > 0) {
-		// Filter out submissions for judges that were removed
-		const activeJudgeIds = new Set(judges.map(j => j.id))
-		const activeContestantIds = new Set(contestants.map(c => c.id))
-		const activeSubCriteriaIds = new Set(criteria.flatMap(c => c.subCriteria.map(sc => sc.id)))
-
-		retainedSubmissions = retainedSubmissions
-			.filter(sub => activeJudgeIds.has(sub.judgeId))
-			.map(sub => {
-				const filteredSavedContestantIds = (sub.savedContestantIds ?? []).filter(cid => activeContestantIds.has(cid))
-				const filteredContestantDetails = Object.fromEntries(
-					Object.entries(sub.contestantDetails ?? {}).filter(([cid]) => activeContestantIds.has(cid))
-				)
-				const filteredScores: typeof sub.scores = {}
-				
-				for (const [cid, subCriteriaScores] of Object.entries(sub.scores)) {
-					if (!activeContestantIds.has(cid)) continue
-					
-					const validScoresForContestant = Object.fromEntries(
-						Object.entries(subCriteriaScores).filter(([scId]) => activeSubCriteriaIds.has(scId))
-					)
-					
-					if (Object.keys(validScoresForContestant).length > 0) {
-						filteredScores[cid] = validScoresForContestant
-					}
-				}
-
-				return {
-					...sub,
-					savedContestantIds: filteredSavedContestantIds,
-					contestantDetails: filteredContestantDetails,
-					scores: filteredScores
-				}
-			})
-	}
-
 	return {
 		...previousEvent,
 		title,
@@ -967,13 +968,12 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 		createdBy: createdBy.length > 0 ? createdBy : undefined,
 		eventScoringType,
 		rubricLegend,
-		showRubricLegend: typeof source.showRubricLegend === 'boolean' ? source.showRubricLegend : previousEvent.showRubricLegend,
 		directRatingConfig,
 		contestants,
 		judges,
 		criteria,
 		presentationSlots,
-		submissions: retainedSubmissions,
+		submissions: [],
 	}
 }
 
@@ -1463,7 +1463,6 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			created_by VARCHAR(255) NULL,
 			event_scoring_type VARCHAR(32) NOT NULL DEFAULT 'standard',
 			rubric_legend_json LONGTEXT NULL,
-			show_rubric_legend TINYINT(1) NOT NULL DEFAULT 0,
 			direct_rating_config_json LONGTEXT NULL,
 			created_at DATETIME(3) NOT NULL,
 			PRIMARY KEY (id),
@@ -1475,7 +1474,7 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			name VARCHAR(255) NOT NULL,
 			entry_type VARCHAR(32) NOT NULL DEFAULT 'group',
 			program_tag VARCHAR(16) NULL,
-			section VARCHAR(64) NULL,
+			noat_score DECIMAL(10,3) NULL,
 			sort_order INT NOT NULL,
 			PRIMARY KEY (id),
 			INDEX idx_${TABLE_CONTESTANTS}_event_order (event_id, sort_order),
@@ -1619,32 +1618,18 @@ async function ensureSchema(pool: Pool): Promise<void> {
 		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN direct_rating_config_json LONGTEXT NULL AFTER rubric_legend_json`)
 	}
 
-	const [showRubricColumnRows] = await pool.execute<CountRow[]>(
+	const [noatColumnRows] = await pool.execute<CountRow[]>(
 		`SELECT COUNT(*) AS total
 		 FROM information_schema.columns
 		 WHERE table_schema = DATABASE()
 		   AND table_name = ?
 		   AND column_name = ?`,
-		[TABLE_EVENTS, 'show_rubric_legend'],
+		[TABLE_CONTESTANTS, 'noat_score'],
 	)
 
-	const showRubricColumnExists = Number(showRubricColumnRows[0]?.total ?? 0) > 0
-	if (!showRubricColumnExists) {
-		await pool.execute(`ALTER TABLE ${TABLE_EVENTS} ADD COLUMN show_rubric_legend TINYINT(1) NOT NULL DEFAULT 0 AFTER rubric_legend_json`)
-	}
-
-	const [sectionColumnRows] = await pool.execute<CountRow[]>(
-		`SELECT COUNT(*) AS total
-		 FROM information_schema.columns
-		 WHERE table_schema = DATABASE()
-		   AND table_name = ?
-		   AND column_name = ?`,
-		[TABLE_CONTESTANTS, 'section'],
-	)
-
-	const sectionColumnExists = Number(sectionColumnRows[0]?.total ?? 0) > 0
-	if (!sectionColumnExists) {
-		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN section VARCHAR(64) NULL AFTER program_tag`)
+	const noatColumnExists = Number(noatColumnRows[0]?.total ?? 0) > 0
+	if (!noatColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN noat_score DECIMAL(10,3) NULL AFTER program_tag`)
 	}
 }
 
@@ -1694,7 +1679,7 @@ function normalizeLegacyContestants(value: unknown): EventContestant[] {
 		const entryType = normalizeContestantEntryType(source.entryType)
 		const participants = normalizeContestantParticipants(source.participants)
 		const programTag = parseProgramTag(source.programTag) ?? inferProgramTagFromContestantName(name)
-		const section = source.section ? compactWhitespace(String(source.section)) : undefined
+		const noatScore = normalizeNoatScore((source as { noatScore?: unknown }).noatScore)
 
 		normalized.push({
 			id: contestantId,
@@ -1702,7 +1687,7 @@ function normalizeLegacyContestants(value: unknown): EventContestant[] {
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
-			section,
+			noatScore: noatScore ?? undefined,
 		})
 	}
 
@@ -2225,30 +2210,21 @@ async function upsertSubmissionWithScores(connection: PoolConnection, event: Eve
 
 async function insertEventGraph(connection: PoolConnection, event: EventScorer): Promise<void> {
 	await connection.execute(
-		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, show_rubric_legend, direct_rating_config_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		[
-			event.id,
-			event.title,
-			event.description ?? null,
-			event.createdBy ?? null,
-			normalizeEventScoringType(event.eventScoringType),
-			JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)),
-			event.showRubricLegend ? 1 : 0,
-			event.directRatingConfig ? JSON.stringify(normalizeDirectRatingConfig(event.directRatingConfig)) : null,
-			toMySqlDateTime(event.createdAt),
-		],
+		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), event.directRatingConfig ? JSON.stringify(normalizeDirectRatingConfig(event.directRatingConfig)) : null, toMySqlDateTime(event.createdAt)],
 	)
 
 	for (let contestantIndex = 0; contestantIndex < event.contestants.length; contestantIndex += 1) {
 		const contestant = event.contestants[contestantIndex]
 		const entryType = normalizeContestantEntryType(contestant.entryType)
 		const programTag = normalizeContestantProgramTag(contestant.programTag)
+		const noatScore = normalizeNoatScore(contestant.noatScore)
 
 		await connection.execute(
-			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, section, sort_order)
+			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, noat_score, sort_order)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			[contestant.id, event.id, contestant.name, entryType, programTag, contestant.section ?? null, contestantIndex],
+			[contestant.id, event.id, contestant.name, entryType, programTag, noatScore, contestantIndex],
 		)
 
 		const participants = entryType === 'group' && Array.isArray(contestant.participants) ? contestant.participants : []
@@ -2363,7 +2339,7 @@ async function replacePresentationSlotsForEvent(connection: PoolConnection, even
 async function loadEventById(executor: SqlExecutor, eventId: string): Promise<EventScorer | undefined> {
 	const eventRows = await selectRows<EventRow>(
 		executor,
-		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, show_rubric_legend, direct_rating_config_json, created_at
+		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at
 		 FROM ${TABLE_EVENTS}
 		 WHERE id = ?
 		 LIMIT 1`,
@@ -2378,7 +2354,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 
 	const contestantRows = await selectRows<ContestantRow>(
 		executor,
-		`SELECT id, name, entry_type, program_tag, section, sort_order
+		`SELECT id, name, entry_type, program_tag, noat_score, sort_order
 		 FROM ${TABLE_CONTESTANTS}
 		 WHERE event_id = ?
 		 ORDER BY sort_order ASC, id ASC`,
@@ -2492,7 +2468,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		const entryType = normalizeContestantEntryType(contestantRow.entry_type)
 		const participants = participantsByContestantId.get(contestantRow.id) ?? []
 		const programTag = parseProgramTag(contestantRow.program_tag) ?? inferProgramTagFromContestantName(contestantRow.name)
-		const section = contestantRow.section ? compactWhitespace(String(contestantRow.section)) : undefined
+		const noatScore = normalizeNoatScore(contestantRow.noat_score)
 
 		return {
 			id: contestantRow.id,
@@ -2500,7 +2476,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
-			section,
+			noatScore: noatScore ?? undefined,
 		}
 	})
 
@@ -2611,7 +2587,6 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		createdBy: eventRow.created_by ?? undefined,
 		eventScoringType,
 		rubricLegend,
-		showRubricLegend: Boolean(eventRow.show_rubric_legend),
 		directRatingConfig,
 		createdAt: fromMySqlDateTime(eventRow.created_at),
 		contestants,
@@ -2640,41 +2615,14 @@ export async function listEvents(): Promise<EventScorer[]> {
 export async function listEventSummaries(): Promise<EventSummary[]> {
 	const events = await listEvents()
 
-	return events.map((event) => {
-		const derivedConfig = deriveDirectRatingConfigFromCriteria(event.criteria)
-		const resolvedConfig = normalizeDirectRatingConfig(event.directRatingConfig, derivedConfig ?? undefined)
-		const directScoreFields = detectDirectRatingScoreFields(event.criteria, resolvedConfig)
-		const isDirectRating = directScoreFields.length > 0
-
-		return {
-			id: event.id,
-			title: event.title,
-			createdAt: event.createdAt,
-			contestantCount: event.contestants.length,
-			judgeCount: event.judges.length,
-			submittedJudgeCount: countSubmittedJudges(event),
-			isDirectRating,
-		}
-	})
-}
-
-export async function listJudgeDirectory(): Promise<Array<{ judgeId: string; judgeName: string; eventId: string; eventTitle: string; token: string }>> {
-	const events = await listEvents()
-	const directory: Array<{ judgeId: string; judgeName: string; eventId: string; eventTitle: string; token: string }> = []
-
-	for (const event of events) {
-		for (const judge of event.judges) {
-			directory.push({
-				judgeId: judge.id,
-				judgeName: judge.name,
-				eventId: event.id,
-				eventTitle: event.title,
-				token: judge.token,
-			})
-		}
-	}
-
-	return directory
+	return events.map((event) => ({
+		id: event.id,
+		title: event.title,
+		createdAt: event.createdAt,
+		contestantCount: event.contestants.length,
+		judgeCount: event.judges.length,
+		submittedJudgeCount: countSubmittedJudges(event),
+	}))
 }
 
 export async function createEvent(input: CreateEventInput): Promise<EventScorer> {
@@ -2895,7 +2843,6 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 			description: event.description,
 			eventScoringType: event.eventScoringType,
 			rubricLegend: event.rubricLegend,
-			showRubricLegend: event.showRubricLegend,
 			directRatingConfig: event.directRatingConfig,
 			contestants: orderedContestants,
 			criteria: event.criteria,

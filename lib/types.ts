@@ -33,7 +33,6 @@ export interface DirectRatingStrandBonusConfig {
 
 export interface DirectRatingConfig {
 	maxScores: DirectRatingMaxScores
-	scoreWeights?: Record<DirectScoreFieldKey, number>
 	strandBonus: DirectRatingStrandBonusConfig
 }
 
@@ -44,7 +43,7 @@ export interface ContestantInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
-	section?: string
+	noatScore?: number
 }
 
 export interface SubCriterionInput {
@@ -74,7 +73,7 @@ export interface AdminContestantEditorInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
-	section?: string
+	noatScore?: number | null
 }
 
 export interface AdminJudgeEditorInput {
@@ -111,9 +110,7 @@ export interface AdminEventEditorInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
-	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
-	resetScores?: boolean
 	contestants: AdminContestantEditorInput[]
 	judges: AdminJudgeEditorInput[]
 	criteria: AdminCriterionEditorInput[]
@@ -126,7 +123,6 @@ export interface CreateEventInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
-	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
@@ -140,7 +136,7 @@ export interface EventContestant {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
-	section?: string
+	noatScore?: number
 }
 
 export interface EventJudge {
@@ -185,7 +181,6 @@ export interface EventScorer {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
-	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	createdAt: string
 	contestants: EventContestant[]
@@ -202,7 +197,6 @@ export interface EventSummary {
 	contestantCount: number
 	judgeCount: number
 	submittedJudgeCount: number
-	isDirectRating?: boolean
 }
 
 export interface JudgeProfile {
@@ -212,7 +206,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'showRubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }
@@ -252,6 +246,14 @@ export interface CompiledContestantResult {
 		maxScore: number
 		rating?: number
 	}>
+	directDetails?: {
+		aveGpa: number
+		noat: number
+		interview: number
+		strand: string
+		remark: string
+		additionalInfo: string
+	}
 }
 
 export interface JudgeBreakdown {

@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_TRACK_STRAND_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
 type InputScoreMatrix = Record<string, Record<string, string>>
 type InputContestantDetailsMap = Record<string, { strand: string; remark: string; additionalInfo: string }>
+type DirectScoreField = ReturnType<typeof detectDirectRatingScoreFields>[number]
 
 const DIRECT_REMARK_OPTIONS = ['Nihangyo + off-track', 'ON TRACK', 'ON TRACK with HIGH POTENTIAL', 'Transferee', 'OFF-TRACK with HIGH GRADES (STEM)', 'OFF-TRACK with POTENTIAL', 'OFF-TRACK']
 
@@ -211,7 +212,6 @@ interface JudgeScoringFormProps {
 	criteria: EventCriterion[]
 	judge: JudgeProfile
 	rubricLegend?: RubricLegendItem[]
-	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	presentationSlots?: EventPresentationSlot[]
 	existingScores?: ScoreMatrix
@@ -388,9 +388,12 @@ function applicableSubCriteriaForContestant(criterion: EventCriterion, contestan
 	})
 }
 
-function hasPositiveDraftScore(scores: InputScoreMatrix, contestantId: string, criteria: EventCriterion[]): boolean {
+function hasPositiveDraftScore(scores: InputScoreMatrix, contestantId: string, criteria: EventCriterion[], ignoredSubCriterionIds: Set<string> = new Set()): boolean {
 	for (const criterion of criteria) {
 		for (const subCriterion of criterion.subCriteria) {
+			if (ignoredSubCriterionIds.has(subCriterion.id)) {
+				continue
+			}
 			const rawValue = scores[contestantId]?.[subCriterion.id] ?? ''
 			const parsedValue = Number.parseFloat(rawValue)
 			if (Number.isFinite(parsedValue) && parsedValue > 0) {
@@ -493,7 +496,7 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, showRubricLegend = false, directRatingConfig, presentationSlots, existingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
 	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
@@ -511,7 +514,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	const [error, setError] = useState<string | null>(null)
 	const [successMessage, setSuccessMessage] = useState<string | null>(null)
 	const [lastSubmittedAt, setLastSubmittedAt] = useState<string | undefined>(submittedAt)
-	const [queuedUploads, setQueuedUploads] = useState<QueuedScoreUpload[]>(() => listQueuedScoreUploadsForToken(token))
+	const [queuedUploads, setQueuedUploads] = useState<QueuedScoreUpload[]>([])
 	const [isAutoSyncing, setIsAutoSyncing] = useState(false)
 	const activeContestant = contestants[activeContestantIndex]
 	const activeContestantId = activeContestant?.id ?? ''
@@ -523,6 +526,21 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	}, [criteria, directRatingConfig])
 	const directScoreFields = useMemo(() => detectDirectRatingScoreFields(criteria, resolvedDirectRatingConfig), [criteria, resolvedDirectRatingConfig])
 	const isDirectScoreMode = directScoreFields.length > 0
+	const directNoatField = useMemo(() => directScoreFields.find((field) => field.key === 'noat') ?? null, [directScoreFields])
+	const noatScoreByContestantId = useMemo(() => {
+		if (!directNoatField) {
+			return new Map<string, number>()
+		}
+
+		const entries = new Map<string, number>()
+		for (const contestant of contestants) {
+			if (typeof contestant.noatScore === 'number' && Number.isFinite(contestant.noatScore)) {
+				entries.set(contestant.id, contestant.noatScore)
+			}
+		}
+
+		return entries
+	}, [contestants, directNoatField])
 
 	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)), [criteria, activeContestant])
 	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).length, 0), [criteria, activeContestant])
@@ -541,10 +559,43 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 	const activeSlotLabel = activeContestantId ? slotLabelsByContestant.get(activeContestantId) : undefined
 	const draftScoredContestantIds = useMemo(() => {
-		const ids = contestants.filter((contestant) => hasPositiveDraftScore(scores, contestant.id, criteria)).map((contestant) => contestant.id)
+		const ids = contestants
+			.filter((contestant) => {
+				if (!directNoatField || !noatScoreByContestantId.has(contestant.id)) {
+					return hasPositiveDraftScore(scores, contestant.id, criteria)
+				}
+
+				return hasPositiveDraftScore(scores, contestant.id, criteria, new Set([directNoatField.subCriterionId]))
+			})
+			.map((contestant) => contestant.id)
 		return new Set(ids)
-	}, [contestants, criteria, scores])
+	}, [contestants, criteria, directNoatField, noatScoreByContestantId, scores])
 	const queuedContestantIds = useMemo(() => new Set(queuedUploads.map((entry) => entry.contestantId)), [queuedUploads])
+
+	useEffect(() => {
+		if (!directNoatField || noatScoreByContestantId.size === 0) {
+			return
+		}
+
+		setScores((previous) => {
+			let hasChange = false
+			const nextScores: InputScoreMatrix = { ...previous }
+			for (const [contestantId, noatScore] of noatScoreByContestantId) {
+				const normalizedValue = normalizeScoreInput(String(noatScore), directNoatField.maxScore)
+				const existingValue = previous[contestantId]?.[directNoatField.subCriterionId]
+				if (existingValue === normalizedValue) {
+					continue
+				}
+
+				hasChange = true
+				const contestantScores = { ...(nextScores[contestantId] ?? {}) }
+				contestantScores[directNoatField.subCriterionId] = normalizedValue
+				nextScores[contestantId] = contestantScores
+			}
+
+			return hasChange ? nextScores : previous
+		})
+	}, [directNoatField, noatScoreByContestantId])
 
 	const activeContestantTotal = useMemo(() => {
 		if (!activeContestantId) {
@@ -806,8 +857,9 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 	)
 
 	useEffect(() => {
+		refreshQueuedUploads()
 		void syncQueuedUploads(false)
-	}, [syncQueuedUploads])
+	}, [refreshQueuedUploads, syncQueuedUploads])
 
 	useEffect(() => {
 		const handleOnline = () => {
@@ -1028,8 +1080,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 										<div>
 											<h3 className='text-base font-semibold text-cyan-950'>Direct Score Entry</h3>
-											<p className='text-[11px] font-medium text-cyan-900/85'>Enter AVE/GPA, NOAT, and Interview directly. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
-											{showRubricLegend ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
+											<p className='text-[11px] font-medium text-cyan-900/85'>Enter AVE/GPA, NOAT, and Interview directly. NOAT may be admin-provided and read-only. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
+											<p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p>
 										</div>
 										<div className='text-right'>
 											<p className='text-xs font-semibold text-emerald-800'>
@@ -1046,20 +1098,30 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 											const enteredValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 											const enteredScore = parseAndClampScore(enteredValue, field.maxScore)
 											const normalizedPercent = field.maxScore > 0 ? round((enteredScore / field.maxScore) * 100) : 0
+											const isNoatLocked = field.key === 'noat' && noatScoreByContestantId.has(activeContestantId)
 
 											return (
 												<label key={field.subCriterionId} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 													<span className='block text-sm font-semibold text-cyan-950'>{field.label}</span>
-													<span className='mt-1 block text-xs text-cyan-900/90'>Max: {field.maxScore.toFixed(2)}</span>
+													<span className='mt-1 block text-xs text-cyan-900/90'>
+														Max: {field.maxScore.toFixed(2)}
+														{isNoatLocked ? ' | Admin provided' : ''}
+													</span>
 													<input
 														value={enteredValue}
-														onChange={(inputEvent) => updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)}
+														onChange={(inputEvent) => {
+															if (isNoatLocked) {
+																return
+															}
+															updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)
+														}}
 														type='number'
 														inputMode='decimal'
 														min={0}
 														max={field.maxScore}
 														step='0.01'
-														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+														disabled={isNoatLocked}
+														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600'
 													/>
 													<span className='mt-1 block text-xs font-medium text-slate-700'>
 														Entered: {enteredScore.toFixed(2)} | Normalized: {normalizedPercent.toFixed(2)}%
@@ -1077,11 +1139,11 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 												onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
 												className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
 												<option value=''>Select track/strand</option>
-												{DIRECT_RATING_TRACK_STRAND_GROUPS.map((group) => (
-													<optgroup key={group.track} label={group.track}>
-														{group.strands.map((option) => (
-															<option key={`${group.track}-${option}`} value={option}>
-																{option}
+												{DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => (
+													<optgroup key={group.label} label={group.label}>
+														{group.options.map((option) => (
+															<option key={`${group.label}-${option.value}`} value={option.value}>
+																{option.label}
 															</option>
 														))}
 													</optgroup>
@@ -1102,17 +1164,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 													</option>
 												))}
 											</select>
-										</label>
-
-										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-											<span className='block text-sm font-semibold text-cyan-950'>Additional Info</span>
-											<input
-												value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
-												onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
-												type='text'
-												placeholder='NC holder'
-												className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-											/>
 										</label>
 									</div>
 
@@ -1136,7 +1187,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 												<div>
 													<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
 													<p className='text-[11px] font-medium text-cyan-900/85'>Scope: {scopeLabel}</p>
-													{showRubricLegend ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
+													<p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p>
 												</div>
 												<p className='text-xs text-cyan-900/90'>
 													Parent Max: {parentMaxScore.toFixed(2)} | Current: {parentCurrentTotal.toFixed(2)}
@@ -1213,6 +1264,19 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									)
 								})
 							)}
+						</div>
+						<div className='mt-6'>
+							<label className='block rounded-xl border border-cyan-200 bg-white p-4 text-sm font-medium text-slate-900 shadow-sm'>
+								<span className='block text-sm font-semibold text-cyan-950'>Additional Remark (Optional)</span>
+								<p className='mt-1 text-xs text-cyan-900/70'>Add any additional comments or observations for this contestant.</p>
+								<textarea
+									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
+									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
+									placeholder='Enter any additional remark here...'
+									rows={3}
+									className='mt-3 w-full resize-none rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+								/>
+							</label>
 						</div>
 					</section>
 
