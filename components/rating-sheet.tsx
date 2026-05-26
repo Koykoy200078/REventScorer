@@ -1,8 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 
-import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
+import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
 import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput } from '@/lib/types'
 
@@ -15,6 +15,7 @@ type JudgeDraft = {
 type RatingEntry = {
 	id: string
 	name: string
+	noatScore: string
 }
 
 type CreateEventApiResponse = CreateEventResponse & {
@@ -29,6 +30,7 @@ function createEntry(): RatingEntry {
 	return {
 		id: localId(),
 		name: '',
+		noatScore: '',
 	}
 }
 
@@ -70,9 +72,12 @@ function buildContestantsPayload(entries: RatingEntry[]): ContestantInput[] {
 		}
 
 		uniqueContestantNames.add(nameKey)
+		const parsedNoat = Number.parseFloat(entry.noatScore)
+		const noatScore = Number.isFinite(parsedNoat) && parsedNoat >= 0 ? Math.round(parsedNoat * 1000) / 1000 : undefined
 		contestants.push({
 			name,
 			entryType: 'individual',
+			...(noatScore !== undefined ? { noatScore } : {}),
 		})
 	}
 
@@ -129,7 +134,7 @@ export function RatingSheet() {
 	const [copiedValue, setCopiedValue] = useState<string | null>(null)
 
 	const totalEntries = entries.length
-	const selectedAlignedStrandSet = useMemo(() => new Set([...directRatingConfig.strandBonus.singleAlignedStrands, ...directRatingConfig.strandBonus.multiAlignedStrands].map((strand) => strand.toLowerCase())), [directRatingConfig.strandBonus.singleAlignedStrands, directRatingConfig.strandBonus.multiAlignedStrands])
+	const selectedAlignedStrandSet = new Set([...directRatingConfig.strandBonus.singleAlignedStrands, ...directRatingConfig.strandBonus.multiAlignedStrands].map((strand) => strand.toLowerCase()))
 
 	const updateEntry = (id: string, patch: Partial<RatingEntry>) => {
 		setEntries((previous) => previous.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)))
@@ -348,14 +353,6 @@ export function RatingSheet() {
 				throw new Error(responseData.error ?? 'Unable to publish rating sheet.')
 			}
 
-			if (typeof window !== 'undefined') {
-				const origin = window.location.origin
-				responseData.adminUrl = responseData.adminUrl.replace(/^https?:\/\/[^/]+/, origin)
-				for (const link of responseData.judgeLinks) {
-					link.url = link.url.replace(/^https?:\/\/[^/]+/, origin)
-				}
-			}
-
 			setCreated(responseData)
 			setPublishedAt(new Date().toISOString())
 		} catch (publishError) {
@@ -414,14 +411,28 @@ export function RatingSheet() {
 						</label>
 						<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
 							Interview Max Score
-							<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interview} onChange={(event) => updateDirectMaxScore('interview', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							<input
+								type='number'
+								min={1}
+								step='0.01'
+								value={directRatingConfig.maxScores.interview}
+								onChange={(event) => updateDirectMaxScore('interview', event.target.value)}
+								className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
+							/>
 						</label>
 					</div>
 
 					<div className='mt-4 rounded-xl border border-emerald-200 bg-white p-3'>
 						<div className='flex items-center justify-between gap-2'>
 							<p className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>Aligned Strand Bonus Points</p>
-							<input type='number' min={0} step='0.01' value={directRatingConfig.strandBonus.singleAlignedBonusPoints} onChange={(event) => updateAlignedBonusPoints(event.target.value)} className='w-24 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-right text-sm font-semibold text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							<input
+								type='number'
+								min={0}
+								step='0.01'
+								value={directRatingConfig.strandBonus.singleAlignedBonusPoints}
+								onChange={(event) => updateAlignedBonusPoints(event.target.value)}
+								className='w-24 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-right text-sm font-semibold text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
+							/>
 						</div>
 						<p className='mt-1 text-[11px] text-emerald-900/75'>Use one bonus value for both single-aligned and multi-aligned strand matches.</p>
 					</div>
@@ -433,22 +444,27 @@ export function RatingSheet() {
 						</div>
 						<p className='mt-1 text-[11px] text-emerald-900/75'>DepEd has 4 main SHS tracks. Check one or more offered strands/tracks to mark them as aligned. The same bonus value is applied for any aligned match.</p>
 						<div className='mt-2 max-h-44 space-y-2 overflow-y-auto rounded-xl border border-emerald-200 bg-white px-2 py-2'>
-							{DIRECT_RATING_TRACK_STRAND_GROUPS.map((group) => (
+							{DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS.map((group) => (
 								<div key={group.track} className='rounded-lg border border-emerald-100 bg-emerald-50/40 p-2'>
 									<p className='px-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-900'>{group.track}</p>
 									<div className='mt-1 space-y-1'>
-										{group.strands.map((option) => {
-											const isChecked = selectedAlignedStrandSet.has(option.toLowerCase())
+										{group.options.map((option) => {
+											const indentStyle = option.depth > 0 ? { paddingLeft: `${8 + option.depth * 12}px` } : undefined
+
+											if (option.hasChildren) {
+												return (
+													<div key={`aligned-${group.track}-${option.value}`} style={indentStyle} className='px-2 py-1 text-xs font-semibold text-emerald-900/80'>
+														{option.label}
+													</div>
+												)
+											}
+
+											const isChecked = selectedAlignedStrandSet.has(option.value.toLowerCase())
 
 											return (
-												<label key={`aligned-${group.track}-${option}`} className='flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1 text-xs text-emerald-950 transition hover:bg-emerald-50'>
-													<input
-														type='checkbox'
-														checked={isChecked}
-														onChange={(event) => toggleAlignedStrand(option, event.target.checked)}
-														className='mt-0.5 h-4 w-4 rounded border-emerald-300 text-emerald-700 focus:ring-emerald-500'
-													/>
-													<span>{option}</span>
+												<label key={`aligned-${group.track}-${option.value}`} style={indentStyle} className='flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1 text-xs text-emerald-950 transition hover:bg-emerald-50'>
+													<input type='checkbox' checked={isChecked} onChange={(event) => toggleAlignedStrand(option.value, event.target.checked)} className='mt-0.5 h-4 w-4 rounded border-emerald-300 text-emerald-700 focus:ring-emerald-500' />
+													<span>{option.label}</span>
 												</label>
 											)
 										})}
@@ -518,6 +534,7 @@ export function RatingSheet() {
 						<thead>
 							<tr className='bg-cyan-50 text-left text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>
 								<th className='rounded-l-2xl px-2 py-2'>Name</th>
+								<th className='px-2 py-2 text-right'>NOAT</th>
 								<th className='rounded-r-2xl px-2 py-2 text-right'>Action</th>
 							</tr>
 						</thead>
@@ -526,6 +543,18 @@ export function RatingSheet() {
 								<tr key={entry.id} className='border-b border-cyan-100 bg-white'>
 									<td className='px-2 py-2'>
 										<input type='text' value={entry.name} onChange={(event) => updateEntry(entry.id, { name: event.target.value })} className='min-w-0 w-full rounded-lg border border-cyan-200 px-2 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200' placeholder='Student' />
+									</td>
+									<td className='px-2 py-2 text-right'>
+										<input
+											type='number'
+											min={0}
+											max={directRatingConfig.maxScores.noat}
+											step='0.01'
+											value={entry.noatScore}
+											onChange={(event) => updateEntry(entry.id, { noatScore: event.target.value })}
+											className='w-24 rounded-lg border border-cyan-200 px-2 py-2 text-right text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+											placeholder='0'
+										/>
 									</td>
 									<td className='px-2 py-2 text-right'>
 										<button type='button' onClick={() => removeEntry(entry.id)} className='rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-50' disabled={entries.length <= 1}>
@@ -538,7 +567,7 @@ export function RatingSheet() {
 					</table>
 				</div>
 
-				<p className='mt-4 text-xs text-cyan-900/80'>Rows are used to build the contestant list when publishing. Judges will submit scores and details using their generated links.</p>
+				<p className='mt-4 text-xs text-cyan-900/80'>Rows are used to build the contestant list when publishing. Optional NOAT values are admin-only and display as read-only on the judge side.</p>
 
 				{error ? <div className='mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
 

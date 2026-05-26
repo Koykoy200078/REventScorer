@@ -32,6 +32,39 @@ export interface DirectRatingTrackStrandGroup {
 	strands: string[]
 }
 
+export interface DirectRatingStrandNode {
+	label: string
+	value: string
+	children?: DirectRatingStrandNode[]
+}
+
+export interface DirectRatingTrackStrandTree {
+	track: string
+	nodes: DirectRatingStrandNode[]
+}
+
+export interface DirectRatingStrandOption {
+	value: string
+	label: string
+	depth: number
+	hasChildren: boolean
+}
+
+export interface DirectRatingTrackStrandOptionGroup {
+	track: string
+	options: DirectRatingStrandOption[]
+}
+
+export interface DirectRatingStrandSelectOption {
+	value: string
+	label: string
+}
+
+export interface DirectRatingStrandSelectGroup {
+	label: string
+	options: DirectRatingStrandSelectOption[]
+}
+
 export interface DirectRatingSelectOption {
 	value: string
 	label: string
@@ -43,41 +76,183 @@ export interface DirectRatingSelectGroup {
 	options: DirectRatingSelectOption[]
 }
 
-export const DIRECT_RATING_TRACK_STRAND_GROUPS: DirectRatingTrackStrandGroup[] = [
+function strandNode(label: string, children: DirectRatingStrandNode[] = []): DirectRatingStrandNode {
+	return children.length > 0 ? { label, value: label, children } : { label, value: label }
+}
+
+export const DIRECT_RATING_TRACK_STRAND_TREE: DirectRatingTrackStrandTree[] = [
 	{
 		track: 'Academic Track',
-		strands: ['Accountancy, Business and Management (ABM)', 'Science, Technology, Engineering, and Mathematics (STEM)', 'Humanities and Social Sciences (HUMSS)', 'General Academic Strand (GAS)'],
+		nodes: [strandNode('Accountancy, Business and Management (ABM)'), strandNode('Science, Technology, Engineering, and Mathematics (STEM)'), strandNode('Humanities and Social Sciences (HUMSS)'), strandNode('General Academic Strand (GAS)')],
 	},
 	{
 		track: 'Technical-Vocational-Livelihood (TVL) Track',
-		strands: [
-			'Agri-Fishery Arts (AFA)',
-			'Aquaculture - Fish Culture (AFA)',
-			'Horticulture - Horticulture (AFA)',
-			'Home Economics (HE)',
-			'Cookery - Cookery (HE)',
-			'Bread & Pastry - Bread & Pastry Production (HE)',
-			'Caregiving - Caregiving (HE)',
-			'Industrial Arts (IA)',
-			'Automotive Servicing - Automotive Servicing (IA)',
-			'Welding - Shielded Metal Arc Welding (IA)',
-			'Electrical Installation - Electrical Installation & Maintenance (IA)',
-			'Information and Communications Technology (ICT)',
-			'Computer Systems Servicing - Computer Systems Servicing (ICT)',
-			'Programming / Web Dev - Various NCs / short courses (ICT)',
-			'Maritime',
-			'Maritime Deck/Engine - Basic Safety / Ratings NCs (Maritime)',
+		nodes: [
+			strandNode('Agri-Fishery Arts (AFA)', [
+				strandNode('Aquaculture - Fish Culture (AFA)'),
+				strandNode('Horticulture - Horticulture (AFA)'),
+				strandNode('Agricultural Crops Production (AFA)'),
+				strandNode('Animal Health Care Management (AFA)'),
+				strandNode('Animal Production (AFA)'),
+				strandNode('Artificial Insemination (AFA)'),
+				strandNode('Fish Capture (AFA)'),
+				strandNode('Fishing Gear Repair and Maintenance (AFA)'),
+				strandNode('Fish-Products Packaging (AFA)'),
+				strandNode('Fish Wharf Operation (AFA)'),
+				strandNode('Food Processing (AFA)'),
+				strandNode('Landscape Installation and Maintenance (AFA)'),
+				strandNode('Organic Agriculture (AFA)'),
+				strandNode('Pest Management (AFA)'),
+				strandNode('Rice Machinery Operations (AFA)'),
+				strandNode('Rubber Processing (AFA)'),
+				strandNode('Rubber Production (AFA)'),
+				strandNode('Slaughtering Operations (AFA)'),
+			]),
+			strandNode('Home Economics (HE)', [
+				strandNode('Cookery (HE)'),
+				strandNode('Bread & Pastry Production (HE)'),
+				strandNode('Caregiving (HE)'),
+				strandNode('Attractions and Theme Parks Operations with Ecotourism (HE)'),
+				strandNode('Barbering (HE)'),
+				strandNode('Bartending (HE)'),
+				strandNode('Beauty/Nail Care (HE)'),
+				strandNode('Commercial Cooking (HE)'),
+				strandNode('Dressmaking (HE)'),
+				strandNode('Events Management Services (HE)'),
+				strandNode('Fashion Design (Apparel) (HE)'),
+				strandNode('Food and Beverage Services (HE)'),
+				strandNode('Front Office Services (HE)'),
+				strandNode('Hairdressing  (HE)'),
+				strandNode('Handicraft (HE)'),
+				strandNode('Housekeeping (HE)'),
+				strandNode('Local Guiding Services (HE)'),
+				strandNode('Tailoring  (HE)'),
+				strandNode('Tourism Promotion Services (HE)'),
+				strandNode('Travel Services (HE)'),
+				strandNode('Wellness Massage (HE)'),
+			]),
+			strandNode('Industrial Arts (IA)', [
+				strandNode('Automotive Servicing (IA)'),
+				strandNode('Shielded Metal Arc Welding (IA)'),
+				strandNode('Electrical Installation & Maintenance (IA)'),
+				strandNode('Carpentry (IA)'),
+				strandNode('Construction Painting (IA)'),
+				strandNode('Domestic Refrigeration and Air-conditioning (DOMRAC) Servicing (IA)'),
+				strandNode('Driving (IA)'),
+				strandNode('Electric Power Distribution Line Construction (IA)'),
+				strandNode('Electronic Products Assembly and Servicing (IA)'),
+				strandNode('Furniture Making (IA)'),
+				strandNode('Instrumentation and Control Servicing (IA)'),
+				strandNode('Machining (IA)'),
+				strandNode('Masonry (IA)'),
+				strandNode('Mechatronics Servicing (IA)'),
+				strandNode('Motorcycle/Small Engine Servicing (IA)'),
+				strandNode('Plumbing (IA)'),
+				strandNode('Refrigeration and Air-Conditioning (Packaged Air-Conditioning Unit [PACU] / Commercial Refrigeration Equipment [CRE]) Servicing (IA)'),
+				strandNode('Tile Setting (IA)'),
+				strandNode('Transmission Line Installation and Maintenance (IA)'),
+			]),
+			strandNode('Information and Communications Technology (ICT)', [
+				strandNode('Computer Systems Servicing (ICT)'),
+				strandNode('Computer Programming (ICT)'),
+				strandNode('Illustration (ICT)'),
+				strandNode('Technical Drafting (ICT)'),
+				strandNode('Contact Center Services (ICT)'),
+				strandNode('Animation (ICT)'),
+				strandNode('Medical Transcription (ICT)'),
+			]),
+			strandNode('Maritime', [strandNode('Maritime Deck/Engine - Basic Safety / Ratings NCs (Maritime)')]),
 		],
 	},
 	{
 		track: 'Sports Track',
-		strands: ['Sports Track'],
+		nodes: [strandNode('Sports Track')],
 	},
 	{
 		track: 'Arts and Design Track',
-		strands: ['Arts and Design Track'],
+		nodes: [strandNode('Arts and Design Track')],
 	},
 ]
+
+function flattenStrandNodes(nodes: DirectRatingStrandNode[]): string[] {
+	const result: string[] = []
+
+	for (const node of nodes) {
+		result.push(node.value)
+		if (node.children && node.children.length > 0) {
+			result.push(...flattenStrandNodes(node.children))
+		}
+	}
+
+	return result
+}
+
+function flattenStrandNodesWithDepth(nodes: DirectRatingStrandNode[], depth = 0): DirectRatingStrandOption[] {
+	const result: DirectRatingStrandOption[] = []
+
+	for (const node of nodes) {
+		const hasChildren = Array.isArray(node.children) && node.children.length > 0
+		result.push({ value: node.value, label: node.label, depth, hasChildren })
+		if (hasChildren) {
+			result.push(...flattenStrandNodesWithDepth(node.children, depth + 1))
+		}
+	}
+
+	return result
+}
+
+function flattenLeafNodes(nodes: DirectRatingStrandNode[]): DirectRatingStrandSelectOption[] {
+	const result: DirectRatingStrandSelectOption[] = []
+
+	for (const node of nodes) {
+		if (node.children && node.children.length > 0) {
+			result.push(...flattenLeafNodes(node.children))
+		} else {
+			result.push({ value: node.value, label: node.label })
+		}
+	}
+
+	return result
+}
+
+function buildStrandSelectGroups(tree: DirectRatingTrackStrandTree[]): DirectRatingStrandSelectGroup[] {
+	const groups: DirectRatingStrandSelectGroup[] = []
+
+	for (const group of tree) {
+		const leafOptions: DirectRatingStrandSelectOption[] = []
+		const nestedGroups: DirectRatingStrandSelectGroup[] = []
+
+		for (const node of group.nodes) {
+			if (node.children && node.children.length > 0) {
+				const childOptions = flattenLeafNodes(node.children)
+				if (childOptions.length > 0) {
+					nestedGroups.push({ label: `${group.track} - ${node.label}`, options: childOptions })
+				}
+			} else {
+				leafOptions.push({ value: node.value, label: node.label })
+			}
+		}
+
+		if (leafOptions.length > 0) {
+			groups.push({ label: group.track, options: leafOptions })
+		}
+		groups.push(...nestedGroups)
+	}
+
+	return groups
+}
+
+export const DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS: DirectRatingTrackStrandOptionGroup[] = DIRECT_RATING_TRACK_STRAND_TREE.map((group) => ({
+	track: group.track,
+	options: flattenStrandNodesWithDepth(group.nodes),
+}))
+
+export const DIRECT_RATING_STRAND_SELECT_GROUPS: DirectRatingStrandSelectGroup[] = buildStrandSelectGroups(DIRECT_RATING_TRACK_STRAND_TREE)
+
+export const DIRECT_RATING_TRACK_STRAND_GROUPS: DirectRatingTrackStrandGroup[] = DIRECT_RATING_TRACK_STRAND_TREE.map((group) => ({
+	track: group.track,
+	strands: flattenStrandNodes(group.nodes),
+}))
 
 export const DIRECT_RATING_STRAND_OPTIONS = DIRECT_RATING_TRACK_STRAND_GROUPS.flatMap((group) => group.strands)
 

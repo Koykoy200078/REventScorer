@@ -25,7 +25,6 @@ export default async function JudgeTokenPage({ params, searchParams }: { params:
 				criteria={session.event.criteria}
 				judge={session.judge}
 				rubricLegend={session.event.rubricLegend}
-				showRubricLegend={session.event.showRubricLegend}
 				directRatingConfig={session.event.directRatingConfig}
 				presentationSlots={session.event.presentationSlots}
 				existingScores={session.submission?.scores}
