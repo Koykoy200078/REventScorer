@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
 
 import { RatingSheet } from '@/components/rating-sheet'
 
@@ -12,7 +13,9 @@ export default function RatingSheetPage() {
 					Back to Dashboard
 				</Link>
 			</div>
-			<RatingSheet />
+			<Suspense fallback={<div className='p-8 text-center text-sm text-emerald-800'>Loading...</div>}>
+				<RatingSheet />
+			</Suspense>
 		</div>
 	)
 }

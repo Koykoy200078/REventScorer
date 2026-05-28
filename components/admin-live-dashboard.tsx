@@ -1161,6 +1161,8 @@ function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEd
 			programTag: contestant?.programTag === 'BSINT' || contestant?.programTag === 'BSCS' ? contestant.programTag : null,
 			participants: Array.isArray(contestant?.participants) ? contestant.participants.map((participant) => String(participant ?? '').trim()).filter((participant) => participant.length > 0) : [],
 			noatScore: numericNoatScore,
+			academicTrack: typeof contestant?.academicTrack === 'string' ? contestant.academicTrack : undefined,
+			laptopAvailable: typeof contestant?.laptopAvailable === 'string' ? contestant.laptopAvailable : undefined,
 		}
 	})
 
@@ -1202,6 +1204,8 @@ function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInpu
 		programTag: contestant.programTag ?? null,
 		participants: contestant.entryType === 'group' ? [...(contestant.participants ?? [])] : [],
 		noatScore: typeof contestant.noatScore === 'number' && Number.isFinite(contestant.noatScore) ? contestant.noatScore : null,
+		academicTrack: contestant.academicTrack,
+		laptopAvailable: contestant.laptopAvailable,
 	}))
 
 	const judges: AdminEventEditorInput['judges'] = event.judges.map((judge) => ({
@@ -2373,7 +2377,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										<div className='mt-3 space-y-3'>
 											{eventEditorDraft.contestants.map((contestant, contestantIndex) => (
 												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
-													<div className='grid gap-2 sm:grid-cols-[1fr_120px_120px_120px_auto]'>
+													<div className='grid gap-2 sm:grid-cols-[1fr_120px_120px_1fr_1fr_100px_auto]'>
 														<input
 															type='text'
 															placeholder='Contestant or team name'
@@ -2422,6 +2426,32 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															<option value='BSINT'>BSINT</option>
 															<option value='BSCS'>BSCS</option>
 														</select>
+														<input
+															type='text'
+															placeholder='Academic Track'
+															value={contestant.academicTrack ?? ''}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, academicTrack: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+														<input
+															type='text'
+															placeholder='Laptop / Remark'
+															value={contestant.laptopAvailable ?? ''}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, laptopAvailable: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
 														<input
 															type='number'
 															min={0}

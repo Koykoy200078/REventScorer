@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, DIRECT_RATING_TRACK_STRAND_TREE, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -11,6 +11,44 @@ type InputContestantDetailsMap = Record<string, { strand: string; remark: string
 type DirectScoreField = ReturnType<typeof detectDirectRatingScoreFields>[number]
 
 const DIRECT_REMARK_OPTIONS = ['Nihangyo + off-track', 'ON TRACK', 'ON TRACK with HIGH POTENTIAL', 'Transferee', 'OFF-TRACK with HIGH GRADES (STEM)', 'OFF-TRACK with POTENTIAL', 'OFF-TRACK']
+
+const TVL_TRACK_NAME = 'Technical-Vocational-Livelihood (TVL) Track'
+
+function getTVLLeafStrandOptions(): Array<{ value: string; label: string; group: string }> {
+	const tvlTree = DIRECT_RATING_TRACK_STRAND_TREE.find((t) => t.track === TVL_TRACK_NAME)
+	if (!tvlTree) return []
+	const result: Array<{ value: string; label: string; group: string }> = []
+	for (const node of tvlTree.nodes) {
+		if (node.children && node.children.length > 0) {
+			for (const child of node.children) {
+				result.push({ value: child.value, label: child.label, group: node.label })
+			}
+		} else {
+			result.push({ value: node.value, label: node.label, group: TVL_TRACK_NAME })
+		}
+	}
+	return result
+}
+
+const TVL_LEAF_STRAND_OPTIONS = getTVLLeafStrandOptions()
+
+function isTVLAcademicTrack(academicTrack: string | undefined): boolean {
+	if (!academicTrack) return false
+	const upper = academicTrack.toUpperCase()
+	return upper.includes('TVL') || upper.includes('TECHNICAL-VOCATIONAL') || upper.includes('TECHNICAL') || upper.includes('VOCATIONAL')
+}
+
+function autoResolveStrand(academicTrack: string | undefined): string | null {
+	if (!academicTrack) return null
+	const lower = academicTrack.toLowerCase()
+	if (lower.includes('science') || lower.includes('stem')) return 'Science, Technology, Engineering, and Mathematics (STEM)'
+	if (lower.includes('accountancy') || lower.includes('abm')) return 'Accountancy, Business and Management (ABM)'
+	if (lower.includes('humanities') || lower.includes('humss')) return 'Humanities and Social Sciences (HUMSS)'
+	if (lower.includes('general academic') || lower.includes('gas')) return 'General Academic Strand (GAS)'
+	if (lower.includes('sports')) return 'Sports Track'
+	if (lower.includes('arts') || lower.includes('design')) return 'Arts and Design Track'
+	return null
+}
 
 interface SubmitScoresRequestBody {
 	scores: ScoreMatrix
@@ -861,6 +899,37 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		void syncQueuedUploads(false)
 	}, [refreshQueuedUploads, syncQueuedUploads])
 
+	// Auto-fill strand and additional remark from contestant data when switching contestants
+	useEffect(() => {
+		const laptopAvailable = activeContestant?.laptopAvailable
+		const academicTrack = activeContestant?.academicTrack
+		if (!activeContestantId) return
+		
+		setContestantDetails((previous) => {
+			const current = previous[activeContestantId] || { strand: '', remark: '', additionalInfo: '' }
+			let hasChanges = false
+			const next = { ...current }
+
+			if (!current.additionalInfo && laptopAvailable) {
+				next.additionalInfo = laptopAvailable
+				hasChanges = true
+			}
+
+			if (!current.strand && academicTrack && !isTVLAcademicTrack(academicTrack)) {
+				const resolvedStrand = autoResolveStrand(academicTrack)
+				if (resolvedStrand) {
+					next.strand = resolvedStrand
+					hasChanges = true
+				}
+			}
+
+			return hasChanges ? {
+				...previous,
+				[activeContestantId]: next,
+			} : previous
+		})
+	}, [activeContestantId]) // eslint-disable-line react-hooks/exhaustive-deps
+
 	useEffect(() => {
 		const handleOnline = () => {
 			void syncQueuedUploads(true)
@@ -1081,7 +1150,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 										<div>
 											<h3 className='text-base font-semibold text-cyan-950'>Direct Score Entry</h3>
 											<p className='text-[11px] font-medium text-cyan-900/85'>Enter AVE/GPA, NOAT, and Interview directly. NOAT may be admin-provided and read-only. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
-											<p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p>
 										</div>
 										<div className='text-right'>
 											<p className='text-xs font-semibold text-emerald-800'>
@@ -1134,21 +1202,42 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									<div className='mt-3 grid gap-3 md:grid-cols-3'>
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 											<span className='block text-sm font-semibold text-cyan-950'>Strand</span>
-											<select
-												value={contestantDetails[activeContestantId]?.strand ?? ''}
-												onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
-												className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
-												<option value=''>Select track/strand</option>
-												{DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => (
-													<optgroup key={group.label} label={group.label}>
-														{group.options.map((option) => (
-															<option key={`${group.label}-${option.value}`} value={option.value}>
-																{option.label}
-															</option>
+											{isTVLAcademicTrack(activeContestant.academicTrack) ? (
+												<>
+													<p className='mt-1 text-[10px] text-cyan-700/80'>TVL Track — select specific sub-strand</p>
+													<select
+														value={contestantDetails[activeContestantId]?.strand ?? ''}
+														onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
+														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
+														<option value=''>Select TVL sub-strand</option>
+														{Array.from(new Set(TVL_LEAF_STRAND_OPTIONS.map((o) => o.group))).map((groupName) => (
+															<optgroup key={groupName} label={groupName}>
+																{TVL_LEAF_STRAND_OPTIONS.filter((o) => o.group === groupName).map((option) => (
+																	<option key={option.value} value={option.value}>
+																		{option.label}
+																	</option>
+																))}
+															</optgroup>
 														))}
-													</optgroup>
-												))}
-											</select>
+													</select>
+												</>
+											) : (
+												<select
+													value={contestantDetails[activeContestantId]?.strand ?? ''}
+													onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
+													className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
+													<option value=''>Select track/strand</option>
+													{DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => (
+														<optgroup key={group.label} label={group.label}>
+															{group.options.map((option) => (
+																<option key={`${group.label}-${option.value}`} value={option.value}>
+																	{option.label}
+																</option>
+															))}
+														</optgroup>
+													))}
+												</select>
+											)}
 										</label>
 
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
@@ -1268,7 +1357,10 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 						<div className='mt-6'>
 							<label className='block rounded-xl border border-cyan-200 bg-white p-4 text-sm font-medium text-slate-900 shadow-sm'>
 								<span className='block text-sm font-semibold text-cyan-950'>Additional Remark (Optional)</span>
-								<p className='mt-1 text-xs text-cyan-900/70'>Add any additional comments or observations for this contestant.</p>
+								<p className='mt-1 text-xs text-cyan-900/70'>
+									Add any additional comments or observations for this contestant.
+									{activeContestant.laptopAvailable ? <span className='ml-1 text-cyan-700/70'>(Auto-filled from laptop availability — you may overwrite)</span> : null}
+								</p>
 								<textarea
 									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
 									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
