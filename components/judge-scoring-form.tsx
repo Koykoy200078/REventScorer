@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Select from 'react-select'
 
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, DIRECT_RATING_TRACK_STRAND_TREE, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
@@ -660,32 +661,62 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 		return 100
 	}, [directScoreFields, isDirectScoreMode])
 
+	const activeDirectInterviewFields = useMemo(() => directScoreFields.filter((field) => field.key.startsWith('interview')), [directScoreFields])
+	const activeDirectInterviewMax = useMemo(() => activeDirectInterviewFields.reduce((sum, f) => sum + f.maxScore, 0), [activeDirectInterviewFields])
+
 	const activeDirectBaseFinalRating = useMemo(() => {
 		if (!isDirectScoreMode || !activeContestantId || directScoreFields.length === 0) {
 			return 0
 		}
 
-		const totalPercent = directScoreFields.reduce((sum, field) => {
+		let avePercent = 0
+		let noatPercent = 0
+		let interviewScore = 0
+		
+		let hasAve = false
+		let hasNoat = false
+		let hasInterview = false
+
+		for (const field of directScoreFields) {
 			const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 			const score = parseAndClampScore(rawValue, field.maxScore)
-			if (field.maxScore <= 0) {
-				return sum
+
+			if (field.key === 'aveGpa') {
+				if (field.maxScore > 0) avePercent = (score / field.maxScore) * 100
+				hasAve = true
+			} else if (field.key === 'noat') {
+				if (field.maxScore > 0) noatPercent = (score / field.maxScore) * 100
+				hasNoat = true
+			} else if (field.key.startsWith('interview')) {
+				interviewScore += score
+				hasInterview = true
 			}
+		}
 
-			return sum + (score / field.maxScore) * 100
-		}, 0)
+		let interviewPercent = 0
+		if (hasInterview && activeDirectInterviewMax > 0) {
+			interviewPercent = (interviewScore / activeDirectInterviewMax) * 100
+		}
 
-		return round(totalPercent / directScoreFields.length)
-	}, [activeContestantId, directScoreFields, isDirectScoreMode, scores])
-	const activeDirectInterviewField = useMemo(() => directScoreFields.find((field) => field.key === 'interview') ?? null, [directScoreFields])
+		let totalPercent = 0
+		let divisor = 0
+		if (hasAve) { totalPercent += avePercent; divisor++; }
+		if (hasNoat) { totalPercent += noatPercent; divisor++; }
+		if (hasInterview) { totalPercent += interviewPercent; divisor++; }
+
+		return divisor > 0 ? round(totalPercent / divisor) : 0
+	}, [activeContestantId, activeDirectInterviewMax, directScoreFields, isDirectScoreMode, scores])
+
 	const activeDirectInterviewScore = useMemo(() => {
-		if (!isDirectScoreMode || !activeContestantId || !activeDirectInterviewField) {
+		if (!isDirectScoreMode || !activeContestantId || activeDirectInterviewFields.length === 0) {
 			return 0
 		}
 
-		const rawValue = scores[activeContestantId]?.[activeDirectInterviewField.subCriterionId] ?? '0'
-		return parseAndClampScore(rawValue, activeDirectInterviewField.maxScore)
-	}, [activeContestantId, activeDirectInterviewField, isDirectScoreMode, scores])
+		return activeDirectInterviewFields.reduce((sum, field) => {
+			const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
+			return sum + parseAndClampScore(rawValue, field.maxScore)
+		}, 0)
+	}, [activeContestantId, activeDirectInterviewFields, isDirectScoreMode, scores])
 
 	const activeDirectStrand = activeContestantId ? (contestantDetails[activeContestantId]?.strand ?? '') : ''
 	const activeDirectBonusPoints = useMemo(() => {
@@ -695,32 +726,55 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 
 		return round(resolveStrandAlignmentBonus(activeDirectStrand, resolvedDirectRatingConfig).bonusPoints)
 	}, [activeDirectStrand, isDirectScoreMode, resolvedDirectRatingConfig])
+
 	const activeDirectInterviewScoreWithBonus = useMemo(() => {
-		if (!isDirectScoreMode || !activeDirectInterviewField) {
+		if (!isDirectScoreMode || activeDirectInterviewFields.length === 0) {
 			return activeDirectInterviewScore
 		}
 
-		return round(Math.min(activeDirectInterviewField.maxScore, activeDirectInterviewScore + activeDirectBonusPoints))
-	}, [activeDirectBonusPoints, activeDirectInterviewField, activeDirectInterviewScore, isDirectScoreMode])
+		return round(Math.min(activeDirectInterviewMax, activeDirectInterviewScore + activeDirectBonusPoints))
+	}, [activeDirectBonusPoints, activeDirectInterviewFields.length, activeDirectInterviewMax, activeDirectInterviewScore, isDirectScoreMode])
+
 	const activeDirectAppliedInterviewBonus = useMemo(() => round(Math.max(0, activeDirectInterviewScoreWithBonus - activeDirectInterviewScore)), [activeDirectInterviewScore, activeDirectInterviewScoreWithBonus])
+
 	const activeDirectFinalRating = useMemo(() => {
 		if (!isDirectScoreMode || !activeContestantId || directScoreFields.length === 0) {
 			return 0
 		}
 
-		const totalPercent = directScoreFields.reduce((sum, field) => {
+		let avePercent = 0
+		let noatPercent = 0
+		
+		let hasAve = false
+		let hasNoat = false
+		let hasInterview = activeDirectInterviewFields.length > 0
+
+		for (const field of directScoreFields) {
 			const rawValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 			const score = parseAndClampScore(rawValue, field.maxScore)
-			if (field.maxScore <= 0) {
-				return sum
+
+			if (field.key === 'aveGpa') {
+				if (field.maxScore > 0) avePercent = (score / field.maxScore) * 100
+				hasAve = true
+			} else if (field.key === 'noat') {
+				if (field.maxScore > 0) noatPercent = (score / field.maxScore) * 100
+				hasNoat = true
 			}
+		}
 
-			const adjustedScore = field.key === 'interview' ? Math.min(field.maxScore, score + activeDirectBonusPoints) : score
-			return sum + (adjustedScore / field.maxScore) * 100
-		}, 0)
+		let interviewPercent = 0
+		if (hasInterview && activeDirectInterviewMax > 0) {
+			interviewPercent = (activeDirectInterviewScoreWithBonus / activeDirectInterviewMax) * 100
+		}
 
-		return round(totalPercent / directScoreFields.length)
-	}, [activeContestantId, activeDirectBonusPoints, directScoreFields, isDirectScoreMode, scores])
+		let totalPercent = 0
+		let divisor = 0
+		if (hasAve) { totalPercent += avePercent; divisor++; }
+		if (hasNoat) { totalPercent += noatPercent; divisor++; }
+		if (hasInterview) { totalPercent += interviewPercent; divisor++; }
+
+		return divisor > 0 ? round(totalPercent / divisor) : 0
+	}, [activeContestantId, activeDirectInterviewFields.length, activeDirectInterviewMax, activeDirectInterviewScoreWithBonus, directScoreFields, isDirectScoreMode, scores])
 	const directFinalRatingMaxPossible = useMemo(() => {
 		if (!isDirectScoreMode) {
 			return 0
@@ -1094,7 +1148,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 							const slotLabel = slotLabelsByContestant.get(contestant.id)
 							const isIndividual = contestant.entryType === 'individual'
 							return (
-								<button key={contestant.id} type='button' onClick={() => goToContestant(index)} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
+								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
 									<div className='flex flex-col items-start'>
 										<span>
 											{index + 1}. {contestant.name}
@@ -1161,8 +1215,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 										</div>
 									</div>
 
-									<div className='mt-3 grid gap-3 md:grid-cols-3'>
-										{directScoreFields.map((field) => {
+									<div className='mt-3 grid gap-3 md:grid-cols-2'>
+										{directScoreFields.filter((f) => !f.key.startsWith('interview')).map((field) => {
 											const enteredValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
 											const enteredScore = parseAndClampScore(enteredValue, field.maxScore)
 											const normalizedPercent = field.maxScore > 0 ? round((enteredScore / field.maxScore) * 100) : 0
@@ -1176,6 +1230,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 														{isNoatLocked ? ' | Admin provided' : ''}
 													</span>
 													<input
+														suppressHydrationWarning
 														value={enteredValue}
 														onChange={(inputEvent) => {
 															if (isNoatLocked) {
@@ -1199,60 +1254,120 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 										})}
 									</div>
 
-									<div className='mt-3 grid gap-3 md:grid-cols-3'>
+									{directScoreFields.some((f) => f.key.startsWith('interview')) ? (
+										<div className='mt-4 rounded-xl border border-cyan-200 bg-white/60 p-4'>
+											<h4 className='mb-3 text-sm font-bold tracking-wider text-cyan-950 uppercase'>Interview</h4>
+											<div className='grid gap-3 md:grid-cols-2'>
+												{directScoreFields.filter((f) => f.key.startsWith('interview')).map((field) => {
+													const enteredValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
+													const enteredScore = parseAndClampScore(enteredValue, field.maxScore)
+													const normalizedPercent = field.maxScore > 0 ? round((enteredScore / field.maxScore) * 100) : 0
+
+													return (
+														<label key={field.subCriterionId} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
+															<span className='block text-sm font-semibold text-cyan-950'>{field.label}</span>
+															<span className='mt-1 block text-xs text-cyan-900/90'>
+																Max: {field.maxScore.toFixed(2)}
+															</span>
+															<input
+																suppressHydrationWarning
+																value={enteredValue}
+																onChange={(inputEvent) => {
+																	updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)
+																}}
+																type='number'
+																inputMode='decimal'
+																min={0}
+																max={field.maxScore}
+																step='0.01'
+																className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
+															/>
+															<span className='mt-1 block text-xs font-medium text-slate-700'>
+																Entered: {enteredScore.toFixed(2)} | Normalized: {normalizedPercent.toFixed(2)}%
+															</span>
+														</label>
+													)
+												})}
+											</div>
+										</div>
+									) : null}
+
+									<div className='mt-3 grid gap-3 md:grid-cols-2'>
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 											<span className='block text-sm font-semibold text-cyan-950'>Strand</span>
 											{isTVLAcademicTrack(activeContestant.academicTrack) ? (
 												<>
 													<p className='mt-1 text-[10px] text-cyan-700/80'>TVL Track — select specific sub-strand</p>
-													<select
-														value={contestantDetails[activeContestantId]?.strand ?? ''}
-														onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
-														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
-														<option value=''>Select TVL sub-strand</option>
-														{Array.from(new Set(TVL_LEAF_STRAND_OPTIONS.map((o) => o.group))).map((groupName) => (
-															<optgroup key={groupName} label={groupName}>
-																{TVL_LEAF_STRAND_OPTIONS.filter((o) => o.group === groupName).map((option) => (
-																	<option key={option.value} value={option.value}>
-																		{option.label}
-																	</option>
-																))}
-															</optgroup>
-														))}
-													</select>
+													<div className='mt-2'>
+														<Select
+															instanceId={`strand-tvl-select-${activeContestantId}`}
+															options={Array.from(new Set(TVL_LEAF_STRAND_OPTIONS.map((o) => o.group))).map((groupName) => ({
+																label: groupName,
+																options: TVL_LEAF_STRAND_OPTIONS.filter((o) => o.group === groupName).map((o) => ({ value: o.value, label: o.label })),
+															}))}
+															value={(() => {
+																const val = contestantDetails[activeContestantId]?.strand ?? ''
+																return val ? { value: val, label: TVL_LEAF_STRAND_OPTIONS.find(o => o.value === val)?.label ?? val } : null
+															})()}
+															onChange={(selected) => updateContestantDetailsField(activeContestantId, 'strand', selected?.value ?? '')}
+															isClearable
+															placeholder='Search or select...'
+															classNamePrefix='react-select'
+															styles={{
+																control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+																valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
+																singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
+															}}
+														/>
+													</div>
 												</>
 											) : (
-												<select
-													value={contestantDetails[activeContestantId]?.strand ?? ''}
-													onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'strand', inputEvent.target.value)}
-													className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
-													<option value=''>Select track/strand</option>
-													{DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => (
-														<optgroup key={group.label} label={group.label}>
-															{group.options.map((option) => (
-																<option key={`${group.label}-${option.value}`} value={option.value}>
-																	{option.label}
-																</option>
-															))}
-														</optgroup>
-													))}
-												</select>
+												<div className='mt-2'>
+													<Select
+														instanceId={`strand-select-${activeContestantId}`}
+														options={DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => ({
+															label: group.label,
+															options: group.options.map((o) => ({ value: o.value, label: o.label })),
+														}))}
+														value={(() => {
+															const val = contestantDetails[activeContestantId]?.strand ?? ''
+															return val ? { value: val, label: DIRECT_RATING_STRAND_SELECT_GROUPS.flatMap(g => g.options).find(o => o.value === val)?.label ?? val } : null
+														})()}
+														onChange={(selected) => updateContestantDetailsField(activeContestantId, 'strand', selected?.value ?? '')}
+														isClearable
+														placeholder='Search or select...'
+														classNamePrefix='react-select'
+														styles={{
+															control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+															valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
+															singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
+														}}
+													/>
+												</div>
 											)}
 										</label>
 
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 											<span className='block text-sm font-semibold text-cyan-950'>Remark</span>
-											<select
-												value={contestantDetails[activeContestantId]?.remark ?? ''}
-												onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'remark', inputEvent.target.value)}
-												className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'>
-												<option value=''>Select remark</option>
-												{DIRECT_REMARK_OPTIONS.map((option) => (
-													<option key={option} value={option}>
-														{option}
-													</option>
-												))}
-											</select>
+											<div className='mt-2'>
+												<Select
+													instanceId={`remark-select-${activeContestantId}`}
+													options={DIRECT_REMARK_OPTIONS.map((opt) => ({ value: opt, label: opt }))}
+													value={(() => {
+														const val = contestantDetails[activeContestantId]?.remark ?? ''
+														return val ? { value: val, label: val } : null
+													})()}
+													onChange={(selected) => updateContestantDetailsField(activeContestantId, 'remark', selected?.value ?? '')}
+													isClearable
+													placeholder='Search or select...'
+													classNamePrefix='react-select'
+													styles={{
+														control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+														valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
+														singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
+													}}
+												/>
+											</div>
 										</label>
 									</div>
 
@@ -1311,6 +1426,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 																			<span className='block text-sm font-semibold text-cyan-950'>{displayName}</span>
 																			<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
 																			<input
+																				suppressHydrationWarning
 																				value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
 																				onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
 																				type='number'
@@ -1335,6 +1451,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 															<span className='block text-sm font-semibold text-cyan-950'>{subCriterion.name}</span>
 															<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
 															<input
+																suppressHydrationWarning
 																value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
 																onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
 																type='number'
@@ -1362,6 +1479,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 									{activeContestant.laptopAvailable ? <span className='ml-1 text-cyan-700/70'>(Auto-filled from laptop availability — you may overwrite)</span> : null}
 								</p>
 								<textarea
+									suppressHydrationWarning
 									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
 									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
 									placeholder='Enter any additional remark here...'
@@ -1376,13 +1494,13 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 					{successMessage ? <p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{successMessage}</p> : null}
 
 					<div className='flex flex-wrap gap-3'>
-						<button type='button' onClick={() => goToContestant(activeContestantIndex - 1)} disabled={activeContestantIndex === 0} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
+						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex - 1)} disabled={activeContestantIndex === 0} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
 							Previous Entry
 						</button>
-						<button type='button' onClick={() => goToContestant(activeContestantIndex + 1)} disabled={activeContestantIndex >= contestants.length - 1} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
+						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex + 1)} disabled={activeContestantIndex >= contestants.length - 1} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
 							Next Entry
 						</button>
-						<button type='submit' disabled={isSaving} className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
+						<button suppressHydrationWarning type='submit' disabled={isSaving} className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
 							{isSaving ? `Saving ${activeContestant.name}...` : `Save ${activeContestant.name} Scores`}
 						</button>
 					</div>

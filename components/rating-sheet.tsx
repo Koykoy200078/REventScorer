@@ -740,26 +740,37 @@ export function RatingSheet() {
 					</div>
 					<p className='mt-1 text-xs text-emerald-900/80'>Set max scores per field (default 100). Strand bonus is added to Interview points only (capped by Interview max), then Final Rating is computed as the average percentage.</p>
 
-					<div className='mt-3 grid gap-3 sm:grid-cols-3'>
+					<div className='mt-2 grid grid-cols-2 gap-3'>
 						<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
-							AVE/GPA Max Score
+							AVE/GPA Max
 							<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.aveGpa} onChange={(event) => updateDirectMaxScore('aveGpa', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
 						</label>
 						<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
-							NOAT Max Score
+							NOAT Max
 							<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.noat} onChange={(event) => updateDirectMaxScore('noat', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
 						</label>
-						<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
-							Interview Max Score
-							<input
-								type='number'
-								min={1}
-								step='0.01'
-								value={directRatingConfig.maxScores.interview}
-								onChange={(event) => updateDirectMaxScore('interview', event.target.value)}
-								className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
-							/>
-						</label>
+					</div>
+
+					<div className='mt-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3'>
+						<p className='mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-900'>Interview Components Max Scores</p>
+						<div className='grid grid-cols-2 gap-3 md:grid-cols-4'>
+							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
+								Comm. Skills Max
+								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewComm} onChange={(event) => updateDirectMaxScore('interviewComm', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							</label>
+							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
+								Personality Max
+								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewPers} onChange={(event) => updateDirectMaxScore('interviewPers', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							</label>
+							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
+								Interest Max
+								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewInterest} onChange={(event) => updateDirectMaxScore('interviewInterest', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							</label>
+							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
+								Special Skills Max
+								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewSpecial} onChange={(event) => updateDirectMaxScore('interviewSpecial', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							</label>
+						</div>
 					</div>
 
 					<div className='mt-4 rounded-xl border border-emerald-200 bg-white p-3'>

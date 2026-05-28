@@ -292,11 +292,11 @@ function directFinalRatingComponentsFromSubmission(
 		}
 
 		const adjustedScore =
-			field.key === 'interview'
+			field.key === 'interviewInterest'
 				? Math.min(validMaxScore, clampedScore + sanitizedInterviewBonus)
 				: clampedScore
 
-		if (field.key === 'interview') {
+		if (field.key === 'interviewInterest') {
 			appliedInterviewBonus = round(adjustedScore - clampedScore)
 		}
 
@@ -416,7 +416,10 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				participantTotals: {} as Record<string, number>,
 				totalAveGpa: 0,
 				totalNoat: 0,
-				totalInterview: 0,
+				totalInterviewComm: 0,
+				totalInterviewPers: 0,
+				totalInterviewInterest: 0,
+				totalInterviewSpecial: 0,
 				strands: [] as string[],
 				remarks: [] as string[],
 				additionalInfos: [] as string[],
@@ -497,11 +500,17 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			if (isDirectRatingEvent) {
 				const aveGpaField = directScoreFields.find((f) => f.key === 'aveGpa')
 				const noatField = directScoreFields.find((f) => f.key === 'noat')
-				const interviewField = directScoreFields.find((f) => f.key === 'interview')
+				const interviewCommField = directScoreFields.find((f) => f.key === 'interviewComm')
+				const interviewPersField = directScoreFields.find((f) => f.key === 'interviewPers')
+				const interviewInterestField = directScoreFields.find((f) => f.key === 'interviewInterest')
+				const interviewSpecialField = directScoreFields.find((f) => f.key === 'interviewSpecial')
 
 				if (aveGpaField) aggregate.totalAveGpa += Number(submission.scores[contestant.id]?.[aveGpaField.subCriterionId] ?? 0)
 				if (noatField) aggregate.totalNoat += Number(submission.scores[contestant.id]?.[noatField.subCriterionId] ?? 0)
-				if (interviewField) aggregate.totalInterview += Number(submission.scores[contestant.id]?.[interviewField.subCriterionId] ?? 0)
+				if (interviewCommField) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[interviewCommField.subCriterionId] ?? 0)
+				if (interviewPersField) aggregate.totalInterviewPers += Number(submission.scores[contestant.id]?.[interviewPersField.subCriterionId] ?? 0)
+				if (interviewInterestField) aggregate.totalInterviewInterest += Number(submission.scores[contestant.id]?.[interviewInterestField.subCriterionId] ?? 0)
+				if (interviewSpecialField) aggregate.totalInterviewSpecial += Number(submission.scores[contestant.id]?.[interviewSpecialField.subCriterionId] ?? 0)
 
 				const details = submission.contestantDetails?.[contestant.id]
 				if (details?.strand && !aggregate.strands.includes(details.strand)) aggregate.strands.push(details.strand)
@@ -603,7 +612,11 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 					? {
 							aveGpa: aggregate.judgeCount > 0 ? round(aggregate.totalAveGpa / aggregate.judgeCount) : 0,
 							noat: aggregate.judgeCount > 0 ? round(aggregate.totalNoat / aggregate.judgeCount) : 0,
-							interview: aggregate.judgeCount > 0 ? round(aggregate.totalInterview / aggregate.judgeCount) : 0,
+							interviewComm: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewComm / aggregate.judgeCount) : 0,
+							interviewPers: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewPers / aggregate.judgeCount) : 0,
+							interviewInterest: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewInterest / aggregate.judgeCount) : 0,
+							interviewSpecial: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewSpecial / aggregate.judgeCount) : 0,
+							totalInterview: aggregate.judgeCount > 0 ? round((aggregate.totalInterviewComm + aggregate.totalInterviewPers + aggregate.totalInterviewInterest + aggregate.totalInterviewSpecial) / aggregate.judgeCount) : 0,
 							strand: aggregate.strands.join(' / '),
 							remark: aggregate.remarks.join(' / '),
 							additionalInfo: aggregate.additionalInfos.join(' / '),
