@@ -47,6 +47,8 @@ export interface ContestantInput {
 	participants?: string[]
 	programTag?: EventProgramTag | null
 	noatScore?: number
+	academicTrack?: string
+	laptopAvailable?: string
 }
 
 export interface SubCriterionInput {
@@ -77,6 +79,8 @@ export interface AdminContestantEditorInput {
 	participants?: string[]
 	programTag?: EventProgramTag | null
 	noatScore?: number | string | null
+	academicTrack?: string
+	laptopAvailable?: string
 }
 
 export interface AdminJudgeEditorInput {
@@ -140,6 +144,8 @@ export interface EventContestant {
 	participants?: string[]
 	programTag?: EventProgramTag | null
 	noatScore?: number
+	academicTrack?: string
+	laptopAvailable?: string
 }
 
 export interface EventJudge {

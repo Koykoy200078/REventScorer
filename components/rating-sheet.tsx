@@ -1,25 +1,112 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 
 import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
-import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput } from '@/lib/types'
+import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput, EventProgramTag } from '@/lib/types'
 
 type JudgeDraft = {
 	id: string
 	name: string
 	email: string
+	assignedRange?: string
+}
+
+function isNumberInRange(num: number, rangeStr: string): boolean {
+	if (!rangeStr || !rangeStr.trim()) return true
+	const parts = rangeStr.split(',')
+	for (const part of parts) {
+		const p = part.trim()
+		if (!p) continue
+		if (p.includes('-')) {
+			const [startStr, endStr] = p.split('-')
+			const start = parseInt(startStr.trim(), 10)
+			const end = parseInt(endStr.trim(), 10)
+			if (!isNaN(start) && !isNaN(end) && num >= start && num <= end) return true
+			if (!isNaN(start) && isNaN(end) && num >= start) return true
+		} else {
+			const exact = parseInt(p, 10)
+			if (!isNaN(exact) && exact === num) return true
+		}
+	}
+	return false
+}
+
+function formatIndicesToRanges(indices: number[], totalCount: number): string {
+	if (!indices || indices.length === 0) return ''
+	if (indices.length === totalCount) return '' // Empty means all
+	const sorted = [...new Set(indices)].sort((a, b) => a - b)
+	const ranges: string[] = []
+	let start = sorted[0]
+	let prev = sorted[0]
+
+	for (let i = 1; i < sorted.length; i++) {
+		if (sorted[i] === prev + 1) {
+			prev = sorted[i]
+		} else {
+			ranges.push(start === prev ? `${start + 1}` : `${start + 1}-${prev + 1}`)
+			start = sorted[i]
+			prev = sorted[i]
+		}
+	}
+	ranges.push(start === prev ? `${start + 1}` : `${start + 1}-${prev + 1}`)
+	return ranges.join(', ')
 }
 
 type RatingEntry = {
 	id: string
 	name: string
 	noatScore: string
+	academicTrack?: string
+	laptopAvailable?: string
+	programTag?: EventProgramTag | null
 }
 
 type CreateEventApiResponse = CreateEventResponse & {
 	error?: string
+}
+
+type ImportRecord = {
+	last_first_name?: string
+	first_name?: string
+	last_name?: string
+	noat_score?: string | number
+	program_applied_for?: string
+	academic_track?: string
+	laptop_available?: string
+}
+
+function inferProgramTagFromString(programAppliedFor: string): EventProgramTag | null {
+	const upper = programAppliedFor.toUpperCase()
+	if (upper.includes('BSINT')) return 'BSINT'
+	if (upper.includes('BSCS')) return 'BSCS'
+	return null
+}
+
+function parseImportRecords(rawJson: string): { records: ImportRecord[]; error: string | null } {
+	try {
+		const parsed = JSON.parse(rawJson) as unknown
+		if (!Array.isArray(parsed)) return { records: [], error: 'JSON must be an array of records.' }
+		const records: ImportRecord[] = []
+		for (const item of parsed) {
+			if (!item || typeof item !== 'object') continue
+			const rec = item as Record<string, unknown>
+			records.push({
+				last_first_name: typeof rec.last_first_name === 'string' ? rec.last_first_name : undefined,
+				first_name: typeof rec.first_name === 'string' ? rec.first_name : undefined,
+				last_name: typeof rec.last_name === 'string' ? rec.last_name : undefined,
+				noat_score: typeof rec.noat_score === 'string' || typeof rec.noat_score === 'number' ? rec.noat_score : undefined,
+				program_applied_for: typeof rec.program_applied_for === 'string' ? rec.program_applied_for : undefined,
+				academic_track: typeof rec.academic_track === 'string' ? rec.academic_track : undefined,
+				laptop_available: typeof rec.laptop_available === 'string' ? rec.laptop_available : undefined,
+			})
+		}
+		return { records, error: null }
+	} catch {
+		return { records: [], error: 'Invalid JSON.' }
+	}
 }
 
 function localId(): string {
@@ -46,6 +133,7 @@ function createJudge(): JudgeDraft {
 		id: localId(),
 		name: '',
 		email: '',
+		assignedRange: '',
 	}
 }
 
@@ -56,9 +144,9 @@ function entriesFromNewLines(value: string): string[] {
 		.filter((entry) => entry.length > 0)
 }
 
-function buildContestantsPayload(entries: RatingEntry[]): ContestantInput[] {
+function buildContestantsPayload(entries: RatingEntry[]): (ContestantInput & { id?: string })[] {
 	const uniqueContestantNames = new Set<string>()
-	const contestants: ContestantInput[] = []
+	const contestants: (ContestantInput & { id?: string })[] = []
 
 	for (const entry of entries) {
 		const name = entry.name.trim()
@@ -75,18 +163,22 @@ function buildContestantsPayload(entries: RatingEntry[]): ContestantInput[] {
 		const parsedNoat = Number.parseFloat(entry.noatScore)
 		const noatScore = Number.isFinite(parsedNoat) && parsedNoat >= 0 ? Math.round(parsedNoat * 1000) / 1000 : undefined
 		contestants.push({
+			id: entry.id,
 			name,
 			entryType: 'individual',
 			...(noatScore !== undefined ? { noatScore } : {}),
+			academicTrack: entry.academicTrack,
+			laptopAvailable: entry.laptopAvailable,
+			programTag: entry.programTag,
 		})
 	}
 
 	return contestants
 }
 
-function buildJudgesPayload(judges: JudgeDraft[]): JudgeInput[] {
+function buildJudgesPayload(judges: JudgeDraft[]): (JudgeInput & { id?: string })[] {
 	const uniqueJudgeNames = new Set<string>()
-	const normalizedJudges: JudgeInput[] = []
+	const normalizedJudges: (JudgeInput & { id?: string })[] = []
 
 	for (const judge of judges) {
 		const name = judge.name.trim()
@@ -103,6 +195,7 @@ function buildJudgesPayload(judges: JudgeDraft[]): JudgeInput[] {
 		const email = judge.email.trim()
 
 		normalizedJudges.push({
+			id: judge.id,
 			name,
 			...(email ? { email } : {}),
 		})
@@ -119,6 +212,11 @@ function dateDisplay(iso: string): string {
 }
 
 export function RatingSheet() {
+	const searchParams = useSearchParams()
+	const editEventId = searchParams.get('editEventId')
+
+	const errorRef = useRef<HTMLDivElement>(null)
+	
 	const [entries, setEntries] = useState<RatingEntry[]>(() => [createEntry()])
 	const [title, setTitle] = useState('Direct Rating Sheet')
 	const [description, setDescription] = useState('Final Rating is auto-computed from AVE/GPA, NOAT, and Interview using admin-configured max scores. Strand alignment bonus is applied to Interview points only.')
@@ -127,11 +225,79 @@ export function RatingSheet() {
 	const [judges, setJudges] = useState<JudgeDraft[]>(() => [createJudge()])
 	const [bulkEnabled, setBulkEnabled] = useState(false)
 	const [bulkNamesText, setBulkNamesText] = useState('')
+	const [importJsonMode, setImportJsonMode] = useState(false)
+	const [importJsonText, setImportJsonText] = useState('')
+	const [importParsed, setImportParsed] = useState<ImportRecord[] | null>(null)
+	const [importParseError, setImportParseError] = useState<string | null>(null)
 	const [isSaving, setIsSaving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [created, setCreated] = useState<CreateEventResponse | null>(null)
 	const [publishedAt, setPublishedAt] = useState<string | null>(null)
 	const [copiedValue, setCopiedValue] = useState<string | null>(null)
+	const [isLoadingExisting, setIsLoadingExisting] = useState(false)
+	const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false)
+	const [updatePassword, setUpdatePassword] = useState('')
+	const [updatePasswordError, setUpdatePasswordError] = useState('')
+	const [isVerifyingPassword, setIsVerifyingPassword] = useState(false)
+
+	useEffect(() => {
+		if (!editEventId) return
+		let mounted = true
+		setIsLoadingExisting(true)
+
+		fetch(`/api/eventscorer/admin/events/${editEventId}`)
+			.then((res) => res.json())
+			.then((data: any) => {
+				if (!mounted) return
+				if (data && data.event) {
+					const ev = data.event
+					setTitle(ev.title || 'Direct Rating Sheet')
+					setDescription(ev.description || '')
+					setCreatedBy(ev.createdBy || '')
+					if (ev.directRatingConfig) {
+						setDirectRatingConfig(normalizeDirectRatingConfig(ev.directRatingConfig))
+					}
+					if (ev.judges && ev.judges.length > 0) {
+						setJudges(ev.judges.map((j: any) => {
+							let assignedRange = ''
+							if (ev.presentationSlots && ev.presentationSlots.length > 0 && ev.contestants) {
+								const indices: number[] = []
+								ev.presentationSlots.forEach((slot: any) => {
+									if (slot.judgeIds && slot.judgeIds.includes(j.id)) {
+										const contestantIndex = ev.contestants.findIndex((c: any) => c.id === slot.contestantId)
+										if (contestantIndex !== -1) {
+											indices.push(contestantIndex)
+										}
+									}
+								})
+								assignedRange = formatIndicesToRanges(indices, ev.contestants.length)
+							}
+							return { id: j.id, name: j.name, email: j.email || '', assignedRange }
+						}))
+					}
+					if (ev.contestants && ev.contestants.length > 0) {
+						setEntries(ev.contestants.map((c: any) => ({
+							id: c.id || localId(),
+							name: c.name,
+							noatScore: c.noatScore !== null && c.noatScore !== undefined ? String(c.noatScore) : '',
+							academicTrack: c.academicTrack || '',
+							laptopAvailable: c.laptopAvailable || '',
+							programTag: c.programTag || null,
+						})))
+					}
+				}
+			})
+			.catch((err) => {
+				console.error('Failed to load event data', err)
+			})
+			.finally(() => {
+				if (mounted) setIsLoadingExisting(false)
+			})
+
+		return () => {
+			mounted = false
+		}
+	}, [editEventId])
 
 	const totalEntries = entries.length
 	const selectedAlignedStrandSet = new Set([...directRatingConfig.strandBonus.singleAlignedStrands, ...directRatingConfig.strandBonus.multiAlignedStrands].map((strand) => strand.toLowerCase()))
@@ -276,6 +442,69 @@ export function RatingSheet() {
 		setJudges((previous) => (previous.length > 1 ? previous.filter((judge) => judge.id !== id) : previous))
 	}
 
+	function handleImportPaste(text: string) {
+		setImportJsonText(text)
+		setImportParseError(null)
+		if (!text.trim()) {
+			setImportParsed(null)
+			return
+		}
+		const { records, error: parseError } = parseImportRecords(text)
+		if (parseError) {
+			setImportParseError(parseError)
+			setImportParsed(null)
+			return
+		}
+		if (records.length === 0) {
+			setImportParseError('No valid records found in the JSON data.')
+			setImportParsed(null)
+			return
+		}
+		setImportParsed(records)
+	}
+
+	function parseImportJson(): void {
+		handleImportPaste(importJsonText)
+	}
+
+	function addEntriesFromImportData(): void {
+		if (!importParsed || importParsed.length === 0) {
+			return
+		}
+		const incomingRecords = [...importParsed]
+		
+		setEntries((previous) => {
+			const nextEntries = previous.map((entry) => {
+				if (incomingRecords.length === 0 || entry.name.trim().length > 0) return entry
+				const rec = incomingRecords.shift()!
+				return {
+					...entry,
+					name: rec.last_first_name?.trim() || '',
+					noatScore: rec.noat_score !== undefined ? String(rec.noat_score) : '',
+					academicTrack: rec.academic_track?.trim() || undefined,
+					laptopAvailable: rec.laptop_available?.trim() || undefined,
+					programTag: rec.program_applied_for ? inferProgramTagFromString(rec.program_applied_for) : null,
+				}
+			})
+			
+			if (incomingRecords.length === 0) return nextEntries
+			
+			const newEntries = incomingRecords.map((rec) => ({
+				id: localId(),
+				name: rec.last_first_name?.trim() || '',
+				noatScore: rec.noat_score !== undefined ? String(rec.noat_score) : '',
+				academicTrack: rec.academic_track?.trim() || undefined,
+				laptopAvailable: rec.laptop_available?.trim() || undefined,
+				programTag: rec.program_applied_for ? inferProgramTagFromString(rec.program_applied_for) : null,
+			}))
+			return [...nextEntries, ...newEntries]
+		})
+		setImportJsonText('')
+		setImportParsed(null)
+		setImportParseError(null)
+		setImportJsonMode(false)
+	}
+
 	async function copyLink(value: string): Promise<void> {
 		try {
 			if (navigator.clipboard && window.isSecureContext) {
@@ -306,10 +535,9 @@ export function RatingSheet() {
 		}
 	}
 
-	async function publishRatingSheet(): Promise<void> {
-		setIsSaving(true)
+	async function publishRatingSheet() {
 		setError(null)
-		setCreated(null)
+		setIsSaving(true)
 
 		const contestants = buildContestantsPayload(entries)
 		const normalizedJudges = buildJudgesPayload(judges)
@@ -317,56 +545,168 @@ export function RatingSheet() {
 		if (contestants.length < 2) {
 			setIsSaving(false)
 			setError('At least 2 unique contestant names are required before publishing.')
+			setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 			return
 		}
 
 		if (normalizedJudges.length === 0) {
 			setIsSaving(false)
 			setError('At least 1 judge name is required before publishing.')
+			setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 			return
 		}
 
-		const normalizedDirectRatingConfig = normalizeDirectRatingConfig(directRatingConfig)
+		const explicitAssignments: Record<number, string[]> = {}
+		for (const judge of judges) {
+			if (judge.assignedRange && judge.assignedRange.trim()) {
+				for (let i = 1; i <= entries.length; i++) {
+					if (isNumberInRange(i, judge.assignedRange)) {
+						if (!explicitAssignments[i]) explicitAssignments[i] = []
+						explicitAssignments[i].push(judge.name || 'Unnamed Judge')
+					}
+				}
+			}
+		}
+
+		for (const [entryStr, judgeNames] of Object.entries(explicitAssignments)) {
+			if (judgeNames.length > 1) {
+				setIsSaving(false)
+				setError(`Overlap detected: Entry ${entryStr} is assigned to multiple judges (${judgeNames.join(', ')}). Ranges should not overlap.`)
+				setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+				return
+			}
+		}
 
 		const payload = {
 			title: title.trim() || 'Direct Rating Sheet',
-			description: description.trim() || undefined,
-			createdBy: createdBy.trim() || undefined,
-			eventScoringType: 'standard' as const,
+			description: description.trim(),
+			createdBy: createdBy.trim(),
+			eventScoringType: 'direct_rating',
 			rubricLegend: DEFAULT_RUBRIC_LEGEND,
-			directRatingConfig: normalizedDirectRatingConfig,
-			contestants,
+			showRubricLegend: false,
+			directRatingConfig: normalizeDirectRatingConfig(directRatingConfig),
+			contestants: contestants,
 			judges: normalizedJudges,
-			criteria: buildDirectRatingCriteriaFromConfig(normalizedDirectRatingConfig),
+			criteria: buildDirectRatingCriteriaFromConfig(normalizeDirectRatingConfig(directRatingConfig)),
+			presentationSlots: entries.map((entry, index) => {
+				const entryNumber = index + 1
+				let assignedJudges = judges.filter(j => {
+					if (!j.assignedRange || !j.assignedRange.trim()) return true
+					return isNumberInRange(entryNumber, j.assignedRange)
+				})
+				
+				if (assignedJudges.length === 0) {
+					assignedJudges = judges
+				}
+
+				if (editEventId) {
+					return {
+						label: `Slot ${entryNumber}`,
+						contestantIndex: index,
+						judgeIds: assignedJudges.map(j => j.id)
+					}
+				} else {
+					return {
+						label: `Slot ${entryNumber}`,
+						contestantIndex: index,
+						judgeNames: assignedJudges.map(j => j.name)
+					}
+				}
+			})
 		}
 
 		try {
-			const response = await fetch('/api/eventscorer/events', {
-				method: 'POST',
+			const method = editEventId ? 'PATCH' : 'POST'
+			const url = editEventId ? `/api/eventscorer/admin/events/${editEventId}` : '/api/eventscorer/events'
+			
+			const requestBody = editEventId ? { eventEditor: payload } : payload
+
+			const response = await fetch(url, {
+				method,
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload),
+				body: JSON.stringify(requestBody),
 			})
 
-			const responseData = (await response.json()) as CreateEventApiResponse
+			const responseData = await response.json()
 
 			if (!response.ok) {
 				throw new Error(responseData.error ?? 'Unable to publish rating sheet.')
 			}
 
-			setCreated(responseData)
+			if (editEventId) {
+				const origin = window.location.origin
+				const ev = responseData.event
+				setCreated({
+					eventId: editEventId,
+					adminUrl: `${origin}/admin/${editEventId}`,
+					judgeLinks: (ev?.judges || []).map((j: any) => ({
+						judgeId: j.id,
+						judgeName: j.name,
+						url: `${origin}/judge/${j.token}`
+					}))
+				})
+			} else {
+				setCreated(responseData as CreateEventApiResponse)
+			}
+			
 			setPublishedAt(new Date().toISOString())
 		} catch (publishError) {
-			setError(publishError instanceof Error ? publishError.message : 'Unable to publish rating sheet.')
+			const errorMessage = publishError instanceof Error ? publishError.message : 'Unable to publish rating sheet.'
+			if (errorMessage.toLowerCase().includes('password required')) {
+				setIsPasswordModalOpen(true)
+				return
+			}
+			setError(errorMessage)
+			setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 		} finally {
 			setIsSaving(false)
 		}
+	}
+
+	const handlePasswordSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+		event.preventDefault()
+		if (!updatePassword.trim()) {
+			setUpdatePasswordError('Password is required.')
+			return
+		}
+		setIsVerifyingPassword(true)
+		setUpdatePasswordError('')
+		try {
+			const response = await fetch('/api/admin/update-auth', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ password: updatePassword }),
+			})
+			if (!response.ok) {
+				const responseBody = (await response.json().catch(() => null)) as { error?: string } | null
+				setUpdatePasswordError(responseBody?.error || 'Incorrect password.')
+				return
+			}
+			setIsPasswordModalOpen(false)
+			setUpdatePassword('')
+			setUpdatePasswordError('')
+			// Re-run the update
+			void publishRatingSheet()
+		} catch {
+			setUpdatePasswordError('Unable to verify password. Try again.')
+		} finally {
+			setIsVerifyingPassword(false)
+		}
+	}
+
+	if (isLoadingExisting) {
+		return (
+			<div className="flex items-center justify-center min-h-[40vh]">
+				<p className="text-emerald-800 font-medium">Loading existing event data...</p>
+			</div>
+		)
 	}
 
 	return (
 		<section className='mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8'>
 			<div className='rounded-3xl border border-emerald-200 bg-white/95 p-6 shadow-xl shadow-emerald-900/10 sm:p-8'>
 				<p className='text-xs uppercase tracking-[0.2em] text-emerald-800/80'>Dynamic Event Scorer</p>
-				<h1 className='mt-2 text-3xl font-semibold tracking-tight text-emerald-950'>Create Rating Sheet</h1>
+				<h1 className='mt-2 text-3xl font-semibold tracking-tight text-emerald-950'>{editEventId ? 'Update Rating Sheet' : 'Create Rating Sheet'}</h1>
 				<p className='mt-3 max-w-3xl text-sm text-emerald-900/80'>Set direct score max values and optional strand bonuses in admin. Judges enter scores and details, and any aligned bonus is applied to Interview before Final Rating is auto-computed.</p>
 			</div>
 
@@ -485,10 +825,32 @@ export function RatingSheet() {
 						</button>
 					</div>
 					<div className='mt-3 space-y-2'>
-						{judges.map((judge, index) => (
-							<div key={judge.id} className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
-								<input value={judge.name} onChange={(event) => updateJudge(judge.id, { name: event.target.value })} placeholder={`Judge ${index + 1} name`} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
-								<input value={judge.email} onChange={(event) => updateJudge(judge.id, { email: event.target.value })} placeholder='Email (optional)' className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+						{judges.map((judge) => (
+							<div key={judge.id} className={`grid gap-2 ${judges.length > 1 ? 'sm:grid-cols-[1fr_1fr_1fr_auto]' : 'sm:grid-cols-[1fr_1fr_auto]'}`}>
+								<input
+									type='text'
+									value={judge.name}
+									onChange={(e) => updateJudge(judge.id, { name: e.target.value })}
+									placeholder='Judge Name'
+									className='rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none transition focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400'
+								/>
+								<input
+									type='email'
+									value={judge.email}
+									onChange={(e) => updateJudge(judge.id, { email: e.target.value })}
+									placeholder='Email (optional)'
+									className='rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none transition focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400'
+								/>
+								{judges.length > 1 ? (
+									<input
+										type='text'
+										value={judge.assignedRange || ''}
+										onChange={(e) => updateJudge(judge.id, { assignedRange: e.target.value })}
+										placeholder='Entries Range (e.g. 1-25)'
+										className='rounded-xl border border-slate-200 px-3 py-1.5 text-sm outline-none transition focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400'
+										title='Specify which entry numbers this judge will rate, separated by commas (e.g., 1-25, 30-50). Leave blank to assign all.'
+									/>
+								) : null}
 								<button type='button' onClick={() => removeJudge(judge.id)} disabled={judges.length <= 1} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60'>
 									Remove
 								</button>
@@ -506,8 +868,11 @@ export function RatingSheet() {
 						<button type='button' onClick={addEntry} className='rounded-full border border-cyan-300 bg-cyan-50 px-4 py-2 text-xs font-semibold text-cyan-900 transition hover:bg-cyan-100'>
 							Add Row
 						</button>
-						<button type='button' onClick={() => setBulkEnabled((current) => !current)} className='rounded-full border border-cyan-300 bg-white px-4 py-2 text-xs font-semibold text-cyan-900 transition hover:bg-cyan-50'>
+						<button type='button' onClick={() => { setBulkEnabled((current) => !current); setImportJsonMode(false); }} className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${bulkEnabled ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-50'}`}>
 							{bulkEnabled ? 'Hide Bulk Add' : 'Bulk Add Names'}
+						</button>
+						<button type='button' onClick={() => { setImportJsonMode((current) => !current); setBulkEnabled(false); }} className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${importJsonMode ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-50'}`}>
+							{importJsonMode ? 'Hide Import JSON' : 'Import from JSON Data'}
 						</button>
 					</div>
 				</div>
@@ -529,11 +894,54 @@ export function RatingSheet() {
 					</div>
 				) : null}
 
+				{importJsonMode ? (
+					<div className='mt-4 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4'>
+						<p className='text-xs font-semibold uppercase tracking-wide text-cyan-900'>Import from JSON Data</p>
+						<p className='mt-1 text-xs text-cyan-900/70'>Paste the JSON array from your import file. Names, NOAT scores, program tags, academic track, and laptop availability will be auto-imported.</p>
+						<textarea
+							value={importJsonText}
+							onChange={(event) => handleImportPaste(event.target.value)}
+							rows={6}
+							placeholder='Paste JSON array here, e.g. [{"last_first_name": "...", "noat_score": "20", ...}]'
+							className='mt-2 w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+						/>
+						{importParseError ? <p className='mt-1 text-xs text-rose-700'>{importParseError}</p> : null}
+						{importParsed ? (
+							<div className='mt-2 rounded-xl border border-cyan-200 bg-white p-2'>
+								<p className='text-xs font-semibold text-cyan-900'>{importParsed.length} record{importParsed.length !== 1 ? 's' : ''} parsed</p>
+								<div className='mt-1 max-h-32 overflow-y-auto space-y-1'>
+									{importParsed.slice(0, 8).map((record, idx) => (
+										<p key={idx} className='text-xs text-cyan-800'>
+											{idx + 1}. {record.last_first_name ?? '(no name)'}
+											{record.program_applied_for ? <span className='ml-2 rounded-full bg-cyan-100 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-800'>{inferProgramTagFromString(record.program_applied_for) ?? '?'}</span> : null}
+											{record.noat_score !== undefined ? <span className='ml-1 text-emerald-700/80'> · NOAT: {record.noat_score}</span> : null}
+											{record.academic_track ? <span className='ml-1 text-cyan-700/70 truncate'> · {record.academic_track.slice(0, 40)}{record.academic_track.length > 40 ? '…' : ''}</span> : null}
+										</p>
+									))}
+									{importParsed.length > 8 ? <p className='text-xs text-cyan-900/60'>...and {importParsed.length - 8} more</p> : null}
+								</div>
+							</div>
+						) : null}
+						<div className='mt-3 flex flex-wrap gap-2'>
+							<button type='button' onClick={parseImportJson} className='rounded-full border border-cyan-300 bg-cyan-50 px-4 py-2 text-xs font-semibold text-cyan-900 transition hover:bg-cyan-100'>
+								Parse JSON
+							</button>
+							{importParsed && importParsed.length > 0 ? (
+								<button type='button' onClick={addEntriesFromImportData} className='rounded-full border border-emerald-700 bg-emerald-900 px-4 py-1.5 text-sm text-white transition hover:bg-emerald-800'>
+									Import {importParsed.length} Entries
+								</button>
+							) : null}
+						</div>
+					</div>
+				) : null}
+
 				<div className='mt-4 overflow-hidden rounded-2xl border border-cyan-100'>
 					<table className='w-full border-separate border-spacing-0'>
 						<thead>
 							<tr className='bg-cyan-50 text-left text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>
 								<th className='rounded-l-2xl px-2 py-2'>Name</th>
+								<th className='px-2 py-2'>Academic Track</th>
+								<th className='px-2 py-2'>Laptop / Remark</th>
 								<th className='px-2 py-2 text-right'>NOAT</th>
 								<th className='rounded-r-2xl px-2 py-2 text-right'>Action</th>
 							</tr>
@@ -543,6 +951,25 @@ export function RatingSheet() {
 								<tr key={entry.id} className='border-b border-cyan-100 bg-white'>
 									<td className='px-2 py-2'>
 										<input type='text' value={entry.name} onChange={(event) => updateEntry(entry.id, { name: event.target.value })} className='min-w-0 w-full rounded-lg border border-cyan-200 px-2 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200' placeholder='Student' />
+										{entry.programTag ? <span className='mt-1 inline-block rounded-full bg-cyan-100 px-1.5 py-0.5 text-[10px] font-semibold text-cyan-800'>{entry.programTag}</span> : null}
+									</td>
+									<td className='px-2 py-2'>
+										<input
+											type='text'
+											value={entry.academicTrack ?? ''}
+											onChange={(event) => updateEntry(entry.id, { academicTrack: event.target.value })}
+											className='w-full rounded-lg border border-cyan-200 px-2 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+											placeholder='Track/Strand'
+										/>
+									</td>
+									<td className='px-2 py-2'>
+										<input
+											type='text'
+											value={entry.laptopAvailable ?? ''}
+											onChange={(event) => updateEntry(entry.id, { laptopAvailable: event.target.value })}
+											className='w-full rounded-lg border border-cyan-200 px-2 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+											placeholder='Remark'
+										/>
 									</td>
 									<td className='px-2 py-2 text-right'>
 										<input
@@ -569,7 +996,7 @@ export function RatingSheet() {
 
 				<p className='mt-4 text-xs text-cyan-900/80'>Rows are used to build the contestant list when publishing. Optional NOAT values are admin-only and display as read-only on the judge side.</p>
 
-				{error ? <div className='mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
+				{error ? <div ref={errorRef} className='mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : <div ref={errorRef} />}
 
 				<div className='mt-4 flex flex-wrap items-center gap-3'>
 					<button
@@ -579,7 +1006,7 @@ export function RatingSheet() {
 						}}
 						disabled={isSaving}
 						className='rounded-full bg-emerald-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
-						{isSaving ? 'Publishing Rating Sheet...' : 'Save Rating Sheet and Generate Judge Links'}
+						{isSaving ? (editEventId ? 'Updating Rating Sheet...' : 'Publishing Rating Sheet...') : (editEventId ? 'Update Rating Sheet and Generate Judge Links' : 'Save Rating Sheet and Generate Judge Links')}
 					</button>
 				</div>
 			</div>
@@ -614,6 +1041,48 @@ export function RatingSheet() {
 
 					{publishedAt ? <p className='mt-3 text-xs text-cyan-900/80'>Generated at {dateDisplay(publishedAt)}</p> : null}
 				</section>
+			) : null}
+
+			{isPasswordModalOpen ? (
+				<div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4'>
+					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
+						<h3 className='text-lg font-semibold text-slate-900'>Authentication Required</h3>
+						<p className='mt-1 text-sm text-slate-600'>Enter the update password to edit this event.</p>
+						<form className='mt-4 space-y-3' onSubmit={handlePasswordSubmit}>
+							<div>
+								<label className='text-xs font-medium uppercase tracking-wide text-slate-500'>Password</label>
+								<input
+									type='password'
+									value={updatePassword}
+									onChange={(e) => {
+										setUpdatePassword(e.target.value)
+										if (updatePasswordError) setUpdatePasswordError('')
+									}}
+									className='mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+									autoFocus
+									required
+								/>
+							</div>
+							{updatePasswordError ? <p className='text-sm text-rose-600'>{updatePasswordError}</p> : null}
+							<div className='flex flex-wrap justify-end gap-2 pt-2'>
+								<button
+									type='button'
+									onClick={() => {
+										setIsPasswordModalOpen(false)
+										setUpdatePassword('')
+										setUpdatePasswordError('')
+									}}
+									className='rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50'
+								>
+									Cancel
+								</button>
+								<button type='submit' disabled={isVerifyingPassword} className='rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70'>
+									{isVerifyingPassword ? 'Checking...' : 'Confirm'}
+								</button>
+							</div>
+						</form>
+					</div>
+				</div>
 			) : null}
 		</section>
 	)

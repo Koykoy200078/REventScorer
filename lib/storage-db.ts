@@ -62,6 +62,8 @@ interface ContestantRow extends RowDataPacket {
 	entry_type: string
 	program_tag: string | null
 	noat_score: number | string | null
+	academic_track: string | null
+	laptop_available: string | null
 	sort_order: number
 }
 
@@ -187,7 +189,7 @@ const TABLE_SUBMISSIONS = 'es_submissions'
 const TABLE_SUBMISSION_SAVED_CONTESTANTS = 'es_submission_saved_contestants'
 const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
 const TABLE_SUBMISSION_CONTESTANT_DETAILS = 'es_submission_contestant_details'
-const EVENTSCORER_SCHEMA_VERSION = 4
+const EVENTSCORER_SCHEMA_VERSION = 6
 
 interface EventScorerGlobalState {
 	__eventScorerPoolPromise?: Promise<Pool> | null
@@ -453,12 +455,14 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 				participants: normalizeContestantParticipants(contestant.participants),
 				programTag: normalizeContestantProgramTag(contestant.programTag),
 				noatScore: normalizeNoatScore(contestant.noatScore),
+				academicTrack: typeof contestant.academicTrack === 'string' && contestant.academicTrack.trim().length > 0 ? contestant.academicTrack.trim() : undefined,
+				laptopAvailable: typeof contestant.laptopAvailable === 'string' && contestant.laptopAvailable.trim().length > 0 ? contestant.laptopAvailable.trim() : undefined,
 			}
 		})
 		.filter((contestant) => contestant.name.length > 0)
 
 	const seen = new Set<string>()
-	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null; noatScore: number | null }>
+	const unique = [] as Array<{ name: string; entryType: ContestantEntryType; participants: string[]; programTag: EventProgramTag | null; noatScore: number | null; academicTrack?: string; laptopAvailable?: string }>
 
 	for (const contestant of cleaned) {
 		const key = `${contestant.entryType}|${contestant.programTag ?? 'none'}|${contestant.name.toLowerCase()}`
@@ -481,6 +485,8 @@ function normalizeContestants(contestants: CreateEventInput['contestants']): Eve
 		participants: contestant.entryType === 'group' && contestant.participants.length > 0 ? contestant.participants : undefined,
 		programTag: contestant.programTag ?? undefined,
 		noatScore: contestant.noatScore ?? undefined,
+		academicTrack: contestant.academicTrack,
+		laptopAvailable: contestant.laptopAvailable,
 	}))
 }
 
@@ -757,6 +763,8 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
 			noatScore: noatScore ?? undefined,
+			academicTrack: typeof rawContestant.academicTrack === 'string' && rawContestant.academicTrack.trim().length > 0 ? rawContestant.academicTrack.trim() : undefined,
+			laptopAvailable: typeof rawContestant.laptopAvailable === 'string' && rawContestant.laptopAvailable.trim().length > 0 ? rawContestant.laptopAvailable.trim() : undefined,
 		})
 	}
 
@@ -1482,6 +1490,8 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			entry_type VARCHAR(32) NOT NULL DEFAULT 'group',
 			program_tag VARCHAR(16) NULL,
 			noat_score DECIMAL(10,3) NULL,
+			academic_track VARCHAR(512) NULL,
+			laptop_available VARCHAR(512) NULL,
 			sort_order INT NOT NULL,
 			PRIMARY KEY (id),
 			INDEX idx_${TABLE_CONTESTANTS}_event_order (event_id, sort_order),
@@ -1637,6 +1647,34 @@ async function ensureSchema(pool: Pool): Promise<void> {
 	const noatColumnExists = Number(noatColumnRows[0]?.total ?? 0) > 0
 	if (!noatColumnExists) {
 		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN noat_score DECIMAL(10,3) NULL AFTER program_tag`)
+	}
+
+	const [academicTrackColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_CONTESTANTS, 'academic_track'],
+	)
+
+	const academicTrackColumnExists = Number(academicTrackColumnRows[0]?.total ?? 0) > 0
+	if (!academicTrackColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN academic_track VARCHAR(512) NULL AFTER noat_score`)
+	}
+
+	const [laptopAvailableColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_CONTESTANTS, 'laptop_available'],
+	)
+
+	const laptopAvailableColumnExists = Number(laptopAvailableColumnRows[0]?.total ?? 0) > 0
+	if (!laptopAvailableColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN laptop_available VARCHAR(512) NULL AFTER academic_track`)
 	}
 }
 
@@ -2229,9 +2267,9 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 		const noatScore = normalizeNoatScore(contestant.noatScore)
 
 		await connection.execute(
-			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, noat_score, sort_order)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			[contestant.id, event.id, contestant.name, entryType, programTag, noatScore, contestantIndex],
+			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, noat_score, academic_track, laptop_available, sort_order)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[contestant.id, event.id, contestant.name, entryType, programTag, noatScore, contestant.academicTrack ?? null, contestant.laptopAvailable ?? null, contestantIndex],
 		)
 
 		const participants = entryType === 'group' && Array.isArray(contestant.participants) ? contestant.participants : []
@@ -2361,7 +2399,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 
 	const contestantRows = await selectRows<ContestantRow>(
 		executor,
-		`SELECT id, name, entry_type, program_tag, noat_score, sort_order
+		`SELECT id, name, entry_type, program_tag, noat_score, academic_track, laptop_available, sort_order
 		 FROM ${TABLE_CONTESTANTS}
 		 WHERE event_id = ?
 		 ORDER BY sort_order ASC, id ASC`,
@@ -2484,6 +2522,8 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
 			noatScore: noatScore ?? undefined,
+			academicTrack: typeof contestantRow.academic_track === 'string' && contestantRow.academic_track.length > 0 ? contestantRow.academic_track : undefined,
+			laptopAvailable: typeof contestantRow.laptop_available === 'string' && contestantRow.laptop_available.length > 0 ? contestantRow.laptop_available : undefined,
 		}
 	})
 
