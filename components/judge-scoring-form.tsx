@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Select from 'react-select'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, DIRECT_RATING_TRACK_STRAND_TREE, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, DIRECT_RATING_TRACK_STRAND_TREE, normalizeDirectRatingConfig, resolveStrandAlignmentBonus, DIRECT_SCORE_FIELD_ORDER, DIRECT_SCORE_FIELD_LABELS } from '@/lib/direct-rating-config'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -535,10 +535,181 @@ function formatDate(iso: string): string {
 	}).format(new Date(iso))
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+function migrateLegacyDirectRating(
+	rawCriteria: EventCriterion[],
+	rawScores: ScoreMatrix | undefined,
+	directRatingConfig: DirectRatingConfig | undefined
+): { criteria: EventCriterion[]; scores: ScoreMatrix | undefined } {
+	const subCriteriaList = rawCriteria.flatMap((c) => c.subCriteria)
+	const oldAveId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
+	const oldNoatId = subCriteriaList.find((sc) => sc.name.toLowerCase() === 'noat')?.id
+	const oldInterviewSubCriterion = subCriteriaList.find((sc) => !sc.name.toLowerCase().includes('ave') && !sc.name.toLowerCase().includes('gpa') && sc.name.toLowerCase() !== 'noat')
+
+	if (!oldInterviewSubCriterion || !oldAveId || !oldNoatId) {
+		return { criteria: rawCriteria, scores: rawScores }
+	}
+
+	const hasNewFields = subCriteriaList.some((sc) => sc.name.toLowerCase().includes('communication') || sc.name.toLowerCase().includes('personality'))
+	if (hasNewFields) {
+		if (!rawScores) {
+			return { criteria: rawCriteria, scores: undefined }
+		}
+
+		// DB has new fields. Migrate old scores if they exist.
+		const newInterviewCommId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('communication'))?.id
+		const newInterviewPersId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('personality'))?.id
+		const newInterviewInterestId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('interest') || sc.name.toLowerCase().includes('commitment'))?.id
+		const newInterviewSpecialId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('special') || sc.name.toLowerCase().includes('talents'))?.id
+		
+		const aveGpaId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
+		const noatId = subCriteriaList.find((sc) => sc.name.toLowerCase() === 'noat')?.id
+
+		const knownIds = new Set([newInterviewCommId, newInterviewPersId, newInterviewInterestId, newInterviewSpecialId, aveGpaId, noatId].filter(Boolean))
+
+		const migratedScores: ScoreMatrix = {}
+		
+		for (const [contestantId, contestantScores] of Object.entries(rawScores)) {
+			migratedScores[contestantId] = { ...contestantScores }
+
+			// Find old interview score ID (explicit legacy key, or fallback to first unknown key)
+			let oldInterviewId: string | undefined = 'legacy-interview'
+			if (contestantScores[oldInterviewId] === undefined) {
+				oldInterviewId = Object.keys(contestantScores).find((key) => !knownIds.has(key) && key !== 'legacy-aveGpa' && key !== 'legacy-noat')
+			}
+			const oldScore = oldInterviewId ? Number(contestantScores[oldInterviewId]) : NaN
+
+			const alreadyMigrated = newInterviewCommId ? contestantScores[newInterviewCommId] !== undefined : false
+
+			if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
+				const commMax = directRatingConfig?.maxScores?.interviewComm ?? 20
+				const persMax = directRatingConfig?.maxScores?.interviewPers ?? 20
+				const interestMax = directRatingConfig?.maxScores?.interviewInterest ?? 40
+				const specialMax = directRatingConfig?.maxScores?.interviewSpecial ?? 20
+				const totalMax = commMax + persMax + interestMax + specialMax
+
+				if (totalMax > 0 && newInterviewCommId && newInterviewPersId && newInterviewInterestId && newInterviewSpecialId) {
+					const commScore = round((oldScore * commMax) / totalMax)
+					const persScore = round((oldScore * persMax) / totalMax)
+					const interestScore = round((oldScore * interestMax) / totalMax)
+					const specialScore = round(oldScore - (commScore + persScore + interestScore))
+
+					migratedScores[contestantId][newInterviewCommId] = commScore
+					migratedScores[contestantId][newInterviewPersId] = persScore
+					migratedScores[contestantId][newInterviewInterestId] = interestScore
+					migratedScores[contestantId][newInterviewSpecialId] = specialScore
+				}
+			}
+
+			// Map old AVE/GPA and NOAT to new UUIDs
+			if (aveGpaId && contestantScores['legacy-aveGpa'] !== undefined && contestantScores[aveGpaId] === undefined) {
+				migratedScores[contestantId][aveGpaId] = contestantScores['legacy-aveGpa']
+			}
+			if (noatId && contestantScores['legacy-noat'] !== undefined && contestantScores[noatId] === undefined) {
+				migratedScores[contestantId][noatId] = contestantScores['legacy-noat']
+			}
+		}
+
+		return { criteria: rawCriteria, scores: migratedScores }
+	}
+
+	// Calculate the split manually from the old subcriterion if config doesn't exist, otherwise use config
+	const interviewCommMax = directRatingConfig?.maxScores?.interviewComm ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
+	const interviewPersMax = directRatingConfig?.maxScores?.interviewPers ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
+	const interviewInterestMax = directRatingConfig?.maxScores?.interviewInterest ?? round((oldInterviewSubCriterion.maxScore * 8) / 20)
+	const interviewSpecialMax = directRatingConfig?.maxScores?.interviewSpecial ?? round(oldInterviewSubCriterion.maxScore - (interviewCommMax + interviewPersMax + interviewInterestMax))
+
+	const normalizedConfig = normalizeDirectRatingConfig({
+		...(directRatingConfig ?? {}),
+		maxScores: {
+			...(directRatingConfig?.maxScores ?? {}),
+			aveGpa: directRatingConfig?.maxScores?.aveGpa ?? subCriteriaList.find((sc) => sc.id === oldAveId)?.maxScore ?? 100,
+			noat: directRatingConfig?.maxScores?.noat ?? subCriteriaList.find((sc) => sc.id === oldNoatId)?.maxScore ?? 100,
+			interviewComm: interviewCommMax,
+			interviewPers: interviewPersMax,
+			interviewInterest: interviewInterestMax,
+			interviewSpecial: interviewSpecialMax,
+		}
+	})
+
+	const migratedCriteria: EventCriterion[] = [
+		{
+			id: 'legacy-migrated-criterion',
+			name: 'Direct Rating',
+			maxScore: Object.values(normalizedConfig.maxScores).reduce((sum, score) => sum + score, 0),
+			subCriteria: DIRECT_SCORE_FIELD_ORDER.map((fieldKey) => ({
+				id: `legacy-migrated-${fieldKey}`,
+				name: DIRECT_SCORE_FIELD_LABELS[fieldKey],
+				maxScore: normalizedConfig.maxScores[fieldKey],
+			})),
+		},
+	]
+
+	if (!rawScores) {
+		return { criteria: migratedCriteria, scores: undefined }
+	}
+
+	const migratedScores: ScoreMatrix = {}
+
+	for (const [contestantId, contestantScores] of Object.entries(rawScores)) {
+		migratedScores[contestantId] = { ...contestantScores }
+
+		const alreadyMigrated = contestantScores['legacy-migrated-interviewComm'] !== undefined
+		const oldScore = Number(contestantScores[oldInterviewSubCriterion.id])
+
+		if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
+			const commMax = normalizedConfig.maxScores.interviewComm
+			const persMax = normalizedConfig.maxScores.interviewPers
+			const interestMax = normalizedConfig.maxScores.interviewInterest
+			const specialMax = normalizedConfig.maxScores.interviewSpecial
+			const totalMax = commMax + persMax + interestMax + specialMax
+
+			if (totalMax > 0) {
+				const commScore = round((oldScore * commMax) / totalMax)
+				const persScore = round((oldScore * persMax) / totalMax)
+				const interestScore = round((oldScore * interestMax) / totalMax)
+				const specialScore = round(oldScore - (commScore + persScore + interestScore))
+
+				migratedScores[contestantId]['legacy-migrated-interviewComm'] = commScore
+				migratedScores[contestantId]['legacy-migrated-interviewPers'] = persScore
+				migratedScores[contestantId]['legacy-migrated-interviewInterest'] = interestScore
+				migratedScores[contestantId]['legacy-migrated-interviewSpecial'] = specialScore
+			}
+		}
+
+		if (oldAveId && contestantScores[oldAveId] !== undefined && contestantScores['legacy-migrated-aveGpa'] === undefined) {
+			migratedScores[contestantId]['legacy-migrated-aveGpa'] = contestantScores[oldAveId]
+		}
+		if (oldNoatId && contestantScores[oldNoatId] !== undefined && contestantScores['legacy-migrated-noat'] === undefined) {
+			migratedScores[contestantId]['legacy-migrated-noat'] = contestantScores[oldNoatId]
+		}
+	}
+
+	return { criteria: migratedCriteria, scores: migratedScores }
+}
+
+export function JudgeScoringForm({ token, eventTitle, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
-	const [scores, setScores] = useState<InputScoreMatrix>(() => buildInputMatrix(contestants, criteria, existingScores))
+	const { criteria, scores: existingScores } = useMemo(() => migrateLegacyDirectRating(rawCriteria, rawExistingScores, directRatingConfig), [rawCriteria, rawExistingScores, directRatingConfig])
+	
+	const [scores, setScores] = useState<InputScoreMatrix>(() => {
+		const matrix = buildInputMatrix(contestants, criteria, existingScores)
+		const derivedConfig = deriveDirectRatingConfigFromCriteria(criteria)
+		const normalizedConfig = normalizeDirectRatingConfig(directRatingConfig, derivedConfig ?? undefined)
+		const directFields = detectDirectRatingScoreFields(criteria, normalizedConfig)
+		const noatField = directFields.find((f) => f.key === 'noat')
+
+		if (noatField) {
+			for (const contestant of contestants) {
+				if (typeof contestant.noatScore === 'number' && Number.isFinite(contestant.noatScore)) {
+					if (!matrix[contestant.id]) matrix[contestant.id] = {}
+					matrix[contestant.id][noatField.subCriterionId] = contestant.noatScore.toString()
+				}
+			}
+		}
+
+		return matrix
+	})
 	const [contestantDetails, setContestantDetails] = useState<InputContestantDetailsMap>(() => buildInputContestantDetails(contestants, existingContestantDetails))
 	const [savedContestantIds, setSavedContestantIds] = useState<Set<string>>(() => detectInitiallyScoredContestants(contestants, criteria, existingScores, existingSavedContestantIds))
 	const [activeContestantIndex, setActiveContestantIndex] = useState(() => {
@@ -1045,6 +1216,29 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 					payload[contestant.id][subCriterion.id] = round(parseAndClampScore(rawValue, subCriterion.maxScore))
 				}
 			}
+
+			// ADD BACKWARD COMPATIBILITY FIELDS FOR ADMIN DASHBOARD
+			if (criteria.some((c) => c.id === 'legacy-migrated-criterion')) {
+				const oldInterviewId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => !sc.name.toLowerCase().includes('ave') && !sc.name.toLowerCase().includes('gpa') && sc.name.toLowerCase() !== 'noat')?.id
+				const oldAveId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
+				const oldNoatId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => sc.name.toLowerCase() === 'noat')?.id
+
+				if (oldInterviewId) {
+					const commScore = payload[contestant.id]['legacy-migrated-interviewComm'] ?? 0
+					const persScore = payload[contestant.id]['legacy-migrated-interviewPers'] ?? 0
+					const interestScore = payload[contestant.id]['legacy-migrated-interviewInterest'] ?? 0
+					const specialScore = payload[contestant.id]['legacy-migrated-interviewSpecial'] ?? 0
+					payload[contestant.id][oldInterviewId] = round(commScore + persScore + interestScore + specialScore)
+				}
+
+				if (oldAveId && payload[contestant.id]['legacy-migrated-aveGpa'] !== undefined) {
+					payload[contestant.id][oldAveId] = payload[contestant.id]['legacy-migrated-aveGpa']
+				}
+				
+				if (oldNoatId && payload[contestant.id]['legacy-migrated-noat'] !== undefined) {
+					payload[contestant.id][oldNoatId] = payload[contestant.id]['legacy-migrated-noat']
+				}
+			}
 		}
 
 		const contestantDetailsPayload = buildContestantDetailsPayload(contestantDetails)
@@ -1243,8 +1437,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 														min={0}
 														max={field.maxScore}
 														step='0.01'
-														disabled={isNoatLocked}
-														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600'
+														readOnly={isNoatLocked}
+														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2 read-only:cursor-default read-only:bg-slate-50 read-only:text-slate-600'
 													/>
 													<span className='mt-1 block text-xs font-medium text-slate-700'>
 														Entered: {enteredScore.toFixed(2)} | Normalized: {normalizedPercent.toFixed(2)}%
@@ -1314,7 +1508,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 															placeholder='Search or select...'
 															classNamePrefix='react-select'
 															styles={{
-																control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+																control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
 																valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
 																singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
 															}}
@@ -1338,7 +1532,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 														placeholder='Search or select...'
 														classNamePrefix='react-select'
 														styles={{
-															control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+															control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
 															valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
 															singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
 														}}
@@ -1362,7 +1556,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria, jud
 													placeholder='Search or select...'
 													classNamePrefix='react-select'
 													styles={{
-														control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px' }),
+														control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
 														valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
 														singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
 													}}

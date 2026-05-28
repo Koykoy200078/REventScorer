@@ -1,4 +1,4 @@
-import type { CriterionInput, DirectRatingConfig, DirectScoreFieldKey, EventCriterion } from '@/lib/types'
+import type { CriterionInput, DirectRatingConfig, DirectScoreFieldKey, EventCriterion, ScoreMatrix } from '@/lib/types'
 
 type CriterionLike = {
 	subCriteria: Array<{ id?: string; name: string; maxScore: number }>
@@ -16,10 +16,10 @@ export const DIRECT_SCORE_FIELD_ORDER: DirectScoreFieldKey[] = ['aveGpa', 'noat'
 export const DIRECT_SCORE_FIELD_LABELS: Record<DirectScoreFieldKey, string> = {
 	aveGpa: 'AVE/GPA',
 	noat: 'NOAT',
-	interviewComm: 'Communication Skills',
+	interviewComm: 'Communication Skills (Medium-English, Clarity of expression, organization fo thought and ideas)',
 	interviewPers: 'Personality (Bearing)',
 	interviewInterest: 'Interest in the Program',
-	interviewSpecial: 'Special Skills',
+	interviewSpecial: 'Special Skills (related to the course and other skills)',
 }
 
 export const DIRECT_SCORE_FIELD_WEIGHTS: Record<DirectScoreFieldKey, number> = {
@@ -444,14 +444,34 @@ export function normalizeDirectRatingConfig(value: unknown, fallback?: DirectRat
 	const multiAlignedSet = new Set(multiAlignedStrands.map((strand) => strand.toLowerCase()))
 	const singleAlignedStrands = normalizeStrandArray(strandBonusSource.singleAlignedStrands, base.strandBonus.singleAlignedStrands).filter((strand) => !multiAlignedSet.has(strand.toLowerCase()))
 
+	let interviewComm = toPositiveNumber(maxScoresSource.interviewComm, base.maxScores.interviewComm)
+	let interviewPers = toPositiveNumber(maxScoresSource.interviewPers, base.maxScores.interviewPers)
+	let interviewInterest = toPositiveNumber(maxScoresSource.interviewInterest, base.maxScores.interviewInterest)
+	let interviewSpecial = toPositiveNumber(maxScoresSource.interviewSpecial, base.maxScores.interviewSpecial)
+
+	const oldInterview = Number(maxScoresSource.interview)
+	if (
+		Number.isFinite(oldInterview) &&
+		oldInterview > 0 &&
+		maxScoresSource.interviewComm === undefined &&
+		maxScoresSource.interviewPers === undefined &&
+		maxScoresSource.interviewInterest === undefined &&
+		maxScoresSource.interviewSpecial === undefined
+	) {
+		interviewComm = round((oldInterview * 4) / 20)
+		interviewPers = round((oldInterview * 4) / 20)
+		interviewInterest = round((oldInterview * 8) / 20)
+		interviewSpecial = round(oldInterview - (interviewComm + interviewPers + interviewInterest))
+	}
+
 	return {
 		maxScores: {
 			aveGpa: toPositiveNumber(maxScoresSource.aveGpa, base.maxScores.aveGpa),
 			noat: toPositiveNumber(maxScoresSource.noat, base.maxScores.noat),
-			interviewComm: toPositiveNumber(maxScoresSource.interviewComm, base.maxScores.interviewComm),
-			interviewPers: toPositiveNumber(maxScoresSource.interviewPers, base.maxScores.interviewPers),
-			interviewInterest: toPositiveNumber(maxScoresSource.interviewInterest, base.maxScores.interviewInterest),
-			interviewSpecial: toPositiveNumber(maxScoresSource.interviewSpecial, base.maxScores.interviewSpecial),
+			interviewComm,
+			interviewPers,
+			interviewInterest,
+			interviewSpecial,
 		},
 		scoreWeights: normalizeScoreWeights(scoreWeightsSource, base.scoreWeights ?? DIRECT_SCORE_FIELD_WEIGHTS),
 		strandBonus: {
@@ -512,6 +532,51 @@ export function directScoreFieldKeyFromName(name: string): DirectScoreFieldKey |
 	return null
 }
 
+/**
+ * Detects legacy 3-field direct rating structure (ave/gpa, noat, combined-interview).
+ * Expands to 6 virtual fields by splitting the combined interview equally into 4 sub-fields,
+ * all pointing to the same old sub-criterion ID so existing DB scores are read correctly.
+ */
+function detectLegacyDirectRatingScoreFields(criteria: EventCriterion[] | CriterionLike[], configValue?: DirectRatingConfig): DirectRatingScoreField[] {
+	const allSubCriteria = criteria.flatMap((c) => c.subCriteria)
+	if (allSubCriteria.length !== 3) return []
+
+	const aveSubCriterion = allSubCriteria.find((sc) => {
+		const n = sc.name.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+		return n === 'avegpa' || n === 'ave' || n === 'gpa'
+	})
+	const noatSubCriterion = allSubCriteria.find((sc) => sc.name.trim().toLowerCase().replace(/[^a-z0-9]/g, '') === 'noat')
+	const interviewSubCriterion = allSubCriteria.find((sc) => sc !== aveSubCriterion && sc !== noatSubCriterion)
+
+	if (!aveSubCriterion || !noatSubCriterion || !interviewSubCriterion) return []
+
+	const config = configValue ? normalizeDirectRatingConfig(configValue) : DEFAULT_DIRECT_RATING_CONFIG
+	const aveId = ('id' in aveSubCriterion && typeof aveSubCriterion.id === 'string' && aveSubCriterion.id.trim()) ? aveSubCriterion.id : 'legacy-aveGpa'
+	const noatId = ('id' in noatSubCriterion && typeof noatSubCriterion.id === 'string' && noatSubCriterion.id.trim()) ? noatSubCriterion.id : 'legacy-noat'
+	const interviewId = ('id' in interviewSubCriterion && typeof interviewSubCriterion.id === 'string' && interviewSubCriterion.id.trim()) ? interviewSubCriterion.id : 'legacy-interview'
+
+	// Use the old combined interview max — split evenly as 4 parts that will sum to the original score
+	const oldInterviewMax = toPositiveNumber(interviewSubCriterion.maxScore, 20)
+	const interviewCommMax = toPositiveNumber(config.maxScores.interviewComm, oldInterviewMax * 4 / 20)
+	const interviewPersMax = toPositiveNumber(config.maxScores.interviewPers, oldInterviewMax * 4 / 20)
+	const interviewInterestMax = toPositiveNumber(config.maxScores.interviewInterest, oldInterviewMax * 8 / 20)
+	const interviewSpecialMax = toPositiveNumber(config.maxScores.interviewSpecial, oldInterviewMax - interviewCommMax - interviewPersMax - interviewInterestMax)
+	const totalInterviewMax = interviewCommMax + interviewPersMax + interviewInterestMax + interviewSpecialMax
+
+	return [
+		{ key: 'aveGpa', label: DIRECT_SCORE_FIELD_LABELS.aveGpa, subCriterionId: aveId, maxScore: toPositiveNumber(aveSubCriterion.maxScore, config.maxScores.aveGpa) },
+		{ key: 'noat', label: DIRECT_SCORE_FIELD_LABELS.noat, subCriterionId: noatId, maxScore: toPositiveNumber(noatSubCriterion.maxScore, config.maxScores.noat) },
+		// All 4 interview fields point to the SAME old sub-criterion ID so the DB score is read for each.
+		// The scoring engine accumulates all 4 fields under interviewBaseScore, so effective total = score * 4,
+		// and effective interviewMax = sum of 4 maxScores = 4 * oldInterviewMax.
+		// This gives correct ratio: (score * 4) / (4 * oldInterviewMax) = score / oldInterviewMax ✓
+		{ key: 'interviewComm', label: DIRECT_SCORE_FIELD_LABELS.interviewComm, subCriterionId: interviewId, maxScore: oldInterviewMax },
+		{ key: 'interviewPers', label: DIRECT_SCORE_FIELD_LABELS.interviewPers, subCriterionId: interviewId, maxScore: oldInterviewMax },
+		{ key: 'interviewInterest', label: DIRECT_SCORE_FIELD_LABELS.interviewInterest, subCriterionId: interviewId, maxScore: oldInterviewMax },
+		{ key: 'interviewSpecial', label: DIRECT_SCORE_FIELD_LABELS.interviewSpecial, subCriterionId: interviewId, maxScore: oldInterviewMax },
+	]
+}
+
 export function detectDirectRatingScoreFields(criteria: EventCriterion[] | CriterionLike[], configValue?: DirectRatingConfig): DirectRatingScoreField[] {
 	const fieldsByKey = new Map<DirectScoreFieldKey, DirectRatingScoreField>()
 	let totalSubCriteria = 0
@@ -522,7 +587,8 @@ export function detectDirectRatingScoreFields(criteria: EventCriterion[] | Crite
 			const fieldKey = directScoreFieldKeyFromName(subCriterion.name)
 
 			if (!fieldKey || fieldsByKey.has(fieldKey)) {
-				return []
+				// Not a clean 6-field structure — try legacy 3-field detection
+				return detectLegacyDirectRatingScoreFields(criteria, configValue)
 			}
 
 			const fallbackMaxScore = DEFAULT_DIRECT_RATING_CONFIG.maxScores[fieldKey]
@@ -539,7 +605,8 @@ export function detectDirectRatingScoreFields(criteria: EventCriterion[] | Crite
 	}
 
 	if (totalSubCriteria !== DIRECT_SCORE_FIELD_ORDER.length) {
-		return []
+		// Try legacy fallback
+		return detectLegacyDirectRatingScoreFields(criteria, configValue)
 	}
 
 	const orderedFields = DIRECT_SCORE_FIELD_ORDER.map((fieldKey) => fieldsByKey.get(fieldKey)).filter((field): field is DirectRatingScoreField => Boolean(field))

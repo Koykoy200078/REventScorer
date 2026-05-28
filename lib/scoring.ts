@@ -276,9 +276,14 @@ function directFinalRatingComponentsFromSubmission(
 	}
 
 	const sanitizedInterviewBonus = Number.isFinite(interviewBonusPoints) && interviewBonusPoints > 0 ? interviewBonusPoints : 0
-	let baseTotalPercentage = 0
-	let finalTotalPercentage = 0
 	let appliedInterviewBonus = 0
+
+	let aveScore = 0
+	let aveMax = 0
+	let noatScore = 0
+	let noatMax = 0
+	let interviewBaseScore = 0
+	let interviewMax = 0
 
 	for (const field of directScoreFields) {
 		const rawScore = Number(submission.scores[contestantId]?.[field.subCriterionId] ?? 0)
@@ -291,22 +296,50 @@ function directFinalRatingComponentsFromSubmission(
 			continue
 		}
 
-		const adjustedScore =
-			field.key === 'interviewInterest'
-				? Math.min(validMaxScore, clampedScore + sanitizedInterviewBonus)
-				: clampedScore
-
-		if (field.key === 'interviewInterest') {
-			appliedInterviewBonus = round(adjustedScore - clampedScore)
+		if (field.key === 'aveGpa') {
+			aveScore += clampedScore
+			aveMax += validMaxScore
+		} else if (field.key === 'noat') {
+			noatScore += clampedScore
+			noatMax += validMaxScore
+		} else if (field.key === 'interviewComm' || field.key === 'interviewPers' || field.key === 'interviewInterest' || field.key === 'interviewSpecial') {
+			interviewBaseScore += clampedScore
+			interviewMax += validMaxScore
 		}
-
-		baseTotalPercentage += (clampedScore / validMaxScore) * 100
-		finalTotalPercentage += (adjustedScore / validMaxScore) * 100
 	}
 
+	const interviewAdjustedScore = Math.min(interviewMax, interviewBaseScore + sanitizedInterviewBonus)
+	if (interviewMax > 0) {
+		appliedInterviewBonus = round(interviewAdjustedScore - interviewBaseScore)
+	}
+
+	let presentComponents = 0
+	let baseTotalPercentage = 0
+	let finalTotalPercentage = 0
+
+	if (aveMax > 0) {
+		presentComponents++
+		baseTotalPercentage += (aveScore / aveMax) * 100
+		finalTotalPercentage += (aveScore / aveMax) * 100
+	}
+
+	if (noatMax > 0) {
+		presentComponents++
+		baseTotalPercentage += (noatScore / noatMax) * 100
+		finalTotalPercentage += (noatScore / noatMax) * 100
+	}
+
+	if (interviewMax > 0) {
+		presentComponents++
+		baseTotalPercentage += (interviewBaseScore / interviewMax) * 100
+		finalTotalPercentage += (interviewAdjustedScore / interviewMax) * 100
+	}
+
+	const divisor = presentComponents > 0 ? presentComponents : 1
+
 	return {
-		baseFinalRating: round(baseTotalPercentage / directScoreFields.length),
-		finalRating: round(finalTotalPercentage / directScoreFields.length),
+		baseFinalRating: round(baseTotalPercentage / divisor),
+		finalRating: round(finalTotalPercentage / divisor),
 		appliedInterviewBonus,
 	}
 }
@@ -507,10 +540,20 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 
 				if (aveGpaField) aggregate.totalAveGpa += Number(submission.scores[contestant.id]?.[aveGpaField.subCriterionId] ?? 0)
 				if (noatField) aggregate.totalNoat += Number(submission.scores[contestant.id]?.[noatField.subCriterionId] ?? 0)
-				if (interviewCommField) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[interviewCommField.subCriterionId] ?? 0)
-				if (interviewPersField) aggregate.totalInterviewPers += Number(submission.scores[contestant.id]?.[interviewPersField.subCriterionId] ?? 0)
-				if (interviewInterestField) aggregate.totalInterviewInterest += Number(submission.scores[contestant.id]?.[interviewInterestField.subCriterionId] ?? 0)
-				if (interviewSpecialField) aggregate.totalInterviewSpecial += Number(submission.scores[contestant.id]?.[interviewSpecialField.subCriterionId] ?? 0)
+
+				// For legacy 3-field events, all 4 interview virtual fields share the same sub-criterion ID.
+				// Deduplicate: only add the raw interview score once for display totals.
+				const interviewIds = new Set([interviewCommField?.subCriterionId, interviewPersField?.subCriterionId, interviewInterestField?.subCriterionId, interviewSpecialField?.subCriterionId].filter(Boolean) as string[])
+				const isLegacySharedInterview = interviewIds.size === 1
+				if (isLegacySharedInterview) {
+					const sharedId = interviewCommField?.subCriterionId
+					if (sharedId) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[sharedId] ?? 0)
+				} else {
+					if (interviewCommField) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[interviewCommField.subCriterionId] ?? 0)
+					if (interviewPersField) aggregate.totalInterviewPers += Number(submission.scores[contestant.id]?.[interviewPersField.subCriterionId] ?? 0)
+					if (interviewInterestField) aggregate.totalInterviewInterest += Number(submission.scores[contestant.id]?.[interviewInterestField.subCriterionId] ?? 0)
+					if (interviewSpecialField) aggregate.totalInterviewSpecial += Number(submission.scores[contestant.id]?.[interviewSpecialField.subCriterionId] ?? 0)
+				}
 
 				const details = submission.contestantDetails?.[contestant.id]
 				if (details?.strand && !aggregate.strands.includes(details.strand)) aggregate.strands.push(details.strand)
