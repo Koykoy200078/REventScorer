@@ -3151,7 +3151,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														<>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.aveGpa ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.noat ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.interview ?? 0)}</td>
+															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.totalInterview ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{formatScore(result.finalRating ?? result.averageScore)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.strand || '-'}</td>

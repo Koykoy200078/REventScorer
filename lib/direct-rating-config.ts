@@ -11,18 +11,24 @@ export interface DirectRatingScoreField {
 	maxScore: number
 }
 
-export const DIRECT_SCORE_FIELD_ORDER: DirectScoreFieldKey[] = ['aveGpa', 'noat', 'interview']
+export const DIRECT_SCORE_FIELD_ORDER: DirectScoreFieldKey[] = ['aveGpa', 'noat', 'interviewComm', 'interviewPers', 'interviewInterest', 'interviewSpecial']
 
 export const DIRECT_SCORE_FIELD_LABELS: Record<DirectScoreFieldKey, string> = {
 	aveGpa: 'AVE/GPA',
 	noat: 'NOAT',
-	interview: 'Interview',
+	interviewComm: 'Communication Skills',
+	interviewPers: 'Personality (Bearing)',
+	interviewInterest: 'Interest in the Program',
+	interviewSpecial: 'Special Skills',
 }
 
 export const DIRECT_SCORE_FIELD_WEIGHTS: Record<DirectScoreFieldKey, number> = {
 	aveGpa: 40,
 	noat: 40,
-	interview: 20,
+	interviewComm: 4,
+	interviewPers: 4,
+	interviewInterest: 8,
+	interviewSpecial: 4,
 }
 
 export const DIRECT_SCORE_WEIGHT_TOTAL = DIRECT_SCORE_FIELD_ORDER.reduce((sum, key) => sum + DIRECT_SCORE_FIELD_WEIGHTS[key], 0)
@@ -295,12 +301,18 @@ export const DEFAULT_DIRECT_RATING_CONFIG: DirectRatingConfig = {
 	maxScores: {
 		aveGpa: 100,
 		noat: 100,
-		interview: 100,
+		interviewComm: 20,
+		interviewPers: 20,
+		interviewInterest: 40,
+		interviewSpecial: 20,
 	},
 	scoreWeights: {
 		aveGpa: DIRECT_SCORE_FIELD_WEIGHTS.aveGpa,
 		noat: DIRECT_SCORE_FIELD_WEIGHTS.noat,
-		interview: DIRECT_SCORE_FIELD_WEIGHTS.interview,
+		interviewComm: DIRECT_SCORE_FIELD_WEIGHTS.interviewComm,
+		interviewPers: DIRECT_SCORE_FIELD_WEIGHTS.interviewPers,
+		interviewInterest: DIRECT_SCORE_FIELD_WEIGHTS.interviewInterest,
+		interviewSpecial: DIRECT_SCORE_FIELD_WEIGHTS.interviewSpecial,
 	},
 	strandBonus: {
 		singleAlignedBonusPoints: 0,
@@ -375,7 +387,10 @@ function normalizeScoreWeights(value: unknown, fallback: Record<DirectScoreField
 	const nextWeights: Record<DirectScoreFieldKey, number> = {
 		aveGpa: toNonNegativeNumber(value.aveGpa, fallback.aveGpa),
 		noat: toNonNegativeNumber(value.noat, fallback.noat),
-		interview: toNonNegativeNumber(value.interview, fallback.interview),
+		interviewComm: toNonNegativeNumber(value.interviewComm, fallback.interviewComm),
+		interviewPers: toNonNegativeNumber(value.interviewPers, fallback.interviewPers),
+		interviewInterest: toNonNegativeNumber(value.interviewInterest, fallback.interviewInterest),
+		interviewSpecial: toNonNegativeNumber(value.interviewSpecial, fallback.interviewSpecial),
 	}
 
 	const total = DIRECT_SCORE_FIELD_ORDER.reduce((sum, fieldKey) => sum + nextWeights[fieldKey], 0)
@@ -393,12 +408,18 @@ export function cloneDirectRatingConfig(config: DirectRatingConfig): DirectRatin
 		maxScores: {
 			aveGpa: config.maxScores.aveGpa,
 			noat: config.maxScores.noat,
-			interview: config.maxScores.interview,
+			interviewComm: config.maxScores.interviewComm,
+			interviewPers: config.maxScores.interviewPers,
+			interviewInterest: config.maxScores.interviewInterest,
+			interviewSpecial: config.maxScores.interviewSpecial,
 		},
 		scoreWeights: {
 			aveGpa: sourceWeights.aveGpa,
 			noat: sourceWeights.noat,
-			interview: sourceWeights.interview,
+			interviewComm: sourceWeights.interviewComm,
+			interviewPers: sourceWeights.interviewPers,
+			interviewInterest: sourceWeights.interviewInterest,
+			interviewSpecial: sourceWeights.interviewSpecial,
 		},
 		strandBonus: {
 			singleAlignedBonusPoints: config.strandBonus.singleAlignedBonusPoints,
@@ -427,7 +448,10 @@ export function normalizeDirectRatingConfig(value: unknown, fallback?: DirectRat
 		maxScores: {
 			aveGpa: toPositiveNumber(maxScoresSource.aveGpa, base.maxScores.aveGpa),
 			noat: toPositiveNumber(maxScoresSource.noat, base.maxScores.noat),
-			interview: toPositiveNumber(maxScoresSource.interview, base.maxScores.interview),
+			interviewComm: toPositiveNumber(maxScoresSource.interviewComm, base.maxScores.interviewComm),
+			interviewPers: toPositiveNumber(maxScoresSource.interviewPers, base.maxScores.interviewPers),
+			interviewInterest: toPositiveNumber(maxScoresSource.interviewInterest, base.maxScores.interviewInterest),
+			interviewSpecial: toPositiveNumber(maxScoresSource.interviewSpecial, base.maxScores.interviewSpecial),
 		},
 		scoreWeights: normalizeScoreWeights(scoreWeightsSource, base.scoreWeights ?? DIRECT_SCORE_FIELD_WEIGHTS),
 		strandBonus: {
@@ -446,7 +470,10 @@ export function directScoreWeightsFromConfig(configValue: DirectRatingConfig): R
 	return {
 		aveGpa: sourceWeights.aveGpa,
 		noat: sourceWeights.noat,
-		interview: sourceWeights.interview,
+		interviewComm: sourceWeights.interviewComm,
+		interviewPers: sourceWeights.interviewPers,
+		interviewInterest: sourceWeights.interviewInterest,
+		interviewSpecial: sourceWeights.interviewSpecial,
 	}
 }
 
@@ -469,9 +496,14 @@ export function directScoreFieldKeyFromName(name: string): DirectScoreFieldKey |
 		return 'noat'
 	}
 
-	if (normalized === 'interview') {
-		return 'interview'
-	}
+	if (normalized.includes('communication') || normalized.includes('mediumenglish')) return 'interviewComm'
+	if (normalized.includes('personality') || normalized.includes('bearing')) return 'interviewPers'
+	if (normalized.includes('interest')) return 'interviewInterest'
+	if (normalized.includes('special')) return 'interviewSpecial'
+	if (normalized === 'interviewcomm') return 'interviewComm'
+	if (normalized === 'interviewpers') return 'interviewPers'
+	if (normalized === 'interviewinterest') return 'interviewInterest'
+	if (normalized === 'interviewspecial') return 'interviewSpecial'
 
 	if (normalized === 'avegpa' || normalized === 'ave' || normalized === 'gpa' || normalized === 'averagegpa' || normalized === 'averagegradepointaverage') {
 		return 'aveGpa'
