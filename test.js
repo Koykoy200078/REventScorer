@@ -1,16 +1,17 @@
-const http = require('http');
+const { loadEventById } = require('./lib/storage-db');
+const { compileEventResults } = require('./lib/scoring');
+const { getPool } = require('./lib/db');
 
-const options = {
-  hostname: '127.0.0.1',
-  port: 3001,
-  path: '/api/eventscorer/admin/events/5e9e854f-7fa2-495c-9470-6b5fd13b9049',
-  method: 'GET'
-};
+async function run() {
+  const pool = await getPool();
+  const connection = await pool.getConnection();
+  const event = await loadEventById(connection, '46caee26-eb44-4d90-8583-06f961abe387');
+  const compiled = compileEventResults(event);
+  
+  const abejero = compiled.finalResults.find(r => r.contestantName.includes('Abejero'));
+  console.log(JSON.stringify(abejero, null, 2));
+  
+  process.exit(0);
+}
 
-const req = http.request(options, res => {
-  let data = '';
-  res.on('data', d => data += d);
-  res.on('end', () => console.log(JSON.stringify(JSON.parse(data).event.presentationSlots, null, 2)));
-});
-
-req.end();
+run().catch(console.error);

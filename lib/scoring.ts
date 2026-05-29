@@ -369,7 +369,11 @@ function savedContestantIdsForSubmission(event: EventScorer, submission: JudgeSu
 	}
 
 	// Backward compatibility for older submissions that do not yet track saved contestant IDs.
-	const inferredSavedContestantIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission, contestant.id)).map((contestant) => contestant.id)
+	const inferredSavedContestantIds = event.contestants.filter((contestant) => {
+		const hasScore = hasPositiveScoreForContestant(submission, contestant.id)
+		const hasDetails = submission.contestantDetails?.[contestant.id] !== undefined
+		return hasScore || hasDetails
+	}).map((contestant) => contestant.id)
 
 	return new Set(inferredSavedContestantIds)
 }

@@ -276,14 +276,21 @@ export function RatingSheet() {
 						}))
 					}
 					if (ev.contestants && ev.contestants.length > 0) {
-						setEntries(ev.contestants.map((c: any) => ({
-							id: c.id || localId(),
-							name: c.name,
-							noatScore: c.noatScore !== null && c.noatScore !== undefined ? String(c.noatScore) : '',
-							academicTrack: c.academicTrack || '',
-							laptopAvailable: c.laptopAvailable || '',
-							programTag: c.programTag || null,
-						})))
+						setEntries(ev.contestants.map((c: any) => {
+							const compiledData = data.compiled?.rankings?.find((r: any) => r.contestantId === c.id)
+							const fallbackNoat = compiledData?.directDetails?.noat > 0 ? String(compiledData.directDetails.noat) : ''
+							const fallbackStrand = compiledData?.directDetails?.strand || ''
+							const fallbackRemark = compiledData?.directDetails?.remark || ''
+
+							return {
+								id: c.id || localId(),
+								name: c.name,
+								noatScore: (c.noatScore !== null && c.noatScore !== undefined && String(c.noatScore) !== '0') ? String(c.noatScore) : fallbackNoat,
+								academicTrack: c.academicTrack || fallbackStrand,
+								laptopAvailable: c.laptopAvailable || fallbackRemark,
+								programTag: c.programTag || null,
+							}
+						}))
 					}
 				}
 			})
