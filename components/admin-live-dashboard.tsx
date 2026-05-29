@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
+import { exportAsExcel } from './export-excel'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 type ProgramLabel = EventProgramTag
@@ -2050,6 +2051,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								{isAutoSyncingAdminSaves ? <span className='rounded-full border border-cyan-300 bg-cyan-50 px-3 py-1 text-xs text-cyan-800'>Auto-uploading pending saves...</span> : null}
 								<button type='button' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
 									Print Results
+								</button>
+								<button type='button' onClick={() => exportAsExcel(event, compiled)} className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'>
+									Export as Excel
 								</button>
 								{/* <button type='button' onClick={refreshDashboard} disabled={isRefreshing} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-70'>
 									{isRefreshing ? 'Refreshing...' : 'Refresh now'}
