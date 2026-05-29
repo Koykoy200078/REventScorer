@@ -2,6 +2,7 @@ import Link from 'next/link'
 
 import DeleteEventButton from '@/components/delete-event-button'
 import UpdateDataButton from '@/components/update-data-button'
+import DbBackupButtons from '@/components/db-backup-buttons'
 
 import { listEventSummaries } from '@/lib/storage'
 
@@ -36,9 +37,12 @@ export default async function HomePage() {
 				</header>
 
 				<section className='rounded-3xl border border-cyan-200 bg-white/95 p-6 shadow-xl shadow-cyan-900/10 sm:p-8'>
-					<div className='flex items-center justify-between'>
-						<h2 className='text-xl font-semibold text-cyan-950'>Scorer Events</h2>
-						<span className='rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>Total: {events.length}</span>
+					<div className='flex flex-wrap items-center justify-between gap-4'>
+						<div>
+							<h2 className='text-xl font-semibold text-cyan-950'>Scorer Events</h2>
+							<span className='mt-2 inline-block rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>Total: {events.length}</span>
+						</div>
+						<DbBackupButtons />
 					</div>
 
 					{events.length === 0 ? (
@@ -73,7 +77,9 @@ export default async function HomePage() {
 													</svg>
 												</button>
 												<div className='pointer-events-none absolute right-0 top-full z-20 mt-2 flex w-56 max-w-[calc(100vw-2rem)] flex-col gap-1 rounded-xl border border-cyan-200 bg-white p-2 opacity-0 shadow-lg shadow-cyan-900/10 transition duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'>
-													<UpdateDataButton eventId={event.id} className='inline-flex w-full items-center justify-start rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100' />
+													{!event.isDirectRating && (
+														<UpdateDataButton eventId={event.id} className='inline-flex w-full items-center justify-start rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-900 transition hover:bg-emerald-100' />
+													)}
 													<DeleteEventButton eventId={event.id} eventTitle={event.title} className='inline-flex w-full items-center justify-start rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-900 transition hover:bg-rose-100' />
 												</div>
 											</div>

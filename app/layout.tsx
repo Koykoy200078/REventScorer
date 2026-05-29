@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Plus_Jakarta_Sans, Space_Grotesk } from 'next/font/google'
 
 import './globals.css'
+import ScrollToBottomButton from '@/components/scroll-to-bottom-button'
 
 const plusJakartaSans = Plus_Jakarta_Sans({
 	variable: '--font-jakarta',
@@ -27,7 +28,10 @@ export default function RootLayout({
 		<html lang='en' suppressHydrationWarning className={`${plusJakartaSans.variable} ${spaceGrotesk.variable} h-full antialiased`}>
 			<head />
 			<body className='min-h-full'>
-				<div className='relative flex min-h-full flex-col'>{children}</div>
+				<div className='relative flex min-h-full flex-col'>
+					{children}
+					<ScrollToBottomButton />
+				</div>
 			</body>
 		</html>
 	)
