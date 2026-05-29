@@ -302,7 +302,7 @@ function directFinalRatingComponentsFromSubmission(
 		} else if (field.key === 'noat') {
 			noatScore += clampedScore
 			noatMax += validMaxScore
-		} else if (field.key === 'interviewComm' || field.key === 'interviewPers' || field.key === 'interviewInterest' || field.key === 'interviewSpecial') {
+		} else if (field.key === 'interviewContent' || field.key === 'interviewComm' || field.key === 'interviewPers' || field.key === 'interviewInterest' || field.key === 'interviewSpecial') {
 			interviewBaseScore += clampedScore
 			interviewMax += validMaxScore
 		}
@@ -453,6 +453,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				participantTotals: {} as Record<string, number>,
 				totalAveGpa: 0,
 				totalNoat: 0,
+				totalInterviewContent: 0,
 				totalInterviewComm: 0,
 				totalInterviewPers: 0,
 				totalInterviewInterest: 0,
@@ -537,6 +538,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			if (isDirectRatingEvent) {
 				const aveGpaField = directScoreFields.find((f) => f.key === 'aveGpa')
 				const noatField = directScoreFields.find((f) => f.key === 'noat')
+				const interviewContentField = directScoreFields.find((f) => f.key === 'interviewContent')
 				const interviewCommField = directScoreFields.find((f) => f.key === 'interviewComm')
 				const interviewPersField = directScoreFields.find((f) => f.key === 'interviewPers')
 				const interviewInterestField = directScoreFields.find((f) => f.key === 'interviewInterest')
@@ -545,14 +547,15 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				if (aveGpaField) aggregate.totalAveGpa += Number(submission.scores[contestant.id]?.[aveGpaField.subCriterionId] ?? 0)
 				if (noatField) aggregate.totalNoat += Number(submission.scores[contestant.id]?.[noatField.subCriterionId] ?? 0)
 
-				// For legacy 3-field events, all 4 interview virtual fields share the same sub-criterion ID.
+				// For legacy 3-field events, all 5 interview virtual fields share the same sub-criterion ID.
 				// Deduplicate: only add the raw interview score once for display totals.
-				const interviewIds = new Set([interviewCommField?.subCriterionId, interviewPersField?.subCriterionId, interviewInterestField?.subCriterionId, interviewSpecialField?.subCriterionId].filter(Boolean) as string[])
+				const interviewIds = new Set([interviewContentField?.subCriterionId, interviewCommField?.subCriterionId, interviewPersField?.subCriterionId, interviewInterestField?.subCriterionId, interviewSpecialField?.subCriterionId].filter(Boolean) as string[])
 				const isLegacySharedInterview = interviewIds.size === 1
 				if (isLegacySharedInterview) {
 					const sharedId = interviewCommField?.subCriterionId
 					if (sharedId) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[sharedId] ?? 0)
 				} else {
+					if (interviewContentField) aggregate.totalInterviewContent += Number(submission.scores[contestant.id]?.[interviewContentField.subCriterionId] ?? 0)
 					if (interviewCommField) aggregate.totalInterviewComm += Number(submission.scores[contestant.id]?.[interviewCommField.subCriterionId] ?? 0)
 					if (interviewPersField) aggregate.totalInterviewPers += Number(submission.scores[contestant.id]?.[interviewPersField.subCriterionId] ?? 0)
 					if (interviewInterestField) aggregate.totalInterviewInterest += Number(submission.scores[contestant.id]?.[interviewInterestField.subCriterionId] ?? 0)
@@ -659,11 +662,12 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 					? {
 							aveGpa: aggregate.judgeCount > 0 ? round(aggregate.totalAveGpa / aggregate.judgeCount) : 0,
 							noat: aggregate.judgeCount > 0 ? round(aggregate.totalNoat / aggregate.judgeCount) : 0,
+							interviewContent: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewContent / aggregate.judgeCount) : 0,
 							interviewComm: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewComm / aggregate.judgeCount) : 0,
 							interviewPers: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewPers / aggregate.judgeCount) : 0,
 							interviewInterest: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewInterest / aggregate.judgeCount) : 0,
 							interviewSpecial: aggregate.judgeCount > 0 ? round(aggregate.totalInterviewSpecial / aggregate.judgeCount) : 0,
-							totalInterview: aggregate.judgeCount > 0 ? round((aggregate.totalInterviewComm + aggregate.totalInterviewPers + aggregate.totalInterviewInterest + aggregate.totalInterviewSpecial) / aggregate.judgeCount) : 0,
+							totalInterview: aggregate.judgeCount > 0 ? round((aggregate.totalInterviewContent + aggregate.totalInterviewComm + aggregate.totalInterviewPers + aggregate.totalInterviewInterest + aggregate.totalInterviewSpecial) / aggregate.judgeCount) : 0,
 							strand: aggregate.strands.join(' / '),
 							remark: aggregate.remarks.join(' / '),
 							additionalInfo: aggregate.additionalInfos.join(' / '),

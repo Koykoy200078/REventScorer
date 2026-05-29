@@ -555,7 +555,7 @@ function migrateLegacyDirectRating(
 			return { criteria: rawCriteria, scores: undefined }
 		}
 
-		// DB has new fields. Migrate old scores if they exist.
+		const newInterviewContentId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('content') || sc.name.toLowerCase().includes('course'))?.id
 		const newInterviewCommId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('communication'))?.id
 		const newInterviewPersId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('personality'))?.id
 		const newInterviewInterestId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('interest') || sc.name.toLowerCase().includes('commitment'))?.id
@@ -564,7 +564,7 @@ function migrateLegacyDirectRating(
 		const aveGpaId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
 		const noatId = subCriteriaList.find((sc) => sc.name.toLowerCase() === 'noat')?.id
 
-		const knownIds = new Set([newInterviewCommId, newInterviewPersId, newInterviewInterestId, newInterviewSpecialId, aveGpaId, noatId].filter(Boolean))
+		const knownIds = new Set([newInterviewContentId, newInterviewCommId, newInterviewPersId, newInterviewInterestId, newInterviewSpecialId, aveGpaId, noatId].filter(Boolean))
 
 		const migratedScores: ScoreMatrix = {}
 		
@@ -581,18 +581,21 @@ function migrateLegacyDirectRating(
 			const alreadyMigrated = newInterviewCommId ? contestantScores[newInterviewCommId] !== undefined : false
 
 			if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
+				const contentMax = directRatingConfig?.maxScores?.interviewContent ?? 40
 				const commMax = directRatingConfig?.maxScores?.interviewComm ?? 20
 				const persMax = directRatingConfig?.maxScores?.interviewPers ?? 20
-				const interestMax = directRatingConfig?.maxScores?.interviewInterest ?? 40
-				const specialMax = directRatingConfig?.maxScores?.interviewSpecial ?? 20
-				const totalMax = commMax + persMax + interestMax + specialMax
+				const interestMax = directRatingConfig?.maxScores?.interviewInterest ?? 10
+				const specialMax = directRatingConfig?.maxScores?.interviewSpecial ?? 10
+				const totalMax = contentMax + commMax + persMax + interestMax + specialMax
 
-				if (totalMax > 0 && newInterviewCommId && newInterviewPersId && newInterviewInterestId && newInterviewSpecialId) {
+				if (totalMax > 0 && newInterviewContentId && newInterviewCommId && newInterviewPersId && newInterviewInterestId && newInterviewSpecialId) {
+					const contentScore = round((oldScore * contentMax) / totalMax)
 					const commScore = round((oldScore * commMax) / totalMax)
 					const persScore = round((oldScore * persMax) / totalMax)
 					const interestScore = round((oldScore * interestMax) / totalMax)
-					const specialScore = round(oldScore - (commScore + persScore + interestScore))
+					const specialScore = round(oldScore - (contentScore + commScore + persScore + interestScore))
 
+					migratedScores[contestantId][newInterviewContentId] = contentScore
 					migratedScores[contestantId][newInterviewCommId] = commScore
 					migratedScores[contestantId][newInterviewPersId] = persScore
 					migratedScores[contestantId][newInterviewInterestId] = interestScore
@@ -613,10 +616,11 @@ function migrateLegacyDirectRating(
 	}
 
 	// Calculate the split manually from the old subcriterion if config doesn't exist, otherwise use config
+	const interviewContentMax = directRatingConfig?.maxScores?.interviewContent ?? round((oldInterviewSubCriterion.maxScore * 8) / 20)
 	const interviewCommMax = directRatingConfig?.maxScores?.interviewComm ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
 	const interviewPersMax = directRatingConfig?.maxScores?.interviewPers ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
-	const interviewInterestMax = directRatingConfig?.maxScores?.interviewInterest ?? round((oldInterviewSubCriterion.maxScore * 8) / 20)
-	const interviewSpecialMax = directRatingConfig?.maxScores?.interviewSpecial ?? round(oldInterviewSubCriterion.maxScore - (interviewCommMax + interviewPersMax + interviewInterestMax))
+	const interviewInterestMax = directRatingConfig?.maxScores?.interviewInterest ?? round((oldInterviewSubCriterion.maxScore * 2) / 20)
+	const interviewSpecialMax = directRatingConfig?.maxScores?.interviewSpecial ?? round(oldInterviewSubCriterion.maxScore - (interviewContentMax + interviewCommMax + interviewPersMax + interviewInterestMax))
 
 	const normalizedConfig = normalizeDirectRatingConfig({
 		...(directRatingConfig ?? {}),
@@ -624,6 +628,7 @@ function migrateLegacyDirectRating(
 			...(directRatingConfig?.maxScores ?? {}),
 			aveGpa: directRatingConfig?.maxScores?.aveGpa ?? subCriteriaList.find((sc) => sc.id === oldAveId)?.maxScore ?? 100,
 			noat: directRatingConfig?.maxScores?.noat ?? subCriteriaList.find((sc) => sc.id === oldNoatId)?.maxScore ?? 100,
+			interviewContent: interviewContentMax,
 			interviewComm: interviewCommMax,
 			interviewPers: interviewPersMax,
 			interviewInterest: interviewInterestMax,
@@ -657,18 +662,21 @@ function migrateLegacyDirectRating(
 		const oldScore = Number(contestantScores[oldInterviewSubCriterion.id])
 
 		if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
+			const contentMax = normalizedConfig.maxScores.interviewContent
 			const commMax = normalizedConfig.maxScores.interviewComm
 			const persMax = normalizedConfig.maxScores.interviewPers
 			const interestMax = normalizedConfig.maxScores.interviewInterest
 			const specialMax = normalizedConfig.maxScores.interviewSpecial
-			const totalMax = commMax + persMax + interestMax + specialMax
+			const totalMax = contentMax + commMax + persMax + interestMax + specialMax
 
 			if (totalMax > 0) {
+				const contentScore = round((oldScore * contentMax) / totalMax)
 				const commScore = round((oldScore * commMax) / totalMax)
 				const persScore = round((oldScore * persMax) / totalMax)
 				const interestScore = round((oldScore * interestMax) / totalMax)
-				const specialScore = round(oldScore - (commScore + persScore + interestScore))
+				const specialScore = round(oldScore - (contentScore + commScore + persScore + interestScore))
 
+				migratedScores[contestantId]['legacy-migrated-interviewContent'] = contentScore
 				migratedScores[contestantId]['legacy-migrated-interviewComm'] = commScore
 				migratedScores[contestantId]['legacy-migrated-interviewPers'] = persScore
 				migratedScores[contestantId]['legacy-migrated-interviewInterest'] = interestScore
@@ -1224,11 +1232,12 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				const oldNoatId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => sc.name.toLowerCase() === 'noat')?.id
 
 				if (oldInterviewId) {
+					const contentScore = payload[contestant.id]['legacy-migrated-interviewContent'] ?? 0
 					const commScore = payload[contestant.id]['legacy-migrated-interviewComm'] ?? 0
 					const persScore = payload[contestant.id]['legacy-migrated-interviewPers'] ?? 0
 					const interestScore = payload[contestant.id]['legacy-migrated-interviewInterest'] ?? 0
 					const specialScore = payload[contestant.id]['legacy-migrated-interviewSpecial'] ?? 0
-					payload[contestant.id][oldInterviewId] = round(commScore + persScore + interestScore + specialScore)
+					payload[contestant.id][oldInterviewId] = round(contentScore + commScore + persScore + interestScore + specialScore)
 				}
 
 				if (oldAveId && payload[contestant.id]['legacy-migrated-aveGpa'] !== undefined) {

@@ -16,11 +16,12 @@ export interface JudgeInput {
 export type EventScoringType = 'standard' | 'final-oral-defense'
 export type EventProgramTag = 'BSINT' | 'BSCS'
 
-export type DirectScoreFieldKey = 'aveGpa' | 'noat' | 'interviewComm' | 'interviewPers' | 'interviewInterest' | 'interviewSpecial'
+export type DirectScoreFieldKey = 'aveGpa' | 'noat' | 'interviewContent' | 'interviewComm' | 'interviewPers' | 'interviewInterest' | 'interviewSpecial'
 
 export interface DirectRatingMaxScores {
 	aveGpa: number
 	noat: number
+	interviewContent: number
 	interviewComm: number
 	interviewPers: number
 	interviewInterest: number
@@ -269,6 +270,7 @@ export interface CompiledContestantResult {
 	directDetails?: {
 		aveGpa: number
 		noat: number
+		interviewContent: number
 		interviewComm: number
 		interviewPers: number
 		interviewInterest: number
