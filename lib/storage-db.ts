@@ -2894,6 +2894,70 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 		await connection.execute(`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`, [eventId])
 		await insertEventGraph(connection, normalizedEvent)
 
+		// Restore previous submissions mapped to new UUIDs
+		const subCriterionMap = new Map<string, string>()
+		for (const oldCriterion of existingEvent.criteria) {
+			const newCriterion = normalizedEvent.criteria.find((c) => c.name === oldCriterion.name)
+			if (!newCriterion) continue
+			for (const oldSub of oldCriterion.subCriteria) {
+				const newSub = newCriterion.subCriteria.find((s) => s.name === oldSub.name)
+				if (newSub) {
+					subCriterionMap.set(oldSub.id, newSub.id)
+				}
+			}
+		}
+
+		const validContestantIds = new Set(normalizedEvent.contestants.map((c) => c.id))
+		const validJudgeIds = new Set(normalizedEvent.judges.map((j) => j.id))
+
+		for (const oldSubmission of existingEvent.submissions) {
+			if (!validJudgeIds.has(oldSubmission.judgeId)) {
+				continue
+			}
+
+			const newScores: ScoreMatrix = {}
+			for (const contestantId of Object.keys(oldSubmission.scores)) {
+				if (!validContestantIds.has(contestantId)) continue
+				newScores[contestantId] = {}
+				for (const oldSubId of Object.keys(oldSubmission.scores[contestantId] ?? {})) {
+					const newSubId = subCriterionMap.get(oldSubId)
+					if (newSubId) {
+						newScores[contestantId][newSubId] = oldSubmission.scores[contestantId][oldSubId]
+					}
+				}
+			}
+
+			const newSavedContestantIds = Array.isArray(oldSubmission.savedContestantIds)
+				? oldSubmission.savedContestantIds.filter((id) => validContestantIds.has(id))
+				: []
+
+			const newContestantDetails: JudgeContestantDetailsMap = {}
+			if (oldSubmission.contestantDetails) {
+				for (const contestantId of Object.keys(oldSubmission.contestantDetails)) {
+					if (validContestantIds.has(contestantId)) {
+						newContestantDetails[contestantId] = oldSubmission.contestantDetails[contestantId]
+					}
+				}
+			}
+
+			await upsertSubmissionWithScores(
+				connection,
+				normalizedEvent,
+				oldSubmission.judgeId,
+				oldSubmission.submittedAt,
+				newScores,
+				newSavedContestantIds,
+				newContestantDetails
+			)
+
+			normalizedEvent.submissions.push({
+				...oldSubmission,
+				scores: newScores,
+				savedContestantIds: newSavedContestantIds,
+				contestantDetails: newContestantDetails,
+			})
+		}
+
 		await connection.commit()
 		return normalizedEvent
 	} catch (error) {
