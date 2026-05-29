@@ -161,7 +161,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
 		const mergedDetails = { ...existingDetails }
 		if (body.contestantDetails && typeof body.contestantDetails === 'object') {
-			const incomingDetails = body.contestantDetails as Record<string, unknown>
+			const incomingDetails = body.contestantDetails as Record<string, any>
 			if (incomingDetails[body.contestantId]) {
 				mergedDetails[body.contestantId] = incomingDetails[body.contestantId]
 			}
