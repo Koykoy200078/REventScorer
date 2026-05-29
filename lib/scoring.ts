@@ -344,14 +344,21 @@ function directFinalRatingComponentsFromSubmission(
 	}
 }
 
-function hasPositiveScoreForContestant(submission: JudgeSubmission, contestantId: string): boolean {
+function hasPositiveScoreForContestant(event: EventScorer, submission: JudgeSubmission, contestantId: string): boolean {
 	const contestantScores = submission.scores[contestantId]
 
 	if (!contestantScores || typeof contestantScores !== 'object') {
 		return false
 	}
 
-	for (const rawScore of Object.values(contestantScores)) {
+	const directFields = detectDirectRatingScoreFields(event.criteria)
+	const noatSubId = directFields.find((f) => f.key === 'noat')?.subCriterionId
+
+	for (const [subCriterionId, rawScore] of Object.entries(contestantScores)) {
+		if (noatSubId && subCriterionId === noatSubId) {
+			continue
+		}
+
 		const numericScore = Number(rawScore)
 		if (Number.isFinite(numericScore) && numericScore > 0) {
 			return true
@@ -370,7 +377,7 @@ function savedContestantIdsForSubmission(event: EventScorer, submission: JudgeSu
 
 	// Backward compatibility for older submissions that do not yet track saved contestant IDs.
 	const inferredSavedContestantIds = event.contestants.filter((contestant) => {
-		const hasScore = hasPositiveScoreForContestant(submission, contestant.id)
+		const hasScore = hasPositiveScoreForContestant(event, submission, contestant.id)
 		const hasDetails = submission.contestantDetails?.[contestant.id] !== undefined
 		return hasScore || hasDetails
 	}).map((contestant) => contestant.id)
