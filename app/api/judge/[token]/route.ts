@@ -153,12 +153,18 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
 		const mergedMatrix = { ...existingMatrix }
 		if (body.scores && typeof body.scores === 'object') {
-			mergedMatrix[body.contestantId] = body.scores as Record<string, number>
+			const incomingScores = body.scores as Record<string, Record<string, number>>
+			if (incomingScores[body.contestantId]) {
+				mergedMatrix[body.contestantId] = incomingScores[body.contestantId]
+			}
 		}
 
 		const mergedDetails = { ...existingDetails }
 		if (body.contestantDetails && typeof body.contestantDetails === 'object') {
-			mergedDetails[body.contestantId] = body.contestantDetails
+			const incomingDetails = body.contestantDetails as Record<string, unknown>
+			if (incomingDetails[body.contestantId]) {
+				mergedDetails[body.contestantId] = incomingDetails[body.contestantId]
+			}
 		}
 
 		const submission = await submitJudgeScoresByToken(token, mergedMatrix, body.contestantId, mergedDetails)
