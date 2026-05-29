@@ -760,7 +760,11 @@ export function RatingSheet() {
 
 					<div className='mt-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3'>
 						<p className='mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-900'>Interview Components Max Scores</p>
-						<div className='grid grid-cols-2 gap-3 md:grid-cols-4'>
+						<div className='grid grid-cols-2 gap-3 md:grid-cols-5'>
+							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
+								Content Max
+								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewContent} onChange={(event) => updateDirectMaxScore('interviewContent', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />
+							</label>
 							<label className='text-xs font-semibold uppercase tracking-wide text-emerald-900'>
 								Comm. Skills Max
 								<input type='number' min={1} step='0.01' value={directRatingConfig.maxScores.interviewComm} onChange={(event) => updateDirectMaxScore('interviewComm', event.target.value)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2' />

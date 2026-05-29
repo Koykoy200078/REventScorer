@@ -11,11 +11,12 @@ export interface DirectRatingScoreField {
 	maxScore: number
 }
 
-export const DIRECT_SCORE_FIELD_ORDER: DirectScoreFieldKey[] = ['aveGpa', 'noat', 'interviewComm', 'interviewPers', 'interviewInterest', 'interviewSpecial']
+export const DIRECT_SCORE_FIELD_ORDER: DirectScoreFieldKey[] = ['aveGpa', 'noat', 'interviewContent', 'interviewComm', 'interviewPers', 'interviewInterest', 'interviewSpecial']
 
 export const DIRECT_SCORE_FIELD_LABELS: Record<DirectScoreFieldKey, string> = {
 	aveGpa: 'AVE/GPA',
 	noat: 'NOAT',
+	interviewContent: 'CONTENT (Course Program Related)',
 	interviewComm: 'Communication Skills (Medium-English, Clarity of expression, organization fo thought and ideas)',
 	interviewPers: 'Personality (Bearing)',
 	interviewInterest: 'Interest in the Program',
@@ -25,10 +26,11 @@ export const DIRECT_SCORE_FIELD_LABELS: Record<DirectScoreFieldKey, string> = {
 export const DIRECT_SCORE_FIELD_WEIGHTS: Record<DirectScoreFieldKey, number> = {
 	aveGpa: 40,
 	noat: 40,
+	interviewContent: 8,
 	interviewComm: 4,
 	interviewPers: 4,
-	interviewInterest: 8,
-	interviewSpecial: 4,
+	interviewInterest: 2,
+	interviewSpecial: 2,
 }
 
 export const DIRECT_SCORE_WEIGHT_TOTAL = DIRECT_SCORE_FIELD_ORDER.reduce((sum, key) => sum + DIRECT_SCORE_FIELD_WEIGHTS[key], 0)
@@ -301,14 +303,16 @@ export const DEFAULT_DIRECT_RATING_CONFIG: DirectRatingConfig = {
 	maxScores: {
 		aveGpa: 100,
 		noat: 100,
+		interviewContent: 40,
 		interviewComm: 20,
 		interviewPers: 20,
-		interviewInterest: 40,
-		interviewSpecial: 20,
+		interviewInterest: 10,
+		interviewSpecial: 10,
 	},
 	scoreWeights: {
 		aveGpa: DIRECT_SCORE_FIELD_WEIGHTS.aveGpa,
 		noat: DIRECT_SCORE_FIELD_WEIGHTS.noat,
+		interviewContent: DIRECT_SCORE_FIELD_WEIGHTS.interviewContent,
 		interviewComm: DIRECT_SCORE_FIELD_WEIGHTS.interviewComm,
 		interviewPers: DIRECT_SCORE_FIELD_WEIGHTS.interviewPers,
 		interviewInterest: DIRECT_SCORE_FIELD_WEIGHTS.interviewInterest,
@@ -387,6 +391,7 @@ function normalizeScoreWeights(value: unknown, fallback: Record<DirectScoreField
 	const nextWeights: Record<DirectScoreFieldKey, number> = {
 		aveGpa: toNonNegativeNumber(value.aveGpa, fallback.aveGpa),
 		noat: toNonNegativeNumber(value.noat, fallback.noat),
+		interviewContent: toNonNegativeNumber(value.interviewContent, fallback.interviewContent),
 		interviewComm: toNonNegativeNumber(value.interviewComm, fallback.interviewComm),
 		interviewPers: toNonNegativeNumber(value.interviewPers, fallback.interviewPers),
 		interviewInterest: toNonNegativeNumber(value.interviewInterest, fallback.interviewInterest),
@@ -408,6 +413,7 @@ export function cloneDirectRatingConfig(config: DirectRatingConfig): DirectRatin
 		maxScores: {
 			aveGpa: config.maxScores.aveGpa,
 			noat: config.maxScores.noat,
+			interviewContent: config.maxScores.interviewContent,
 			interviewComm: config.maxScores.interviewComm,
 			interviewPers: config.maxScores.interviewPers,
 			interviewInterest: config.maxScores.interviewInterest,
@@ -416,6 +422,7 @@ export function cloneDirectRatingConfig(config: DirectRatingConfig): DirectRatin
 		scoreWeights: {
 			aveGpa: sourceWeights.aveGpa,
 			noat: sourceWeights.noat,
+			interviewContent: sourceWeights.interviewContent,
 			interviewComm: sourceWeights.interviewComm,
 			interviewPers: sourceWeights.interviewPers,
 			interviewInterest: sourceWeights.interviewInterest,
@@ -444,6 +451,7 @@ export function normalizeDirectRatingConfig(value: unknown, fallback?: DirectRat
 	const multiAlignedSet = new Set(multiAlignedStrands.map((strand) => strand.toLowerCase()))
 	const singleAlignedStrands = normalizeStrandArray(strandBonusSource.singleAlignedStrands, base.strandBonus.singleAlignedStrands).filter((strand) => !multiAlignedSet.has(strand.toLowerCase()))
 
+	let interviewContent = toPositiveNumber(maxScoresSource.interviewContent, base.maxScores.interviewContent)
 	let interviewComm = toPositiveNumber(maxScoresSource.interviewComm, base.maxScores.interviewComm)
 	let interviewPers = toPositiveNumber(maxScoresSource.interviewPers, base.maxScores.interviewPers)
 	let interviewInterest = toPositiveNumber(maxScoresSource.interviewInterest, base.maxScores.interviewInterest)
@@ -453,21 +461,24 @@ export function normalizeDirectRatingConfig(value: unknown, fallback?: DirectRat
 	if (
 		Number.isFinite(oldInterview) &&
 		oldInterview > 0 &&
+		maxScoresSource.interviewContent === undefined &&
 		maxScoresSource.interviewComm === undefined &&
 		maxScoresSource.interviewPers === undefined &&
 		maxScoresSource.interviewInterest === undefined &&
 		maxScoresSource.interviewSpecial === undefined
 	) {
+		interviewContent = round((oldInterview * 8) / 20)
 		interviewComm = round((oldInterview * 4) / 20)
 		interviewPers = round((oldInterview * 4) / 20)
-		interviewInterest = round((oldInterview * 8) / 20)
-		interviewSpecial = round(oldInterview - (interviewComm + interviewPers + interviewInterest))
+		interviewInterest = round((oldInterview * 2) / 20)
+		interviewSpecial = round(oldInterview - (interviewContent + interviewComm + interviewPers + interviewInterest))
 	}
 
 	return {
 		maxScores: {
 			aveGpa: toPositiveNumber(maxScoresSource.aveGpa, base.maxScores.aveGpa),
 			noat: toPositiveNumber(maxScoresSource.noat, base.maxScores.noat),
+			interviewContent,
 			interviewComm,
 			interviewPers,
 			interviewInterest,
@@ -490,6 +501,7 @@ export function directScoreWeightsFromConfig(configValue: DirectRatingConfig): R
 	return {
 		aveGpa: sourceWeights.aveGpa,
 		noat: sourceWeights.noat,
+		interviewContent: sourceWeights.interviewContent,
 		interviewComm: sourceWeights.interviewComm,
 		interviewPers: sourceWeights.interviewPers,
 		interviewInterest: sourceWeights.interviewInterest,
@@ -518,10 +530,12 @@ export function directScoreFieldKeyFromName(name: string): DirectScoreFieldKey |
 
 	if (normalized.includes('communication') || normalized.includes('mediumenglish')) return 'interviewComm'
 	if (normalized.includes('personality') || normalized.includes('bearing')) return 'interviewPers'
+	if (normalized.includes('content') || normalized.includes('courseprogram')) return 'interviewContent'
 	if (normalized.includes('interest')) return 'interviewInterest'
 	if (normalized.includes('special')) return 'interviewSpecial'
 	if (normalized === 'interviewcomm') return 'interviewComm'
 	if (normalized === 'interviewpers') return 'interviewPers'
+	if (normalized === 'interviewcontent') return 'interviewContent'
 	if (normalized === 'interviewinterest') return 'interviewInterest'
 	if (normalized === 'interviewspecial') return 'interviewSpecial'
 
@@ -534,7 +548,7 @@ export function directScoreFieldKeyFromName(name: string): DirectScoreFieldKey |
 
 /**
  * Detects legacy 3-field direct rating structure (ave/gpa, noat, combined-interview).
- * Expands to 6 virtual fields by splitting the combined interview equally into 4 sub-fields,
+ * Expands to virtual fields by splitting the combined interview equally into sub-fields,
  * all pointing to the same old sub-criterion ID so existing DB scores are read correctly.
  */
 function detectLegacyDirectRatingScoreFields(criteria: EventCriterion[] | CriterionLike[], configValue?: DirectRatingConfig): DirectRatingScoreField[] {
@@ -555,21 +569,12 @@ function detectLegacyDirectRatingScoreFields(criteria: EventCriterion[] | Criter
 	const noatId = ('id' in noatSubCriterion && typeof noatSubCriterion.id === 'string' && noatSubCriterion.id.trim()) ? noatSubCriterion.id : 'legacy-noat'
 	const interviewId = ('id' in interviewSubCriterion && typeof interviewSubCriterion.id === 'string' && interviewSubCriterion.id.trim()) ? interviewSubCriterion.id : 'legacy-interview'
 
-	// Use the old combined interview max — split evenly as 4 parts that will sum to the original score
 	const oldInterviewMax = toPositiveNumber(interviewSubCriterion.maxScore, 20)
-	const interviewCommMax = toPositiveNumber(config.maxScores.interviewComm, oldInterviewMax * 4 / 20)
-	const interviewPersMax = toPositiveNumber(config.maxScores.interviewPers, oldInterviewMax * 4 / 20)
-	const interviewInterestMax = toPositiveNumber(config.maxScores.interviewInterest, oldInterviewMax * 8 / 20)
-	const interviewSpecialMax = toPositiveNumber(config.maxScores.interviewSpecial, oldInterviewMax - interviewCommMax - interviewPersMax - interviewInterestMax)
-	const totalInterviewMax = interviewCommMax + interviewPersMax + interviewInterestMax + interviewSpecialMax
 
 	return [
 		{ key: 'aveGpa', label: DIRECT_SCORE_FIELD_LABELS.aveGpa, subCriterionId: aveId, maxScore: toPositiveNumber(aveSubCriterion.maxScore, config.maxScores.aveGpa) },
 		{ key: 'noat', label: DIRECT_SCORE_FIELD_LABELS.noat, subCriterionId: noatId, maxScore: toPositiveNumber(noatSubCriterion.maxScore, config.maxScores.noat) },
-		// All 4 interview fields point to the SAME old sub-criterion ID so the DB score is read for each.
-		// The scoring engine accumulates all 4 fields under interviewBaseScore, so effective total = score * 4,
-		// and effective interviewMax = sum of 4 maxScores = 4 * oldInterviewMax.
-		// This gives correct ratio: (score * 4) / (4 * oldInterviewMax) = score / oldInterviewMax ✓
+		{ key: 'interviewContent', label: DIRECT_SCORE_FIELD_LABELS.interviewContent, subCriterionId: interviewId, maxScore: oldInterviewMax },
 		{ key: 'interviewComm', label: DIRECT_SCORE_FIELD_LABELS.interviewComm, subCriterionId: interviewId, maxScore: oldInterviewMax },
 		{ key: 'interviewPers', label: DIRECT_SCORE_FIELD_LABELS.interviewPers, subCriterionId: interviewId, maxScore: oldInterviewMax },
 		{ key: 'interviewInterest', label: DIRECT_SCORE_FIELD_LABELS.interviewInterest, subCriterionId: interviewId, maxScore: oldInterviewMax },
