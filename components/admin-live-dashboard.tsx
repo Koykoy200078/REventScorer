@@ -1659,6 +1659,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}, [queuedAdminSaves.length, syncQueuedAdminSaves])
 
+	useEffect(() => {
+		if (queuedAdminSaves.length === 0) return
+
+		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+			e.preventDefault()
+			e.returnValue = ''
+		}
+
+		window.addEventListener('beforeunload', handleBeforeUnload)
+		return () => {
+			window.removeEventListener('beforeunload', handleBeforeUnload)
+		}
+	}, [queuedAdminSaves.length])
+
 	const saveProgramAssignments = useCallback(
 		async (assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }>) => {
 			if (assignments.length === 0) {
