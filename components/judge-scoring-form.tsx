@@ -1594,7 +1594,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 												<div>
 													<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
 													<p className='text-[11px] font-medium text-cyan-900/85'>Scope: {scopeLabel}</p>
-													<p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p>
+													{!directRatingConfig ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
 												</div>
 												<p className='text-xs text-cyan-900/90'>
 													Parent Max: {parentMaxScore.toFixed(2)} | Current: {parentCurrentTotal.toFixed(2)}

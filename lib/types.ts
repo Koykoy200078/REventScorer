@@ -56,6 +56,7 @@ export interface ContestantInput {
 }
 
 export interface SubCriterionInput {
+	id?: string
 	name: string
 	maxScore: number
 }

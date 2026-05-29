@@ -1,5 +1,6 @@
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
-import type { CompiledContestantResult, EventCompiledResults, EventScorer, JudgeBreakdown, JudgeSubmission } from '@/lib/types'
+import { DEFAULT_DIRECT_RATING_CONFIG, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightsFromConfig, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import type { DirectRatingScoreField } from '@/lib/direct-rating-config'
+import type { CompiledContestantResult, EventCompiledResults, EventContestant, EventCriterion, EventScorer, JudgeContestantDetails, JudgeContestantDetailsMap, JudgeBreakdown, JudgeSubmission, ScoreMatrix, DirectRatingScoreWeights } from '@/lib/types'
 
 function round(value: number): number {
 	return Math.round(value * 1000) / 1000
@@ -266,6 +267,7 @@ function directFinalRatingComponentsFromSubmission(
 	contestantId: string,
 	directScoreFields: DirectScoreField[],
 	interviewBonusPoints: number,
+	weights: DirectRatingScoreWeights,
 ): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number } {
 	if (directScoreFields.length === 0) {
 		return {
@@ -313,33 +315,36 @@ function directFinalRatingComponentsFromSubmission(
 		appliedInterviewBonus = round(interviewAdjustedScore - interviewBaseScore)
 	}
 
-	let presentComponents = 0
-	let baseTotalPercentage = 0
-	let finalTotalPercentage = 0
+	let presentWeightSum = 0
+	let baseTotalWeighted = 0
+	let finalTotalWeighted = 0
 
 	if (aveMax > 0) {
-		presentComponents++
-		baseTotalPercentage += (aveScore / aveMax) * 100
-		finalTotalPercentage += (aveScore / aveMax) * 100
+		const weight = weights.aveGpa
+		presentWeightSum += weight
+		baseTotalWeighted += (aveScore / aveMax) * weight
+		finalTotalWeighted += (aveScore / aveMax) * weight
 	}
 
 	if (noatMax > 0) {
-		presentComponents++
-		baseTotalPercentage += (noatScore / noatMax) * 100
-		finalTotalPercentage += (noatScore / noatMax) * 100
+		const weight = weights.noat
+		presentWeightSum += weight
+		baseTotalWeighted += (noatScore / noatMax) * weight
+		finalTotalWeighted += (noatScore / noatMax) * weight
 	}
 
 	if (interviewMax > 0) {
-		presentComponents++
-		baseTotalPercentage += (interviewBaseScore / interviewMax) * 100
-		finalTotalPercentage += (interviewAdjustedScore / interviewMax) * 100
+		const weight = (weights.interviewContent || 0) + (weights.interviewComm || 0) + (weights.interviewPers || 0) + (weights.interviewInterest || 0) + (weights.interviewSpecial || 0)
+		presentWeightSum += weight
+		baseTotalWeighted += (interviewBaseScore / interviewMax) * weight
+		finalTotalWeighted += (interviewAdjustedScore / interviewMax) * weight
 	}
 
-	const divisor = presentComponents > 0 ? presentComponents : 1
+	const factor = presentWeightSum > 0 ? (100 / presentWeightSum) : 1
 
 	return {
-		baseFinalRating: round(baseTotalPercentage / divisor),
-		finalRating: round(finalTotalPercentage / divisor),
+		baseFinalRating: round(baseTotalWeighted * factor),
+		finalRating: round(finalTotalWeighted * factor),
 		appliedInterviewBonus,
 	}
 }
@@ -411,6 +416,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const directScoreFields = detectDirectRatingScoreFields(event.criteria, directRatingConfig)
 	const isDirectRatingEvent = directScoreFields.length > 0
 	const maxPossibleScore = isDirectRatingEvent ? 100 : round(event.criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0))
+	const directRatingWeights = isDirectRatingEvent ? directScoreWeightsFromConfig(event.directRatingConfig || DEFAULT_DIRECT_RATING_CONFIG) : ({} as DirectRatingScoreWeights)
 	const groupCriterionIds = new Set(event.criteria.filter((criterion) => normalizeLabel(criterion.name) === 'group presentation').map((criterion) => criterion.id))
 	const individualCriterionIds = new Set(event.criteria.filter((criterion) => isIndividualCriterion(criterion)).map((criterion) => criterion.id))
 	const hasFinalOralCriteria = groupCriterionIds.size > 0 && individualCriterionIds.size > 0
@@ -509,7 +515,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 
 				const strand = submission.contestantDetails?.[contestant.id]?.strand ?? ''
 				const bonusPoints = round(resolveStrandAlignmentBonus(strand, directRatingConfig).bonusPoints)
-				const directRatingComponents = directFinalRatingComponentsFromSubmission(submission, contestant.id, directScoreFields, bonusPoints)
+				const directRatingComponents = directFinalRatingComponentsFromSubmission(submission, contestant.id, directScoreFields, bonusPoints, directRatingWeights)
 
 				directComponentsByContestant.set(contestant.id, {
 					baseFinalRating: directRatingComponents.baseFinalRating,
