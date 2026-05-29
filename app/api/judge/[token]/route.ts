@@ -1,3 +1,4 @@
+import { detectDirectRatingScoreFields } from '@/lib/direct-rating-config'
 import { getJudgeSessionByToken, submitJudgeScoresByToken } from '@/lib/storage'
 import type { AdminScoreRealtimeUpdate, EventScorer, JudgeSubmission } from '@/lib/types'
 
@@ -43,14 +44,21 @@ function getBroadcastOrigins(_request: Request): string[] {
 	return origins
 }
 
-function hasPositiveScoreForContestant(submission: JudgeSubmission, contestantId: string): boolean {
+function hasPositiveScoreForContestant(event: EventScorer, submission: JudgeSubmission, contestantId: string): boolean {
 	const contestantScores = submission.scores[contestantId]
 
 	if (!contestantScores || typeof contestantScores !== 'object') {
 		return false
 	}
 
-	for (const rawScore of Object.values(contestantScores)) {
+	const directFields = detectDirectRatingScoreFields(event.criteria)
+	const noatSubId = directFields.find((f) => f.key === 'noat')?.subCriterionId
+
+	for (const [subCriterionId, rawScore] of Object.entries(contestantScores)) {
+		if (noatSubId && subCriterionId === noatSubId) {
+			continue
+		}
+
 		const numericScore = Number(rawScore)
 		if (Number.isFinite(numericScore) && numericScore > 0) {
 			return true
@@ -67,7 +75,7 @@ function savedContestantIdsForSubmission(event: EventScorer, submission: JudgeSu
 		return new Set(submission.savedContestantIds.filter((contestantId) => validContestantIds.has(contestantId)))
 	}
 
-	const inferredSavedIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission, contestant.id)).map((contestant) => contestant.id)
+	const inferredSavedIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(event, submission, contestant.id)).map((contestant) => contestant.id)
 
 	return new Set(inferredSavedIds)
 }
@@ -139,7 +147,21 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 			throw new Error('Contestant ID is required.')
 		}
 
-		const submission = await submitJudgeScoresByToken(token, body.scores, body.contestantId, body.contestantDetails)
+		const existingSession = await getJudgeSessionByToken(token)
+		const existingMatrix = existingSession?.submission?.scores ?? {}
+		const existingDetails = existingSession?.submission?.contestantDetails ?? {}
+
+		const mergedMatrix = { ...existingMatrix }
+		if (body.scores && typeof body.scores === 'object') {
+			mergedMatrix[body.contestantId] = body.scores as Record<string, number>
+		}
+
+		const mergedDetails = { ...existingDetails }
+		if (body.contestantDetails && typeof body.contestantDetails === 'object') {
+			mergedDetails[body.contestantId] = body.contestantDetails
+		}
+
+		const submission = await submitJudgeScoresByToken(token, mergedMatrix, body.contestantId, mergedDetails)
 
 		const realtimePayload: AdminScoreRealtimeUpdate = {
 			eventId: submission.event.id,
