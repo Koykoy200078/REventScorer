@@ -1285,10 +1285,17 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [pendingQueueFilter, setPendingQueueFilter] = useState<PendingQueueFilter>('all')
 	const [strandFilter, setStrandFilter] = useState<string>('All')
 	const [remarkFilter, setRemarkFilter] = useState<string>('All')
+	const [isProgramPasswordModalOpen, setIsProgramPasswordModalOpen] = useState(false)
+	const [programPassword, setProgramPassword] = useState('')
+	const [programPasswordError, setProgramPasswordError] = useState('')
+	const [isVerifyingProgramPassword, setIsVerifyingProgramPassword] = useState(false)
+	const [pendingProgramTarget, setPendingProgramTarget] = useState<ProgramLabel | null>(null)
+
 	const refreshInFlight = useRef(false)
 	const adminAutoSyncInFlight = useRef(false)
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
+	const isDirectRatingEvent = Boolean(event.directRatingConfig)
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
 	const analyticsPreviewLimit = 3
 	const compiledTableColumnCount = useWeightedScores ? 9 : 6
@@ -1718,6 +1725,38 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		[compiled.rankings, saveProgramAssignments],
 	)
 
+	const handleProgramPasswordSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault()
+		if (!programPassword.trim()) {
+			setProgramPasswordError('Password is required.')
+			return
+		}
+		setIsVerifyingProgramPassword(true)
+		setProgramPasswordError('')
+		try {
+			const response = await fetch('/api/admin/update-auth', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ password: programPassword }),
+			})
+			if (!response.ok) {
+				const responseBody = (await response.json().catch(() => null)) as { error?: string } | null
+				setProgramPasswordError(responseBody?.error || 'Incorrect password.')
+				return
+			}
+			setProgramForAllContestants(pendingProgramTarget)
+			setIsProgramPasswordModalOpen(false)
+			setProgramPassword('')
+			setProgramPasswordError('')
+			setPendingProgramTarget(null)
+		} catch (error) {
+			console.error('Password verification error:', error)
+			setProgramPasswordError('Unable to verify password. Try again.')
+		} finally {
+			setIsVerifyingProgramPassword(false)
+		}
+	}
+
 	const toggleContestantProgram = useCallback(
 		(contestantId: string, selectedProgram: ProgramLabel) => {
 			const currentProgram = resolvedProgramByContestantId.get(contestantId) ?? null
@@ -2037,7 +2076,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								<p className='text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]'>Admin Console</p>
 								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl'>{event.title}</h1>
 								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]'>{event.description}</p> : null}
-								<p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p>
+								{!isDirectRatingEvent ? (
+									<p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p>
+								) : null}
 								<p className='mt-3 text-xs text-[var(--text-muted)]'>
 									Created {formatDate(event.createdAt)}
 									{event.createdBy ? ` by ${event.createdBy}` : ''}
@@ -2147,7 +2188,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
 								<div>
 									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
-									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Edit judges, rubric criteria, contestants/participants, presentation slots, and rubric legend directly from this dashboard.</p>
+									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Edit judges, rubric criteria, contestants/participants, presentation slots{isDirectRatingEvent ? '' : ', and rubric legend'} directly from this dashboard.</p>
 									<p className='mt-2 text-xs text-amber-700'>Saving this editor resets all current judge submissions so scoring stays consistent with the new structure.</p>
 								</div>
 								<div className='flex flex-wrap items-center gap-2'>
@@ -2231,75 +2272,77 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Legend</h3>
-											<div className='flex gap-2'>
-												<button
-													type='button'
-													onClick={() => {
-														updateEventEditorDraft((previous) => ({
-															...previous,
-															rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
-														}))
-													}}
-													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-													Add Legend Row
-												</button>
-												<button
-													type='button'
-													onClick={() => {
-														updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
-													}}
-													className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-													Reset Default
-												</button>
-											</div>
-										</div>
-
-										<div className='mt-3 space-y-2'>
-											{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
-												<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
-													<input
-														type='number'
-														step='1'
-														value={legendItem.score}
-														onChange={(event) => {
-															const numericScore = Number(event.target.value)
-															updateEventEditorDraft((previous) => ({
-																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
-															}))
-														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
-													/>
-													<input
-														type='text'
-														value={legendItem.label}
-														onChange={(event) => {
-															const value = event.target.value
-															updateEventEditorDraft((previous) => ({
-																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
-															}))
-														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
-													/>
+									{!isDirectRatingEvent ? (
+										<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+											<div className='flex items-center justify-between gap-2'>
+												<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Legend</h3>
+												<div className='flex gap-2'>
 													<button
 														type='button'
 														onClick={() => {
 															updateEventEditorDraft((previous) => ({
 																...previous,
-																rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
+																rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
 															}))
 														}}
-														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
-														Remove
+														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+														Add Legend Row
+													</button>
+													<button
+														type='button'
+														onClick={() => {
+															updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
+														}}
+														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+														Reset Default
 													</button>
 												</div>
-											))}
-										</div>
-									</section>
+											</div>
+
+											<div className='mt-3 space-y-2'>
+												{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
+													<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
+														<input
+															type='number'
+															step='1'
+															value={legendItem.score}
+															onChange={(event) => {
+																const numericScore = Number(event.target.value)
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+														<input
+															type='text'
+															value={legendItem.label}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
+																}))
+															}}
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+														<button
+															type='button'
+															onClick={() => {
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
+																}))
+															}}
+															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+															Remove
+														</button>
+													</div>
+												))}
+											</div>
+										</section>
+									) : null}
 
 									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
 										<div className='flex items-center justify-between gap-2'>
@@ -3038,7 +3081,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															type='checkbox'
 															checked={allContestantsBSINT}
 															disabled={isSavingProgramAssignments}
-															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSINT' : null)}
+															onChange={(e) => {
+																setPendingProgramTarget(e.target.checked ? 'BSINT' : null)
+																setIsProgramPasswordModalOpen(true)
+															}}
 															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
 														/>
 														All BSINT
@@ -3048,7 +3094,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															type='checkbox'
 															checked={allContestantsBSCS}
 															disabled={isSavingProgramAssignments}
-															onChange={(event) => setProgramForAllContestants(event.target.checked ? 'BSCS' : null)}
+															onChange={(e) => {
+																setPendingProgramTarget(e.target.checked ? 'BSCS' : null)
+																setIsProgramPasswordModalOpen(true)
+															}}
 															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
 														/>
 														All BSCS
@@ -3278,7 +3327,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
-						<p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p>
+						{!isDirectRatingEvent ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
 						<div className='mt-4 grid gap-4'>
 							{event.criteria.map((criterion) => {
 								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
@@ -3420,6 +3469,53 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					))}
 				</div>
 			</div>
+
+			{isProgramPasswordModalOpen ? (
+				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>
+					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
+						<h3 className='text-lg font-semibold text-[var(--text-primary)]'>Authentication Required</h3>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants.</p>
+						<form className='mt-4 space-y-3' onSubmit={(e) => void handleProgramPasswordSubmit(e)}>
+							<div>
+								<label className='text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]'>Password</label>
+								<input
+									type='password'
+									value={programPassword}
+									onChange={(e) => {
+										setProgramPassword(e.target.value)
+										if (programPasswordError) setProgramPasswordError('')
+									}}
+									className='mt-2 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none focus:ring-1 focus:ring-[var(--border-focus)]'
+									autoFocus
+									required
+								/>
+							</div>
+							{programPasswordError ? <p className='text-sm text-rose-600'>{programPasswordError}</p> : null}
+							<div className='flex flex-wrap justify-end gap-2 pt-2'>
+								<button
+									type='button'
+									onClick={() => {
+										setIsProgramPasswordModalOpen(false)
+										setProgramPassword('')
+										setProgramPasswordError('')
+										setPendingProgramTarget(null)
+									}}
+									className='rounded-full border border-[var(--border-strong)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'
+								>
+									Cancel
+								</button>
+								<button
+									type='submit'
+									disabled={isVerifyingProgramPassword}
+									className='rounded-full bg-emerald-600 px-6 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60'
+								>
+									{isVerifyingProgramPassword ? 'Verifying...' : 'Verify'}
+								</button>
+							</div>
+						</form>
+					</div>
+				</div>
+			) : null}
 		</>
 	)
 }

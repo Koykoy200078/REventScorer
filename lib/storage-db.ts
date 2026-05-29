@@ -849,21 +849,23 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 					return null
 				}
 
+				const id = 'id' in rawSubCriterion && typeof rawSubCriterion.id === 'string' ? rawSubCriterion.id : undefined
 				const maxScore = toPositiveNumber(rawSubCriterion.maxScore, `Subcriterion max score (${criterionName})`)
 				return {
+					id,
 					name: subCriterionName,
 					maxScore,
 				}
 			})
-			.filter((subCriterion): subCriterion is { name: string; maxScore: number } => Boolean(subCriterion))
+			.filter((subCriterion): subCriterion is { id: string | undefined; name: string; maxScore: number } => Boolean(subCriterion))
 
 		if (baseSubCriteria.length === 0) {
 			throw new Error(`Criterion "${criterionName}" must have at least one subcriterion.`)
 		}
 
-		const expandedSubCriteria = expandIndividualPresentationSubCriteriaIfNeeded(criterionName, baseSubCriteria, contestants)
+		const expandedSubCriteria = expandIndividualPresentationSubCriteriaIfNeeded(criterionName, baseSubCriteria as unknown as import('@/lib/types').SubCriterionInput[], contestants)
 		const normalizedSubCriteria = expandedSubCriteria.map((subCriterion) => ({
-			id: normalizeUniqueIdCandidate(undefined, usedSubCriterionIds),
+			id: normalizeUniqueIdCandidate(subCriterion.id, usedSubCriterionIds),
 			name: compactWhitespace(String(subCriterion.name ?? '')),
 			maxScore: toPositiveNumber(subCriterion.maxScore, `Subcriterion max score (${criterionName})`),
 		}))
@@ -2897,10 +2899,10 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 		// Restore previous submissions mapped to new UUIDs
 		const subCriterionMap = new Map<string, string>()
 		for (const oldCriterion of existingEvent.criteria) {
-			const newCriterion = normalizedEvent.criteria.find((c) => c.name === oldCriterion.name)
+			const newCriterion = normalizedEvent.criteria.find((c) => c.id === oldCriterion.id) ?? normalizedEvent.criteria.find((c) => c.name === oldCriterion.name)
 			if (!newCriterion) continue
 			for (const oldSub of oldCriterion.subCriteria) {
-				const newSub = newCriterion.subCriteria.find((s) => s.name === oldSub.name)
+				const newSub = newCriterion.subCriteria.find((s) => s.id === oldSub.id) ?? newCriterion.subCriteria.find((s) => s.name === oldSub.name)
 				if (newSub) {
 					subCriterionMap.set(oldSub.id, newSub.id)
 				}
