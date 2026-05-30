@@ -5,7 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
-import { exportAsExcel } from './export-excel'
+import { exportAsExcel, exportSectionAnalyticsAsExcel } from './export-excel'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 type ProgramLabel = EventProgramTag
@@ -29,7 +29,18 @@ interface ProgramTopParticipant {
 	participantAverageScore: number
 	participantMaxScore: number
 	participantRating: number
+	section: string
 	rank: number
+}
+
+interface SectionRankingEntry {
+	contestantId: string
+	contestantName: string
+	program: ProgramLabel | null
+	score: number
+	totalScore: number
+	rank: number
+	judgeCount: number
 }
 
 interface ProgramSubCriterionRankingEntry {
@@ -641,6 +652,26 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 				continue
 			}
 
+			let section = 'N/A'
+			if (contestant?.section) {
+				const raw = contestant.section.trim()
+				section = !/section/i.test(raw) && raw.length <= 3 ? `Section ${raw.toUpperCase()}` : raw
+			} else {
+				const strandStr = (result.directDetails?.strand || '').trim()
+				if (strandStr) {
+					const clean = strandStr.replace(/\b(BSCS|BSINT)\b/gi, '').trim()
+					if (clean) {
+						section = !/section/i.test(clean) && clean.length <= 3 ? `Section ${clean.toUpperCase()}` : clean
+					}
+				}
+				if (section === 'N/A') {
+					const nameMatch = result.contestantName.match(/\b(?:section\s+|-)?([A-Z])\b/i)
+					if (nameMatch) {
+						section = `Section ${nameMatch[1].toUpperCase()}`
+					}
+				}
+			}
+
 			grouped[detectedProgram].push({
 				program: detectedProgram,
 				teamName: extractDynamicTeamName(result.contestantName),
@@ -650,6 +681,7 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 				participantAverageScore: participant.averageScore,
 				participantMaxScore: participant.maxScore,
 				participantRating,
+				section,
 				rank: 0,
 			})
 		}
@@ -657,6 +689,10 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 
 	for (const program of ['BSINT', 'BSCS'] as const) {
 		grouped[program].sort((left, right) => {
+			if (left.section !== right.section) {
+				return left.section.localeCompare(right.section)
+			}
+			
 			if (right.participantRating !== left.participantRating) {
 				return right.participantRating - left.participantRating
 			}
@@ -674,21 +710,100 @@ function participantRankingsByProgram(rankings: EventCompiledResults['rankings']
 
 		let currentRank = 0
 		let lastScore: number | null = null
+		let currentSection = ''
 
 		grouped[program] = grouped[program].map((entry, index) => {
+			if (entry.section !== currentSection) {
+				currentSection = entry.section
+				currentRank = 0
+				lastScore = null
+			}
+			
 			if (lastScore === null || Math.abs(entry.participantRating - lastScore) > 0.0001) {
-				currentRank = index + 1
+				currentRank++
 				lastScore = entry.participantRating
 			}
-
-			return {
-				...entry,
-				rank: currentRank,
-			}
+			return { ...entry, rank: currentRank }
 		})
 	}
 
 	return grouped
+}
+
+function rankingsBySection(
+	rankings: EventCompiledResults['rankings'],
+	contestantsById: Map<string, EventContestant>,
+	manualAssignments: Record<string, ProgramLabel | null>,
+	useWeighted: boolean,
+): Map<string, SectionRankingEntry[]> {
+	const bySection = new Map<string, SectionRankingEntry[]>()
+
+	for (const result of rankings) {
+		const contestant = contestantsById.get(result.contestantId)
+		const manual = manualAssignments[result.contestantId]
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
+
+		// Resolve section
+		let section = ''
+		if (contestant?.section) {
+			const raw = contestant.section.trim()
+			section = !/section/i.test(raw) && raw.length <= 3 ? `Section ${raw.toUpperCase()}` : raw
+		} else {
+			const strandStr = (result.directDetails?.strand || '').trim()
+			if (strandStr) {
+				const clean = strandStr.replace(/\b(BSCS|BSINT)\b/gi, '').trim()
+				if (clean) {
+					section = !/section/i.test(clean) && clean.length <= 3 ? `Section ${clean.toUpperCase()}` : clean
+				}
+			}
+			if (!section) {
+				const nameMatch = result.contestantName.match(/\b(?:section\s+|-)?([A-Z])\b/i)
+				if (nameMatch) {
+					section = `Section ${nameMatch[1].toUpperCase()}`
+				}
+			}
+		}
+
+		if (!section) {
+			continue
+		}
+
+		const score = rankingScore(result, useWeighted)
+		if (!Number.isFinite(score) || score <= 0) {
+			continue
+		}
+
+		if (!bySection.has(section)) {
+			bySection.set(section, [])
+		}
+
+		bySection.get(section)!.push({
+			contestantId: result.contestantId,
+			contestantName: result.contestantName,
+			program: detectedProgram,
+			score,
+			totalScore: result.totalScore,
+			rank: 0,
+			judgeCount: result.judgeCount,
+		})
+	}
+
+	// Sort each section's entries by score descending and assign ranks
+	for (const [, entries] of bySection) {
+		entries.sort((a, b) => b.score - a.score)
+		let currentRank = 0
+		let lastScore: number | null = null
+		for (let i = 0; i < entries.length; i++) {
+			if (lastScore === null || Math.abs(entries[i].score - lastScore) > 0.0001) {
+				currentRank = i + 1
+				lastScore = entries[i].score
+			}
+			entries[i].rank = currentRank
+		}
+	}
+
+	// Sort sections alphabetically
+	return new Map([...bySection.entries()].sort(([a], [b]) => a.localeCompare(b)))
 }
 
 function roundAnalytics(value: number): number {
@@ -1161,6 +1276,7 @@ function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEd
 			entryType: contestant?.entryType === 'individual' ? 'individual' : 'group',
 			programTag: contestant?.programTag === 'BSINT' || contestant?.programTag === 'BSCS' ? contestant.programTag : null,
 			participants: Array.isArray(contestant?.participants) ? contestant.participants.map((participant) => String(participant ?? '').trim()).filter((participant) => participant.length > 0) : [],
+			section: typeof contestant?.section === 'string' ? contestant.section : undefined,
 			noatScore: numericNoatScore,
 			academicTrack: typeof contestant?.academicTrack === 'string' ? contestant.academicTrack : undefined,
 			laptopAvailable: typeof contestant?.laptopAvailable === 'string' ? contestant.laptopAvailable : undefined,
@@ -1203,6 +1319,7 @@ function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInpu
 		name: contestant.name,
 		entryType: contestant.entryType === 'individual' ? 'individual' : 'group',
 		programTag: contestant.programTag ?? null,
+		section: contestant.section,
 		participants: contestant.entryType === 'group' ? [...(contestant.participants ?? [])] : [],
 		noatScore: typeof contestant.noatScore === 'number' && Number.isFinite(contestant.noatScore) ? contestant.noatScore : null,
 		academicTrack: contestant.academicTrack,
@@ -1274,6 +1391,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
 	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
+	const [showAllSectionAnalytics, setShowAllSectionAnalytics] = useState<Record<string, boolean>>({})
+	const [isProgramPinned, setIsProgramPinned] = useState(false)
+	const [isSectionPinned, setIsSectionPinned] = useState(false)
+	const [isRubricPinned, setIsRubricPinned] = useState(false)
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
@@ -1320,6 +1441,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
 	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
 	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, contestantsById, manualAssignments), [compiled.rankings, contestantsById, manualAssignments])
+	const sectionAnalytics = useMemo(() => rankingsBySection(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
 	const subCriteriaAnalyticsByProgram = useMemo(() => subCriteriaRankingsByProgram(event, manualAssignments), [event, manualAssignments])
 	const filterOptions = useMemo(() => {
 		const strands = new Set<string>()
@@ -2489,6 +2611,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														</select>
 														<input
 															type='text'
+															placeholder='Section (e.g. A, B)'
+															value={contestant.section ?? ''}
+															onChange={(event) => {
+																const value = event.target.value
+																updateEventEditorDraft((previous) => ({
+																	...previous,
+																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, section: value } : item)),
+																}))
+															}}
+															list='editor-section-options'
+															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														/>
+														<input
+															type='text'
 															placeholder='Academic Track'
 															value={contestant.academicTrack ?? ''}
 															onChange={(event) => {
@@ -2563,6 +2699,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												</div>
 											))}
 										</div>
+										<datalist id='editor-section-options'>
+											{Array.from(new Set(eventEditorDraft.contestants.map((c) => c.section?.trim()).filter(Boolean))).sort().map((section) => (
+												<option key={section} value={section} />
+											))}
+										</datalist>
 									</section>
 
 									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
@@ -2874,11 +3015,31 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						)}
 					</section>
 
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Program Analytics</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
+					<details
+						className='group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+						onMouseEnter={(e) => { if (!isProgramPinned) e.currentTarget.open = true }}
+						onMouseLeave={(e) => { if (!isProgramPinned) e.currentTarget.open = false }}
+					>
+						<summary 
+							className='flex cursor-pointer items-center justify-between outline-none'
+							onClick={(e) => {
+								e.preventDefault()
+								const details = e.currentTarget.parentElement as HTMLDetailsElement
+								const nextPinned = !isProgramPinned
+								setIsProgramPinned(nextPinned)
+								details.open = nextPinned
+							}}
+						>
+							<div>
+								<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Program Analytics</h2>
+								<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
+							</div>
+							<div className='ml-4 shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
+								<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+							</div>
+						</summary>
 
-						<div className='mt-4 grid gap-6 sm:grid-cols-2'>
+						<div className='mt-4 grid gap-6 sm:grid-cols-2 pt-4 border-t border-[var(--border-soft)]'>
 							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
 								const teams = analyticsByProgram[program]
 								const participants = participantAnalyticsByProgram[program]
@@ -2953,6 +3114,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																<th className='px-4 py-2 font-semibold'>Rank</th>
 																<th className='px-4 py-2 font-semibold'>Participant</th>
 																<th className='px-4 py-2 font-semibold'>Team</th>
+																<th className='px-4 py-2 font-semibold'>Section</th>
 																<th className='px-4 py-2 font-semibold text-right'>Individual Score</th>
 															</tr>
 														</thead>
@@ -2967,6 +3129,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		<div className='text-[10px] text-[var(--text-muted)]'>{participant.contestantName}</div>
 																	</td>
 																	<td className='px-4 py-3 text-[var(--text-primary)]'>{participant.teamName}</td>
+																	<td className='px-4 py-3'>
+																		<span className='inline-flex items-center rounded-md bg-[var(--surface-muted)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)] ring-1 ring-inset ring-[var(--border-soft)]'>
+																			{participant.section}
+																		</span>
+																	</td>
 																	<td className='px-4 py-3 text-right text-[var(--text-primary)]'>
 																		{formatScore(participant.participantAverageScore)} / {formatScore(participant.participantMaxScore)} ({formatPercent(participant.participantRating)})
 																	</td>
@@ -3043,7 +3210,96 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								)
 							})}
 						</div>
-					</section>
+					</details>
+
+					{sectionAnalytics.size > 0 && (
+						<details
+							className='group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+							onMouseEnter={(e) => { if (!isSectionPinned) e.currentTarget.open = true }}
+							onMouseLeave={(e) => { if (!isSectionPinned) e.currentTarget.open = false }}
+						>
+							<summary 
+								className='flex cursor-pointer items-center justify-between outline-none'
+								onClick={(e) => {
+									e.preventDefault()
+									const details = e.currentTarget.parentElement as HTMLDetailsElement
+									const nextPinned = !isSectionPinned
+									setIsSectionPinned(nextPinned)
+									details.open = nextPinned
+								}}
+							>
+								<div>
+									<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Section Analytics</h2>
+									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Contestant rankings separated by their respective sections across all programs.</p>
+								</div>
+								<div className='flex items-center gap-4'>
+									<button
+										type='button'
+										onClick={(e) => {
+											e.preventDefault()
+											e.stopPropagation()
+											exportSectionAnalyticsAsExcel(event, sectionAnalytics)
+										}}
+										className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'
+									>
+										Export Sections
+									</button>
+									<div className='shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
+										<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+									</div>
+								</div>
+							</summary>
+
+							<div className='mt-4 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 pt-4 border-t border-[var(--border-soft)]'>
+								{Array.from(sectionAnalytics.entries()).map(([sectionKey, entries]) => {
+									const showAll = showAllSectionAnalytics[sectionKey] || false
+									const visibleEntries = showAll ? entries : entries.slice(0, analyticsPreviewLimit)
+
+									return (
+										<article key={sectionKey} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] overflow-hidden'>
+											<div className='p-4 border-b border-[var(--border-soft)] bg-[var(--surface)] flex items-center justify-between'>
+												<h3 className='text-lg font-bold tracking-wide text-[var(--text-primary)]'>{sectionKey}</h3>
+												{entries.length > analyticsPreviewLimit && (
+													<button
+														type='button'
+														onClick={() => setShowAllSectionAnalytics((prev) => ({ ...prev, [sectionKey]: !showAll }))}
+														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'
+													>
+														{showAll ? 'Show Top 3' : 'View All'}
+													</button>
+												)}
+											</div>
+											<div className='p-4 overflow-x-auto'>
+												<table className='min-w-full text-sm text-left'>
+													<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
+														<tr>
+															<th className='px-3 py-2 font-semibold'>Rank</th>
+															<th className='px-3 py-2 font-semibold'>Contestant</th>
+															<th className='px-3 py-2 font-semibold text-right'>Score</th>
+														</tr>
+													</thead>
+													<tbody className='divide-y divide-[var(--border-soft)]'>
+														{visibleEntries.map((entry, idx) => (
+															<tr key={entry.contestantId} className={idx === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
+																<td className='px-3 py-3'>
+																	{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{entry.rank}
+																</td>
+																<td className='px-3 py-3'>
+																	<div className='text-[var(--text-primary)]'>{entry.contestantName}</div>
+																	{entry.program && <div className='mt-0.5 inline-block rounded-md bg-[var(--surface-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] border border-[var(--border-soft)]'>{entry.program}</div>}
+																</td>
+																<td className='px-3 py-3 text-right text-[var(--text-primary)]'>{formatScore(entry.score)}</td>
+															</tr>
+														))}
+													</tbody>
+												</table>
+											</div>
+										</article>
+									)
+								})}
+							</div>
+						</details>
+					)}
 
 					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
@@ -3339,10 +3595,30 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</section>
 
-					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Rubric Breakdown</h2>
-						{!isDirectRatingEvent ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
-						<div className='mt-4 grid gap-4'>
+					<details
+						className='print:hidden group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+						onMouseEnter={(e) => { if (!isRubricPinned) e.currentTarget.open = true }}
+						onMouseLeave={(e) => { if (!isRubricPinned) e.currentTarget.open = false }}
+					>
+						<summary 
+							className='flex cursor-pointer items-center justify-between outline-none'
+							onClick={(e) => {
+								e.preventDefault()
+								const details = e.currentTarget.parentElement as HTMLDetailsElement
+								const nextPinned = !isRubricPinned
+								setIsRubricPinned(nextPinned)
+								details.open = nextPinned
+							}}
+						>
+							<div>
+								<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Rubric Breakdown</h2>
+								{!isDirectRatingEvent ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
+							</div>
+							<div className='ml-4 shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
+								<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+							</div>
+						</summary>
+						<div className='mt-4 grid gap-4 pt-4 border-t border-[var(--border-soft)]'>
 							{event.criteria.map((criterion) => {
 								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
 								const criterionScopeLabel = showPerContestantParticipants ? 'Per Contestant (Individual)' : 'Group Criteria Only'
@@ -3390,7 +3666,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								)
 							})}
 						</div>
-					</section>
+					</details>
 
 					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Remarks</h2>

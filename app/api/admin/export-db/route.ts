@@ -38,10 +38,13 @@ export async function POST(request: Request) {
 		const tempFilePath = path.join(os.tmpdir(), `eventscorer_dump_${randomUUID()}.sql`)
 		
 		// Use --add-drop-table and --routines for a complete dump, including schemas
-		const command = `mysqldump -h "${config.host}" -P ${config.port} -u "${config.user}" ${config.password ? `-p"${config.password}"` : ''} --add-drop-table --routines --databases "${config.database}" --result-file="${tempFilePath}"`
+		// Add --set-gtid-purged=OFF to prevent GTID conflict errors on import
+		const command = `mysqldump -h "${config.host}" -P ${config.port} -u "${config.user}" --set-gtid-purged=OFF --add-drop-table --routines --databases "${config.database}" --result-file="${tempFilePath}"`
 
 		try {
-			await execAsync(command)
+			await execAsync(command, {
+				env: { ...process.env, MYSQL_PWD: config.password }
+			})
 			
 			const sqlContent = await fs.readFile(tempFilePath, 'utf-8')
 			await fs.unlink(tempFilePath).catch(() => {}) // Cleanup

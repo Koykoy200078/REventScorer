@@ -1189,6 +1189,20 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 	}, [syncQueuedUploads])
 
 	useEffect(() => {
+		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+			if (queuedUploads.length > 0) {
+				e.preventDefault()
+				e.returnValue = ''
+			}
+		}
+
+		window.addEventListener('beforeunload', handleBeforeUnload)
+		return () => {
+			window.removeEventListener('beforeunload', handleBeforeUnload)
+		}
+	}, [queuedUploads.length])
+
+	useEffect(() => {
 		if (queuedUploads.length === 0) {
 			return
 		}

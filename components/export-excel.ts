@@ -179,3 +179,84 @@ export async function exportAsExcel(event: EventScorer, compiled: EventCompiledR
 	const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
 	saveAs(blob, `${event.title} - Tabulation Sheet.xlsx`)
 }
+
+export async function exportSectionAnalyticsAsExcel(
+	event: EventScorer,
+	sectionAnalytics: Map<string, {
+		contestantId: string
+		contestantName: string
+		program: string | null
+		score: number
+		totalScore: number
+		rank: number
+		judgeCount: number
+	}[]>
+) {
+	const workbook = new ExcelJS.Workbook()
+
+	for (const [sectionKey, entries] of sectionAnalytics.entries()) {
+		// Replace invalid worksheet name characters
+		const safeSheetName = sectionKey.replace(/[*?:/\\[\]]/g, '_').substring(0, 31)
+		const worksheet = workbook.addWorksheet(safeSheetName)
+
+		worksheet.columns = [
+			{ width: 10 }, // A: Rank
+			{ width: 40 }, // B: Contestant Name
+			{ width: 20 }, // C: Program
+			{ width: 15 }, // D: Score
+		]
+
+		// Title
+		const titleRow = worksheet.addRow([`${event.title.toUpperCase()} - ${sectionKey.toUpperCase()}`])
+		titleRow.font = { bold: true, size: 16, name: 'Calibri' }
+		titleRow.alignment = { horizontal: 'center', vertical: 'middle' }
+		worksheet.mergeCells('A1:D1')
+		titleRow.height = 30
+
+		worksheet.addRow([]) // empty row
+
+		// Headers
+		const headerRow = worksheet.addRow(['Rank', 'Contestant Name', 'Program', 'Score'])
+		headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+		headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } }
+		headerRow.alignment = { horizontal: 'center', vertical: 'middle' }
+
+		// Data
+		for (const entry of entries) {
+			const row = worksheet.addRow([
+				entry.rank,
+				entry.contestantName,
+				entry.program || 'N/A',
+				Number(entry.score.toFixed(2)),
+			])
+			
+			row.getCell(1).alignment = { horizontal: 'center' }
+			row.getCell(2).alignment = { horizontal: 'left' }
+			row.getCell(3).alignment = { horizontal: 'center' }
+			row.getCell(4).alignment = { horizontal: 'right' }
+		}
+
+		// Add borders
+		worksheet.eachRow((row, rowNumber) => {
+			if (rowNumber > 2) { // Skip title and empty row
+				row.eachCell((cell) => {
+					cell.border = {
+						top: { style: 'thin', color: { argb: 'FF000000' } },
+						left: { style: 'thin', color: { argb: 'FF000000' } },
+						bottom: { style: 'thin', color: { argb: 'FF000000' } },
+						right: { style: 'thin', color: { argb: 'FF000000' } },
+					}
+				})
+			}
+		})
+	}
+
+	if (sectionAnalytics.size === 0) {
+		const worksheet = workbook.addWorksheet('No Data')
+		worksheet.addRow(['No section analytics data available.'])
+	}
+
+	const buffer = await workbook.xlsx.writeBuffer()
+	const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+	saveAs(blob, `${event.title} - Section Analytics.xlsx`)
+}
