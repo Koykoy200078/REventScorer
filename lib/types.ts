@@ -50,6 +50,7 @@ export interface ContestantInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 	noatScore?: number
 	academicTrack?: string
 	laptopAvailable?: string
@@ -83,6 +84,7 @@ export interface AdminContestantEditorInput {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 	noatScore?: number | string | null
 	academicTrack?: string
 	laptopAvailable?: string
@@ -148,6 +150,7 @@ export interface EventContestant {
 	entryType?: ContestantEntryType
 	participants?: string[]
 	programTag?: EventProgramTag | null
+	section?: string
 	noatScore?: number
 	academicTrack?: string
 	laptopAvailable?: string

@@ -58,14 +58,16 @@ export async function POST(request: Request) {
 		// We execute mysql and pipe the file into it.
 		// Note: The file might contain CREATE DATABASE statements if exported with --databases. 
 		// That is fine, it will drop and recreate it if --add-drop-table was used.
-		const command = `mysql -h "${config.host}" -P ${config.port} -u "${config.user}" ${config.password ? `-p"${config.password}"` : ''} "${config.database}" < "${tempFilePath}"`
+		const command = `mysql -h "${config.host}" -P ${config.port} -u "${config.user}" "${config.database}" < "${tempFilePath}"`
 
 		try {
-			await execAsync(command)
-			return NextResponse.json({ success: true })
+			const { stdout, stderr } = await execAsync(command, {
+				env: { ...process.env, MYSQL_PWD: config.password }
+			})
+			return NextResponse.json({ success: true, stdout, stderr })
 		} catch (execError: any) {
 			console.error('Database import failed:', execError)
-			return NextResponse.json({ error: 'Database import failed. Check the SQL syntax or server logs.' }, { status: 500 })
+			return NextResponse.json({ error: 'Database import failed. Check the SQL syntax or server logs.', stdout: execError.stdout, stderr: execError.stderr }, { status: 500 })
 		}
 	} catch (error) {
 		console.error('Import error:', error)

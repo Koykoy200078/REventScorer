@@ -61,6 +61,7 @@ interface ContestantRow extends RowDataPacket {
 	name: string
 	entry_type: string
 	program_tag: string | null
+	section: string | null
 	noat_score: number | string | null
 	academic_track: string | null
 	laptop_available: string | null
@@ -1174,13 +1175,14 @@ function normalizeJudgeAssignmentIds(event: EventScorer, rawJudgeIds: unknown): 
 	return cleanedJudgeIds
 }
 
-function normalizeProgramTagAssignments(event: EventScorer, rawAssignments: unknown): Array<{ contestantId: string; programTag: EventProgramTag | null }> {
+function normalizeProgramTagAssignments(event: EventScorer, rawAssignments: unknown): Array<{ contestantId: string; programTag: EventProgramTag | null; section: string | null; noatScore: number | null }> {
 	if (!Array.isArray(rawAssignments) || rawAssignments.length === 0) {
 		throw new Error('Program tag assignments must include at least one participant.')
 	}
 
 	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
-	const byContestantId = new Map<string, EventProgramTag | null>()
+	const existingContestantById = new Map(event.contestants.map((c) => [c.id, c]))
+	const byContestantId = new Map<string, { programTag: EventProgramTag | null; section: string | null; noatScore: number | null }>()
 
 	for (const assignment of rawAssignments) {
 		if (!assignment || typeof assignment !== 'object') {
@@ -1197,10 +1199,18 @@ function normalizeProgramTagAssignments(event: EventScorer, rawAssignments: unkn
 		}
 
 		const programTag = normalizeContestantProgramTag((assignment as { programTag?: unknown }).programTag)
-		byContestantId.set(contestantId, programTag)
+
+		// Preserve existing section and noatScore from the contestant if not provided in the assignment
+		const existing = existingContestantById.get(contestantId)
+		const rawSection = (assignment as { section?: unknown }).section
+		const section = typeof rawSection === 'string' && rawSection.trim().length > 0 ? rawSection.trim() : (existing?.section ?? null)
+		const rawNoatScore = (assignment as { noatScore?: unknown }).noatScore
+		const noatScore = rawNoatScore != null && !Number.isNaN(Number(rawNoatScore)) ? Number(rawNoatScore) : (existing?.noatScore ?? null)
+
+		byContestantId.set(contestantId, { programTag, section, noatScore })
 	}
 
-	return Array.from(byContestantId.entries()).map(([contestantId, programTag]) => ({ contestantId, programTag }))
+	return Array.from(byContestantId.entries()).map(([contestantId, data]) => ({ contestantId, programTag: data.programTag, section: data.section, noatScore: data.noatScore }))
 }
 
 function ensurePresentationSlotsForAssignmentUpdates(event: EventScorer): EventPresentationSlot[] {
@@ -1491,6 +1501,7 @@ async function ensureSchema(pool: Pool): Promise<void> {
 			name VARCHAR(255) NOT NULL,
 			entry_type VARCHAR(32) NOT NULL DEFAULT 'group',
 			program_tag VARCHAR(16) NULL,
+			section VARCHAR(64) NULL,
 			noat_score DECIMAL(10,3) NULL,
 			academic_track VARCHAR(512) NULL,
 			laptop_available VARCHAR(512) NULL,
@@ -1649,6 +1660,20 @@ async function ensureSchema(pool: Pool): Promise<void> {
 	const noatColumnExists = Number(noatColumnRows[0]?.total ?? 0) > 0
 	if (!noatColumnExists) {
 		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN noat_score DECIMAL(10,3) NULL AFTER program_tag`)
+	}
+
+	const [sectionColumnRows] = await pool.execute<CountRow[]>(
+		`SELECT COUNT(*) AS total
+		 FROM information_schema.columns
+		 WHERE table_schema = DATABASE()
+		   AND table_name = ?
+		   AND column_name = ?`,
+		[TABLE_CONTESTANTS, 'section'],
+	)
+
+	const sectionColumnExists = Number(sectionColumnRows[0]?.total ?? 0) > 0
+	if (!sectionColumnExists) {
+		await pool.execute(`ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN section VARCHAR(64) NULL AFTER program_tag`)
 	}
 
 	const [academicTrackColumnRows] = await pool.execute<CountRow[]>(
@@ -2269,9 +2294,9 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 		const noatScore = normalizeNoatScore(contestant.noatScore)
 
 		await connection.execute(
-			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, noat_score, academic_track, laptop_available, sort_order)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			[contestant.id, event.id, contestant.name, entryType, programTag, noatScore, contestant.academicTrack ?? null, contestant.laptopAvailable ?? null, contestantIndex],
+			`INSERT INTO ${TABLE_CONTESTANTS} (id, event_id, name, entry_type, program_tag, section, noat_score, academic_track, laptop_available, sort_order)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[contestant.id, event.id, contestant.name, entryType, programTag, contestant.section ?? null, noatScore, contestant.academicTrack ?? null, contestant.laptopAvailable ?? null, contestantIndex],
 		)
 
 		const participants = entryType === 'group' && Array.isArray(contestant.participants) ? contestant.participants : []
@@ -2401,7 +2426,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 
 	const contestantRows = await selectRows<ContestantRow>(
 		executor,
-		`SELECT id, name, entry_type, program_tag, noat_score, academic_track, laptop_available, sort_order
+		`SELECT id, name, entry_type, program_tag, section, noat_score, academic_track, laptop_available, sort_order
 		 FROM ${TABLE_CONTESTANTS}
 		 WHERE event_id = ?
 		 ORDER BY sort_order ASC, id ASC`,
@@ -2523,6 +2548,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
 			programTag: programTag ?? undefined,
+			section: typeof contestantRow.section === 'string' && contestantRow.section.length > 0 ? contestantRow.section : undefined,
 			noatScore: noatScore ?? undefined,
 			academicTrack: typeof contestantRow.academic_track === 'string' && contestantRow.academic_track.length > 0 ? contestantRow.academic_track : undefined,
 			laptopAvailable: typeof contestantRow.laptop_available === 'string' && contestantRow.laptop_available.length > 0 ? contestantRow.laptop_available : undefined,
@@ -2843,28 +2869,30 @@ export async function updateContestantProgramTags(eventId: string, rawAssignment
 		}
 
 		const assignments = normalizeProgramTagAssignments(event, rawAssignments)
-		const assignmentByContestantId = new Map(assignments.map((assignment) => [assignment.contestantId, assignment.programTag]))
+		const assignmentByContestantId = new Map(assignments.map((assignment) => [assignment.contestantId, assignment]))
 
 		for (const assignment of assignments) {
 			await connection.execute(
 				`UPDATE ${TABLE_CONTESTANTS}
-				 SET program_tag = ?
+				 SET program_tag = ?, section = ?, noat_score = ?
 				 WHERE event_id = ? AND id = ?`,
-				[assignment.programTag, eventId, assignment.contestantId],
+				[assignment.programTag, assignment.section ?? null, assignment.noatScore ?? null, eventId, assignment.contestantId],
 			)
 		}
 
 		const updatedEvent: EventScorer = {
 			...event,
 			contestants: event.contestants.map((contestant) => {
-				if (!assignmentByContestantId.has(contestant.id)) {
+				const matched = assignmentByContestantId.get(contestant.id)
+				if (!matched) {
 					return contestant
 				}
 
-				const nextProgramTag = assignmentByContestantId.get(contestant.id) ?? null
 				return {
 					...contestant,
-					programTag: nextProgramTag ?? undefined,
+					programTag: matched.programTag ?? undefined,
+					section: matched.section ?? contestant.section,
+					noatScore: matched.noatScore ?? contestant.noatScore,
 				}
 			}),
 		}

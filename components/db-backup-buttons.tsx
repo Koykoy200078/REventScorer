@@ -9,6 +9,7 @@ export default function DbBackupButtons() {
 	const [passwordError, setPasswordError] = useState('')
 	const [isProcessing, setIsProcessing] = useState(false)
 	const [selectedFile, setSelectedFile] = useState<File | null>(null)
+	const [importLogs, setImportLogs] = useState<{ success: boolean; stdout?: string; stderr?: string; error?: string } | null>(null)
 	
 	const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -17,6 +18,7 @@ export default function DbBackupButtons() {
 		setPassword('')
 		setPasswordError('')
 		setSelectedFile(null)
+		setImportLogs(null)
 		setIsModalOpen(true)
 	}
 
@@ -90,16 +92,16 @@ export default function DbBackupButtons() {
 					body: formData,
 				})
 
+				const responseData = await importResponse.json().catch(() => null)
+
 				if (!importResponse.ok) {
-					const errorData = await importResponse.json().catch(() => null)
-					setPasswordError(errorData?.error || 'Failed to import database.')
+					setPasswordError(responseData?.error || 'Failed to import database.')
+					setImportLogs({ success: false, ...responseData })
 					setIsProcessing(false)
 					return
 				}
 
-				alert('Database imported successfully. Please reload the page.')
-				setIsModalOpen(false)
-				window.location.reload()
+				setImportLogs({ success: true, ...responseData })
 			}
 		} catch (error) {
 			console.error('Backup action error:', error)
@@ -130,13 +132,61 @@ export default function DbBackupButtons() {
 				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>
 					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
 						<h3 className='text-lg font-semibold text-slate-900'>
-							{mode === 'export' ? 'Export Database' : 'Import Database'}
+							{importLogs ? (importLogs.success ? 'Import Successful' : 'Import Failed') : (mode === 'export' ? 'Export Database' : 'Import Database')}
 						</h3>
-						<p className='mt-1 text-sm text-slate-600'>
-							{mode === 'export'
-								? 'Enter the update password to generate a .sql backup.'
-								: 'Enter the update password and select a .sql file to restore. WARNING: This will overwrite existing data!'}
-						</p>
+						{!importLogs && (
+							<p className='mt-1 text-sm text-slate-600'>
+								{mode === 'export'
+									? 'Enter the update password to generate a .sql backup.'
+									: 'Enter the update password and select a .sql file to restore. WARNING: This will overwrite existing data!'}
+							</p>
+						)}
+						{importLogs ? (
+							<div className='mt-4 flex flex-col gap-4'>
+								{importLogs.error && (
+									<p className='text-sm font-semibold text-rose-600'>{importLogs.error}</p>
+								)}
+								{(importLogs.stdout || importLogs.stderr) ? (
+									<div className='max-h-60 overflow-y-auto rounded bg-slate-900 p-3 text-xs text-slate-300 shadow-inner'>
+										{importLogs.stdout && (
+											<div className='whitespace-pre-wrap break-words'>
+												<span className='font-bold text-cyan-400'>[STDOUT]</span>
+												<br />
+												{importLogs.stdout}
+											</div>
+										)}
+										{importLogs.stderr && (
+											<div className='whitespace-pre-wrap break-words mt-2'>
+												<span className='font-bold text-rose-400'>[STDERR]</span>
+												<br />
+												{importLogs.stderr}
+											</div>
+										)}
+									</div>
+								) : (
+									<p className='text-sm text-slate-600'>No logs output available.</p>
+								)}
+								<div className='flex justify-end pt-2'>
+									{importLogs.success ? (
+										<button
+											type='button'
+											onClick={() => window.location.reload()}
+											className='rounded-md bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700'
+										>
+											Close & Reload
+										</button>
+									) : (
+										<button
+											type='button'
+											onClick={() => setIsModalOpen(false)}
+											className='rounded-md bg-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-300'
+										>
+											Close
+										</button>
+									)}
+								</div>
+							</div>
+						) : (
 						<form className='mt-4 space-y-4' onSubmit={handleAction}>
 							<div>
 								<label className='text-xs font-medium uppercase tracking-wide text-slate-500'>Password</label>
@@ -191,6 +241,7 @@ export default function DbBackupButtons() {
 								</button>
 							</div>
 						</form>
+						)}
 					</div>
 				</div>
 			) : null}
