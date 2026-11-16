@@ -7,6 +7,7 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
+import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import type {
 	AdminEventEditorInput,
 	ContestantEntryType,
@@ -1353,6 +1354,7 @@ function buildDatabaseConfig(): DatabaseConfig {
 	const user = compactWhitespace(process.env.EVENTSCORER_DB_USER ?? process.env.MYSQL_USER ?? process.env.DB_USER ?? '')
 	const password = process.env.EVENTSCORER_DB_PASSWORD ?? process.env.MYSQL_PASSWORD ?? process.env.DB_PASSWORD ?? ''
 	const database = normalizeDatabaseName(process.env.EVENTSCORER_DB_NAME ?? process.env.MYSQL_DATABASE ?? process.env.DB_NAME)
+	assertTestModeDatabase(database)
 	const connectionLimit = parseIntegerWithFallback(process.env.EVENTSCORER_DB_POOL_SIZE ?? process.env.MYSQL_POOL_SIZE, 4)
 	const queueLimit = parseNonNegativeIntegerWithFallback(process.env.EVENTSCORER_DB_QUEUE_LIMIT ?? process.env.MYSQL_QUEUE_LIMIT, 200)
 	const defaultMaxIdle = Math.min(connectionLimit, 2)

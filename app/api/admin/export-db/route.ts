@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { verifyUpdatePassword } from '@/lib/update-auth'
+import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as fs from 'node:fs/promises'
@@ -19,6 +20,7 @@ function getDbConfig() {
 	
 	// Normalize database name similar to storage-db.ts
 	database = database.replace(/[^a-zA-Z0-9_$]/g, '')
+	assertTestModeDatabase(database)
 	
 	return { host, port, user, password, database }
 }
