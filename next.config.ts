@@ -34,6 +34,8 @@ function getAllowedDevOrigins() {
 }
 
 const nextConfig: NextConfig = {
+	// Tests build into .next-test (NEXT_DIST_DIR) so they never reuse a production .next build.
+	distDir: process.env.NEXT_DIST_DIR || '.next',
 	// Turbopack must include the workspace root so it can resolve the hoisted
 	// next package from C:\Projects\ShareME\node_modules in npm workspaces.
 	turbopack: {

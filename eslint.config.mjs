@@ -9,6 +9,10 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Test builds (NEXT_DIST_DIR=.next-test, see scripts/test-stack.js):
+    ".next-test/**",
+    // Local one-off scripts kept out of git (see .gitignore):
+    "private-data/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
