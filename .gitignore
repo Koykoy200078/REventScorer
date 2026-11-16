@@ -16,6 +16,7 @@
 
 # next.js
 /.next/
+/.next-test/
 /out/
 
 # production
@@ -33,6 +34,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -43,3 +45,6 @@ next-env.d.ts
 
 # local scorer data
 /data/
+
+# private local files (one-off DB scripts; never commit: this repo is public)
+private-data/

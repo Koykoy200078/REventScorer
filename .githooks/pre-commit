@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuse commits that add secrets, judge tokens, real names, .env or private-data files.
+# The guard lives in the ShareME parent repo; a standalone clone skips it.
+GUARD=../../scripts/check-staged.js
+if [ -f "$GUARD" ]; then
+  exec node "$GUARD" --repo .
+fi
+echo "pre-commit: $GUARD not found (standalone clone); secret guard skipped." >&2
