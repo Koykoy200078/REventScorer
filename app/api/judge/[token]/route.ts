@@ -1,6 +1,7 @@
 import { detectDirectRatingScoreFields } from '@/lib/direct-rating-config'
 import { getJudgeSessionByToken, submitJudgeScoresByToken } from '@/lib/storage'
 import type { AdminScoreRealtimeUpdate, EventScorer, JudgeSubmission } from '@/lib/types'
+import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -139,6 +140,10 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
 }
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }): Promise<Response> {
+	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
+	const refused = refuseUnlessOwnOrigin(request)
+	if (refused) return refused
+
 	try {
 		const { token } = await context.params
 		const body = (await request.json()) as { scores?: unknown; contestantId?: unknown; contestantDetails?: unknown }

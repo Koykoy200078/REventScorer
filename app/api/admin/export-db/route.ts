@@ -7,6 +7,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import { randomUUID } from 'node:crypto'
+import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
 
 const execAsync = promisify(exec)
 
@@ -26,6 +27,10 @@ function getDbConfig() {
 }
 
 export async function POST(request: Request) {
+	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
+	const refused = refuseUnlessOwnOrigin(request)
+	if (refused) return refused
+
 	try {
 		const body: unknown = await request.json().catch(() => ({}))
 		const password = body && typeof body === 'object' ? (body as { password?: unknown }).password : undefined

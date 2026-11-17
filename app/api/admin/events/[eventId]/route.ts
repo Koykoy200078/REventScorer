@@ -3,6 +3,7 @@ import { cookies } from 'next/headers'
 import { compileEventResults } from '@/lib/scoring'
 import { deleteEventById, getEventById, updateContestantJudgeAssignments, updateContestantProgramTags, updateEventDefinition } from '@/lib/storage'
 import { UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
+import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,10 @@ export async function GET(_request: Request, context: { params: Promise<{ eventI
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ eventId: string }> }): Promise<Response> {
+	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
+	const refused = refuseUnlessOwnOrigin(request)
+	if (refused) return refused
+
 	try {
 		const { eventId } = await context.params
 		const body = (await request.json()) as {
@@ -67,6 +72,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ event
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ eventId: string }> }): Promise<Response> {
+	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
+	const refused = refuseUnlessOwnOrigin(request)
+	if (refused) return refused
+
 	try {
 		const { eventId } = await context.params
 		const cookieStore = await cookies()

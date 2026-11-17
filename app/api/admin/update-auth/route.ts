@@ -9,6 +9,7 @@ import {
 	tooManyAttemptsResponse,
 	verifyUpdatePassword,
 } from '@/lib/update-auth'
+import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
 
 function shouldUseSecureCookie(request: Request): boolean {
 	const forcedSecure = (process.env.EVENTSCORER_COOKIE_SECURE ?? '').trim().toLowerCase()
@@ -30,6 +31,10 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
+	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
+	const refused = refuseUnlessOwnOrigin(request)
+	if (refused) return refused
+
 	if (!hasUpdatePasswordConfigured()) {
 		return NextResponse.json({ error: 'Update password is not configured.' }, { status: 500 })
 	}
