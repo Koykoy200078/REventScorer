@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { verifyUpdatePassword } from '@/lib/update-auth'
+import { authorizeAdminRequest } from '@/lib/update-auth'
 import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -34,10 +34,8 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: 'Invalid form data.' }, { status: 400 })
 		}
 
-		const password = formData.get('password') as string
-		if (!verifyUpdatePassword(password)) {
-			return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 })
-		}
+		const refusal = authorizeAdminRequest(request, formData.get('password'))
+		if (refusal) return refusal
 
 		const file = formData.get('file') as File | null
 		if (!file || !file.name.endsWith('.sql')) {

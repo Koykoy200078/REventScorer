@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { verifyUpdatePassword } from '@/lib/update-auth'
+import { authorizeAdminRequest } from '@/lib/update-auth'
 import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -27,10 +27,10 @@ function getDbConfig() {
 
 export async function POST(request: Request) {
 	try {
-		const body = await request.json().catch(() => ({}))
-		if (!verifyUpdatePassword(body.password)) {
-			return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 })
-		}
+		const body: unknown = await request.json().catch(() => ({}))
+		const password = body && typeof body === 'object' ? (body as { password?: unknown }).password : undefined
+		const refusal = authorizeAdminRequest(request, password)
+		if (refusal) return refusal
 
 		const config = getDbConfig()
 		if (!config.database) {
