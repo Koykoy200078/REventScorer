@@ -1363,14 +1363,14 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 					</p>
 					<p className='text-sm text-cyan-900/80'>Max possible score: {maxPossibleScore.toFixed(2)}</p>
 					{lastSubmittedAt ? <p className='text-xs text-emerald-700'>Last submitted: {formatDate(lastSubmittedAt)}</p> : null}
-					{queuedUploads.length > 0 ? <p className='text-xs text-amber-700'>Pending uploads: {queuedUploads.length}. Saved locally and waiting to sync.</p> : null}
+					{queuedUploads.length > 0 ? <p data-testid='pending-uploads' className='text-xs text-amber-700'>Pending uploads: {queuedUploads.length}. Saved locally and waiting to sync.</p> : null}
 					{isAutoSyncing ? <p className='text-xs text-cyan-800'>Auto-uploading pending saves...</p> : null}
 				</div>
 
 				<div className='mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4'>
 					<p className='text-xs uppercase tracking-[0.16em] text-cyan-900'>Score One Entry At A Time</p>
 					<p className='mt-1 text-xs text-cyan-900/80'>Entries marked as Scored already have saved scores.</p>
-					<div className='mt-3 flex flex-wrap gap-2'>
+					<div data-testid='judge-roster' className='mt-3 flex flex-wrap gap-2'>
 						{contestants.map((contestant, index) => {
 							const isActive = index === activeContestantIndex
 							const isSaved = savedContestantIds.has(contestant.id)
@@ -1379,7 +1379,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 							const slotLabel = slotLabelsByContestant.get(contestant.id)
 							const isIndividual = contestant.entryType === 'individual'
 							return (
-								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
+								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} data-testid='roster-entry' data-contestant-id={contestant.id} data-status={isQueued ? 'queued' : isSaved ? 'scored' : hasDraft ? 'draft' : 'none'} aria-current={isActive ? 'true' : undefined} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
 									<div className='flex flex-col items-start'>
 										<span>
 											{index + 1}. {contestant.name}
@@ -1462,6 +1462,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 													</span>
 													<input
 														suppressHydrationWarning
+														data-testid='score-input'
+														data-subcriterion-id={field.subCriterionId}
 														value={enteredValue}
 														onChange={(inputEvent) => {
 															if (isNoatLocked) {
@@ -1502,6 +1504,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 															</span>
 															<input
 																suppressHydrationWarning
+																data-testid='score-input'
+																data-subcriterion-id={field.subCriterionId}
 																value={enteredValue}
 																onChange={(inputEvent) => {
 																	updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)
@@ -1529,7 +1533,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 											{isTVLAcademicTrack(activeContestant.academicTrack) ? (
 												<>
 													<p className='mt-1 text-[10px] text-cyan-700/80'>TVL Track — select specific sub-strand</p>
-													<div className='mt-2'>
+													<div data-testid='strand-select' className='mt-2'>
 														<Select
 															instanceId={`strand-tvl-select-${activeContestantId}`}
 															options={Array.from(new Set(TVL_LEAF_STRAND_OPTIONS.map((o) => o.group))).map((groupName) => ({
@@ -1553,7 +1557,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 													</div>
 												</>
 											) : (
-												<div className='mt-2'>
+												<div data-testid='strand-select' className='mt-2'>
 													<Select
 														instanceId={`strand-select-${activeContestantId}`}
 														options={DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => ({
@@ -1580,7 +1584,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 
 										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
 											<span className='block text-sm font-semibold text-cyan-950'>Remark</span>
-											<div className='mt-2'>
+											<div data-testid='remark-select' className='mt-2'>
 												<Select
 													instanceId={`remark-select-${activeContestantId}`}
 													options={DIRECT_REMARK_OPTIONS.map((opt) => ({ value: opt, label: opt }))}
@@ -1641,7 +1645,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 														)
 
 														return (
-															<div key={group.memberLabel} className='rounded-2xl border border-cyan-200 bg-white p-3'>
+															<div key={group.memberLabel} data-testid='member-group' data-member-label={group.memberLabel} className='rounded-2xl border border-cyan-200 bg-white p-3'>
 																<div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
 																	<div>
 																		<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
@@ -1658,6 +1662,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 																			<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
 																			<input
 																				suppressHydrationWarning
+																				data-testid='score-input'
+																				data-subcriterion-id={subCriterion.id}
 																				value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
 																				onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
 																				type='number'
@@ -1683,6 +1689,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 															<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
 															<input
 																suppressHydrationWarning
+																data-testid='score-input'
+																data-subcriterion-id={subCriterion.id}
 																value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
 																onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
 																type='number'
@@ -1721,8 +1729,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 						</div>
 					</section>
 
-					{error ? <p className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{error}</p> : null}
-					{successMessage ? <p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{successMessage}</p> : null}
+					{error ? <p data-testid='judge-error' className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{error}</p> : null}
+					{successMessage ? <p data-testid='judge-success' className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{successMessage}</p> : null}
 
 					<div className='flex flex-wrap gap-3'>
 						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex - 1)} disabled={activeContestantIndex === 0} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
@@ -1731,7 +1739,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex + 1)} disabled={activeContestantIndex >= contestants.length - 1} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
 							Next Entry
 						</button>
-						<button suppressHydrationWarning type='submit' disabled={isSaving} className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
+						<button suppressHydrationWarning type='submit' disabled={isSaving} data-testid='save-scores' className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
 							{isSaving ? `Saving ${activeContestant.name}...` : `Save ${activeContestant.name} Scores`}
 						</button>
 					</div>
