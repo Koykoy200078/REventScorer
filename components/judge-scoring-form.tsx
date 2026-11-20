@@ -1,9 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Select from 'react-select'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { JudgeActions } from '@/components/judge/actions'
+import { CriterionList } from '@/components/judge/criterion-list'
+import { DirectRatingPanel } from '@/components/judge/direct-rating-panel'
+import { JudgeNotices } from '@/components/judge/notices'
+import { RemarksSection } from '@/components/judge/remarks'
+import { JudgeRoster } from '@/components/judge/roster'
+
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { baselineAfterSave, browserDraftStorage, DRAFT_WRITE_DELAY_MS, draftToKeep, formFollowsSave, hasUnsavedChanges, initialBaselines, ownDraftToKeep, queuedRowToShow, queuedSaveBaseline, restoredDetails, restoredRow, savedFormRow, storedDraftToKeep, summarizeDraftStatus, writePendingDrafts } from '@/lib/judge/draft-state'
 import type { ContestantBaseline, DraftOutcome, DraftStatus, QueuedSave } from '@/lib/judge/draft-state'
 import { clearContestantDraft, loadDraft, readContestantDraft, saveContestantDraft } from '@/lib/judge/draft-store'
@@ -11,13 +17,13 @@ import type { ContestantDraft } from '@/lib/judge/draft-store'
 import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
 import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, formatDate, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
-import { applicableSubCriteriaForContestant, criterionScopeLabel, groupSubCriteriaByMember, isIndividualCriterion } from '@/lib/judge/members'
+import { applicableSubCriteriaForContestant } from '@/lib/judge/members'
 import { buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
 import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
 import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
 import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
-import { advanceTarget, rosterStatus } from '@/lib/judge/status'
-import { autoResolveStrand, DIRECT_REMARK_OPTIONS, isTVLAcademicTrack, TVL_LEAF_STRAND_OPTIONS } from '@/lib/judge/strand'
+import { advanceTarget } from '@/lib/judge/status'
+import { autoResolveStrand, isTVLAcademicTrack } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { JudgeView } from '@/lib/judge/layout'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
@@ -920,38 +926,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 					{isAutoSyncing ? <p className='text-xs text-cyan-800'>Auto-uploading pending saves...</p> : null}
 				</div>
 
-				<div className='mt-6 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4'>
-					<p className='text-xs uppercase tracking-[0.16em] text-cyan-900'>Score One Entry At A Time</p>
-					<p className='mt-1 text-xs text-cyan-900/80'>Entries marked as Scored already have saved scores.</p>
-					<div data-testid='judge-roster' className='mt-3 flex flex-wrap gap-2'>
-						{contestants.map((contestant, index) => {
-							const isActive = index === activeContestantIndex
-							const isSaved = savedContestantIds.has(contestant.id)
-							const isQueued = queuedContestantIds.has(contestant.id)
-							const hasDraft = draftScoredContestantIds.has(contestant.id)
-							const slotLabel = slotLabelsByContestant.get(contestant.id)
-							const isIndividual = contestant.entryType === 'individual'
-							return (
-								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} data-testid='roster-entry' data-contestant-id={contestant.id} data-status={rosterStatus({ queued: isQueued, saved: isSaved, hasDraft })} aria-current={isActive ? 'true' : undefined} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
-									<div className='flex flex-col items-start'>
-										<span>
-											{index + 1}. {contestant.name}
-										</span>
-										{isIndividual ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-sky-700'}`}>Individual</span> : null}
-										{slotLabel ? <span className={`text-[10px] ${isActive ? 'text-white/80' : 'text-cyan-800/70'}`}>{slotLabel}</span> : null}
-									</div>
-									{isQueued ? (
-										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'}`}>Queued</span>
-									) : isSaved ? (
-										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-800'}`}>Scored</span>
-									) : hasDraft ? (
-										<span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'}`}>Draft</span>
-									) : null}
-								</button>
-							)
-						})}
-					</div>
-				</div>
+				<JudgeRoster contestants={contestants} activeContestantIndex={activeContestantIndex} savedContestantIds={savedContestantIds} queuedContestantIds={queuedContestantIds} draftScoredContestantIds={draftScoredContestantIds} slotLabelsByContestant={slotLabelsByContestant} goToContestant={goToContestant} />
 
 				<form onSubmit={submitScores} className='mt-6 flex flex-col gap-4'>
 					<section className='rounded-2xl border border-cyan-100 bg-white p-4 sm:p-5'>
@@ -983,320 +958,31 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 
 						<div className='mt-4 space-y-4'>
 							{isDirectScoreMode ? (
-								<article className='rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4'>
-									<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-										<div>
-											<h3 className='text-base font-semibold text-cyan-950'>Direct Score Entry</h3>
-											<p className='text-[11px] font-medium text-cyan-900/85'>Enter AVE/GPA, NOAT, and Interview directly. NOAT may be admin-provided and read-only. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
-										</div>
-										<div className='text-right'>
-											<p className='text-xs font-semibold text-emerald-800'>
-												Final Rating: {activeDirectFinalRating.toFixed(2)} / {directFinalRatingMaxPossible.toFixed(2)}
-											</p>
-											<p className='text-[11px] text-emerald-900/80'>
-												Base: {activeDirectBaseFinalRating.toFixed(2)} / {directScoreMaxPossible.toFixed(2)} | Interview Bonus Applied: +{activeDirectAppliedInterviewBonus.toFixed(2)}
-											</p>
-										</div>
-									</div>
-
-									<div className='mt-3 grid gap-3 md:grid-cols-2'>
-										{directScoreFields.filter((f) => !f.key.startsWith('interview')).map((field) => {
-											const enteredValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
-											const enteredScore = parseAndClampScore(enteredValue, field.maxScore)
-											const normalizedPercent = field.maxScore > 0 ? round((enteredScore / field.maxScore) * 100) : 0
-											const isNoatLocked = field.key === 'noat' && noatScoreByContestantId.has(activeContestantId)
-
-											return (
-												<label key={field.subCriterionId} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-													<span className='block text-sm font-semibold text-cyan-950'>{field.label}</span>
-													<span className='mt-1 block text-xs text-cyan-900/90'>
-														Max: {field.maxScore.toFixed(2)}
-														{isNoatLocked ? ' | Admin provided' : ''}
-													</span>
-													<input
-														suppressHydrationWarning
-														data-testid='score-input'
-														data-subcriterion-id={field.subCriterionId}
-														value={enteredValue}
-														onChange={(inputEvent) => {
-															if (isNoatLocked) {
-																return
-															}
-															updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)
-														}}
-														type='number'
-														inputMode='decimal'
-														min={0}
-														max={field.maxScore}
-														step='0.01'
-														readOnly={isNoatLocked}
-														className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2 read-only:cursor-default read-only:bg-slate-50 read-only:text-slate-600'
-													/>
-													<span className='mt-1 block text-xs font-medium text-slate-700'>
-														Entered: {enteredScore.toFixed(2)} | Normalized: {normalizedPercent.toFixed(2)}%
-													</span>
-												</label>
-											)
-										})}
-									</div>
-
-									{directScoreFields.some((f) => f.key.startsWith('interview')) ? (
-										<div className='mt-4 rounded-xl border border-cyan-200 bg-white/60 p-4'>
-											<h4 className='mb-3 text-sm font-bold tracking-wider text-cyan-950 uppercase'>Interview</h4>
-											<div className='grid gap-3 md:grid-cols-2'>
-												{directScoreFields.filter((f) => f.key.startsWith('interview')).map((field) => {
-													const enteredValue = scores[activeContestantId]?.[field.subCriterionId] ?? '0'
-													const enteredScore = parseAndClampScore(enteredValue, field.maxScore)
-													const normalizedPercent = field.maxScore > 0 ? round((enteredScore / field.maxScore) * 100) : 0
-
-													return (
-														<label key={field.subCriterionId} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-															<span className='block text-sm font-semibold text-cyan-950'>{field.label}</span>
-															<span className='mt-1 block text-xs text-cyan-900/90'>
-																Max: {field.maxScore.toFixed(2)}
-															</span>
-															<input
-																suppressHydrationWarning
-																data-testid='score-input'
-																data-subcriterion-id={field.subCriterionId}
-																value={enteredValue}
-																onChange={(inputEvent) => {
-																	updateScore(activeContestantId, field.subCriterionId, inputEvent.target.value, field.maxScore)
-																}}
-																type='number'
-																inputMode='decimal'
-																min={0}
-																max={field.maxScore}
-																step='0.01'
-																className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-															/>
-															<span className='mt-1 block text-xs font-medium text-slate-700'>
-																Entered: {enteredScore.toFixed(2)} | Normalized: {normalizedPercent.toFixed(2)}%
-															</span>
-														</label>
-													)
-												})}
-											</div>
-										</div>
-									) : null}
-
-									<div className='mt-3 grid gap-3 md:grid-cols-2'>
-										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-											<span className='block text-sm font-semibold text-cyan-950'>Strand</span>
-											{isTVLAcademicTrack(activeContestant.academicTrack) ? (
-												<>
-													<p className='mt-1 text-[10px] text-cyan-700/80'>TVL Track — select specific sub-strand</p>
-													<div data-testid='strand-select' className='mt-2'>
-														<Select
-															instanceId={`strand-tvl-select-${activeContestantId}`}
-															options={Array.from(new Set(TVL_LEAF_STRAND_OPTIONS.map((o) => o.group))).map((groupName) => ({
-																label: groupName,
-																options: TVL_LEAF_STRAND_OPTIONS.filter((o) => o.group === groupName).map((o) => ({ value: o.value, label: o.label })),
-															}))}
-															value={(() => {
-																const val = contestantDetails[activeContestantId]?.strand ?? ''
-																return val ? { value: val, label: TVL_LEAF_STRAND_OPTIONS.find(o => o.value === val)?.label ?? val } : null
-															})()}
-															onChange={(selected) => updateContestantDetailsField(activeContestantId, 'strand', selected?.value ?? '')}
-															isClearable
-															placeholder='Search or select...'
-															classNamePrefix='react-select'
-															styles={{
-																control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
-																valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
-																singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
-															}}
-														/>
-													</div>
-												</>
-											) : (
-												<div data-testid='strand-select' className='mt-2'>
-													<Select
-														instanceId={`strand-select-${activeContestantId}`}
-														options={DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => ({
-															label: group.label,
-															options: group.options.map((o) => ({ value: o.value, label: o.label })),
-														}))}
-														value={(() => {
-															const val = contestantDetails[activeContestantId]?.strand ?? ''
-															return val ? { value: val, label: DIRECT_RATING_STRAND_SELECT_GROUPS.flatMap(g => g.options).find(o => o.value === val)?.label ?? val } : null
-														})()}
-														onChange={(selected) => updateContestantDetailsField(activeContestantId, 'strand', selected?.value ?? '')}
-														isClearable
-														placeholder='Search or select...'
-														classNamePrefix='react-select'
-														styles={{
-															control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
-															valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
-															singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
-														}}
-													/>
-												</div>
-											)}
-										</label>
-
-										<label className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-											<span className='block text-sm font-semibold text-cyan-950'>Remark</span>
-											<div data-testid='remark-select' className='mt-2'>
-												<Select
-													instanceId={`remark-select-${activeContestantId}`}
-													options={DIRECT_REMARK_OPTIONS.map((opt) => ({ value: opt, label: opt }))}
-													value={(() => {
-														const val = contestantDetails[activeContestantId]?.remark ?? ''
-														return val ? { value: val, label: val } : null
-													})()}
-													onChange={(selected) => updateContestantDetailsField(activeContestantId, 'remark', selected?.value ?? '')}
-													isClearable
-													placeholder='Search or select...'
-													classNamePrefix='react-select'
-													styles={{
-														control: (base) => ({ ...base, borderRadius: '0.5rem', borderColor: '#67e8f9', minHeight: '42px', fontSize: '14px', paddingLeft: '4px' }),
-														valueContainer: (base) => ({ ...base, padding: '2px 12px' }),
-														singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0 })
-													}}
-												/>
-											</div>
-										</label>
-									</div>
-
-									<p className='mt-3 text-xs text-cyan-900/80'>Final Rating formula: ((AVE/GPA / Max AVE) x 100 + (NOAT / Max NOAT) x 100 + ((Interview + aligned strand bonus) / Max Interview) x 100) / 3, with Interview capped at its max score.</p>
-								</article>
+								<DirectRatingPanel
+									activeContestant={activeContestant}
+									activeContestantId={activeContestantId}
+									directScoreFields={directScoreFields}
+									scores={scores}
+									noatScoreByContestantId={noatScoreByContestantId}
+									contestantDetails={contestantDetails}
+									activeDirectFinalRating={activeDirectFinalRating}
+									directFinalRatingMaxPossible={directFinalRatingMaxPossible}
+									activeDirectBaseFinalRating={activeDirectBaseFinalRating}
+									directScoreMaxPossible={directScoreMaxPossible}
+									activeDirectAppliedInterviewBonus={activeDirectAppliedInterviewBonus}
+									updateScore={updateScore}
+									updateContestantDetailsField={updateContestantDetailsField}
+								/>
 							) : (
-								criteria.map((criterion) => {
-									const applicableSubCriteria = applicableSubCriteriaForContestant(criterion, activeContestant)
-									const scopeLabel = criterionScopeLabel(criterion)
-									const parentMaxScore = round(applicableSubCriteria.reduce((sum, subCriterion) => sum + Number(subCriterion.maxScore), 0))
-									const parentCurrentTotal = round(
-										applicableSubCriteria.reduce((sum, subCriterion) => {
-											const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
-											return sum + parseAndClampScore(rawValue, subCriterion.maxScore)
-										}, 0),
-									)
-
-									return (
-										<article key={criterion.id} className='rounded-2xl border border-cyan-100 bg-cyan-50/40 p-4'>
-											<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
-												<div>
-													<h3 className='text-base font-semibold text-cyan-950'>{criterion.name}</h3>
-													<p className='text-[11px] font-medium text-cyan-900/85'>Scope: {scopeLabel}</p>
-													{!directRatingConfig ? <p className='text-[11px] text-cyan-900/80'>Legend: {rubricLegendText}</p> : null}
-												</div>
-												<p className='text-xs text-cyan-900/90'>
-													Parent Max: {parentMaxScore.toFixed(2)} | Current: {parentCurrentTotal.toFixed(2)}
-												</p>
-											</div>
-
-											{isIndividualCriterion(criterion) ? (
-												<div className='mt-3 space-y-4'>
-													{groupSubCriteriaByMember(criterion.subCriteria, activeContestant).map((group) => {
-														const groupMaxScore = round(group.items.reduce((sum, item) => sum + item.subCriterion.maxScore, 0))
-														const groupCurrentTotal = round(
-															group.items.reduce((sum, item) => {
-																const rawValue = scores[activeContestantId]?.[item.subCriterion.id] ?? '0'
-																return sum + parseAndClampScore(rawValue, item.subCriterion.maxScore)
-															}, 0),
-														)
-
-														return (
-															<div key={group.memberLabel} data-testid='member-group' data-member-label={group.memberLabel} className='rounded-2xl border border-cyan-200 bg-white p-3'>
-																<div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
-																	<div>
-																		<h4 className='text-sm font-semibold text-cyan-950'>{group.memberDisplayLabel}</h4>
-																	</div>
-																	<p className='text-xs text-cyan-900/90 sm:text-right'>
-																		Max: {groupMaxScore.toFixed(2)} | Current: {groupCurrentTotal.toFixed(2)}
-																	</p>
-																</div>
-
-																<div className='mt-3 grid gap-3 xl:grid-cols-2'>
-																	{group.items.map(({ subCriterion, displayName }) => (
-																		<label key={subCriterion.id} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-																			<span className='block text-sm font-semibold text-cyan-950'>{displayName}</span>
-																			<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
-																			<input
-																				suppressHydrationWarning
-																				data-testid='score-input'
-																				data-subcriterion-id={subCriterion.id}
-																				value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
-																				onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
-																				type='number'
-																				inputMode='decimal'
-																				min={0}
-																				max={subCriterion.maxScore}
-																				step='0.01'
-																				className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-																			/>
-																			<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
-																		</label>
-																	))}
-																</div>
-															</div>
-														)
-													})}
-												</div>
-											) : (
-												<div className='mt-3 grid gap-3 xl:grid-cols-2'>
-													{criterion.subCriteria.map((subCriterion) => (
-														<label key={subCriterion.id} className='rounded-xl border border-cyan-200 bg-white p-3 text-sm font-medium text-slate-900'>
-															<span className='block text-sm font-semibold text-cyan-950'>{subCriterion.name}</span>
-															<span className='mt-1 block text-xs text-cyan-900/90'>Sub Max: {subCriterion.maxScore.toFixed(2)}</span>
-															<input
-																suppressHydrationWarning
-																data-testid='score-input'
-																data-subcriterion-id={subCriterion.id}
-																value={scores[activeContestantId]?.[subCriterion.id] ?? '0'}
-																onChange={(inputEvent) => updateScore(activeContestantId, subCriterion.id, inputEvent.target.value, subCriterion.maxScore)}
-																type='number'
-																inputMode='decimal'
-																min={0}
-																max={subCriterion.maxScore}
-																step='0.01'
-																className='mt-2 w-full rounded-lg border border-cyan-300 bg-white px-3 py-2 text-base font-semibold text-slate-900 placeholder:text-slate-500 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-															/>
-															<span className='mt-1 block text-xs font-medium text-slate-700'>Entered Score: {scores[activeContestantId]?.[subCriterion.id] ?? '0'}</span>
-														</label>
-													))}
-												</div>
-											)}
-										</article>
-									)
-								})
+								<CriterionList criteria={criteria} activeContestant={activeContestant} activeContestantId={activeContestantId} scores={scores} directRatingConfig={directRatingConfig} rubricLegendText={rubricLegendText} updateScore={updateScore} />
 							)}
 						</div>
-						<div className='mt-6'>
-							<label className='block rounded-xl border border-cyan-200 bg-white p-4 text-sm font-medium text-slate-900 shadow-sm'>
-								<span className='block text-sm font-semibold text-cyan-950'>Additional Remark (Optional)</span>
-								<p className='mt-1 text-xs text-cyan-900/70'>
-									Add any additional comments or observations for this contestant.
-									{activeContestant.laptopAvailable ? <span className='ml-1 text-cyan-700/70'>(Auto-filled from laptop availability — you may overwrite)</span> : null}
-								</p>
-								<textarea
-									suppressHydrationWarning
-									data-testid='additional-remark'
-									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
-									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
-									placeholder='Enter any additional remark here...'
-									rows={3}
-									className='mt-3 w-full resize-none rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-								/>
-							</label>
-						</div>
+						<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
 					</section>
 
-					{error ? <p data-testid='judge-error' className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{error}</p> : null}
-					{successMessage ? <p data-testid='judge-success' className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{successMessage}</p> : null}
+					<JudgeNotices error={error} successMessage={successMessage} />
 
-					<div className='flex flex-wrap gap-3'>
-						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex - 1)} disabled={activeContestantIndex === 0} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
-							Previous Entry
-						</button>
-						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex + 1)} disabled={activeContestantIndex >= contestants.length - 1} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
-							Next Entry
-						</button>
-						<button suppressHydrationWarning type='submit' disabled={isSaving} data-testid='save-scores' data-draft-status={draftStatus} className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
-							{isSaving ? `Saving ${activeContestant.name}...` : `Save ${activeContestant.name} Scores`}
-						</button>
-					</div>
+					<JudgeActions activeContestant={activeContestant} activeContestantIndex={activeContestantIndex} contestants={contestants} isSaving={isSaving} draftStatus={draftStatus} goToContestant={goToContestant} />
 
 					<p className='text-xs text-cyan-900/90'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
 				</form>
