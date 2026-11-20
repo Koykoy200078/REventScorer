@@ -9,12 +9,14 @@ import type { ContestantBaseline, DraftOutcome, DraftStatus, QueuedSave } from '
 import { clearContestantDraft, loadDraft, readContestantDraft, saveContestantDraft } from '@/lib/judge/draft-store'
 import type { ContestantDraft } from '@/lib/judge/draft-store'
 import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
-import { buildContestantDetailsPayload, buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, formatDate, hasPositiveDraftScore } from '@/lib/judge/matrix'
+import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, formatDate, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
 import { applicableSubCriteriaForContestant, criterionScopeLabel, groupSubCriteriaByMember, isIndividualCriterion } from '@/lib/judge/members'
+import { buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
 import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
 import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
 import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
+import { advanceTarget, rosterStatus } from '@/lib/judge/status'
 import { autoResolveStrand, DIRECT_REMARK_OPTIONS, isTVLAcademicTrack, TVL_LEAF_STRAND_OPTIONS } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
@@ -814,59 +816,10 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		setError(null)
 		setSuccessMessage(null)
 
-		const payload: ScoreMatrix = {}
-
-		for (const contestant of contestants) {
-			payload[contestant.id] = {}
-
-			for (const criterion of criteria) {
-				const applicableSubCriterionIds = new Set(applicableSubCriteriaForContestant(criterion, contestant).map((subCriterion) => subCriterion.id))
-
-				for (const subCriterion of criterion.subCriteria) {
-					if (!applicableSubCriterionIds.has(subCriterion.id)) {
-						payload[contestant.id][subCriterion.id] = 0
-						continue
-					}
-
-					const rawValue = scores[contestant.id]?.[subCriterion.id] ?? '0'
-					payload[contestant.id][subCriterion.id] = round(parseAndClampScore(rawValue, subCriterion.maxScore))
-				}
-			}
-
-			// ADD BACKWARD COMPATIBILITY FIELDS FOR ADMIN DASHBOARD
-			if (criteria.some((c) => c.id === 'legacy-migrated-criterion')) {
-				const oldInterviewId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => !sc.name.toLowerCase().includes('ave') && !sc.name.toLowerCase().includes('gpa') && sc.name.toLowerCase() !== 'noat')?.id
-				const oldAveId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
-				const oldNoatId = rawCriteria.flatMap((c) => c.subCriteria).find((sc) => sc.name.toLowerCase() === 'noat')?.id
-
-				if (oldInterviewId) {
-					const contentScore = payload[contestant.id]['legacy-migrated-interviewContent'] ?? 0
-					const commScore = payload[contestant.id]['legacy-migrated-interviewComm'] ?? 0
-					const persScore = payload[contestant.id]['legacy-migrated-interviewPers'] ?? 0
-					const interestScore = payload[contestant.id]['legacy-migrated-interviewInterest'] ?? 0
-					const specialScore = payload[contestant.id]['legacy-migrated-interviewSpecial'] ?? 0
-					payload[contestant.id][oldInterviewId] = round(contentScore + commScore + persScore + interestScore + specialScore)
-				}
-
-				if (oldAveId && payload[contestant.id]['legacy-migrated-aveGpa'] !== undefined) {
-					payload[contestant.id][oldAveId] = payload[contestant.id]['legacy-migrated-aveGpa']
-				}
-				
-				if (oldNoatId && payload[contestant.id]['legacy-migrated-noat'] !== undefined) {
-					payload[contestant.id][oldNoatId] = payload[contestant.id]['legacy-migrated-noat']
-				}
-			}
-		}
-
-		const contestantDetailsPayload = buildContestantDetailsPayload(contestantDetails)
-
-		const requestPayload: SubmitScoresRequestBody = {
-			scores: payload,
-			contestantId: activeContestant.id,
-			...(Object.keys(contestantDetailsPayload).length > 0 ? { contestantDetails: contestantDetailsPayload } : {}),
-		}
+		const payload = buildScorePayload(contestants, criteria, rawCriteria, scores)
+		const requestPayload: SubmitScoresRequestBody = buildSaveRequest(activeContestant.id, payload, contestantDetails)
 		const currentName = activeContestant.name
-		const nextIndex = activeContestantIndex + 1
+		const nextIndex = advanceTarget(activeContestantIndex, contestants.length, adminEditMode)
 
 		try {
 			const responseBody = await submitPayload(requestPayload)
@@ -882,7 +835,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 
 			if (adminEditMode) {
 				setSuccessMessage(`Saved scores for ${currentName}. Continue editing this participant or switch entries.`)
-			} else if (nextIndex < contestants.length) {
+			} else if (nextIndex !== null) {
 				setActiveContestantIndex(nextIndex)
 				setSuccessMessage(`Saved scores for ${currentName}. Continue with ${contestants[nextIndex].name}.`)
 			} else {
@@ -922,7 +875,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 
 				if (adminEditMode) {
 					setSuccessMessage(`Saved locally for ${currentName}. It will auto-upload when ${retryLabel}.`)
-				} else if (nextIndex < contestants.length) {
+				} else if (nextIndex !== null) {
 					setActiveContestantIndex(nextIndex)
 					setSuccessMessage(`Saved locally for ${currentName}. It will auto-upload when ${retryLabel}. Continue with ${contestants[nextIndex].name}.`)
 				} else {
@@ -974,7 +927,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 							const slotLabel = slotLabelsByContestant.get(contestant.id)
 							const isIndividual = contestant.entryType === 'individual'
 							return (
-								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} data-testid='roster-entry' data-contestant-id={contestant.id} data-status={isQueued ? 'queued' : isSaved ? 'scored' : hasDraft ? 'draft' : 'none'} aria-current={isActive ? 'true' : undefined} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
+								<button suppressHydrationWarning key={contestant.id} type='button' onClick={() => goToContestant(index)} data-testid='roster-entry' data-contestant-id={contestant.id} data-status={rosterStatus({ queued: isQueued, saved: isSaved, hasDraft })} aria-current={isActive ? 'true' : undefined} className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition ${isActive ? 'border-cyan-800 bg-cyan-900 text-white' : 'border-cyan-300 bg-white text-cyan-900 hover:bg-cyan-100'}`}>
 									<div className='flex flex-col items-start'>
 										<span>
 											{index + 1}. {contestant.name}
