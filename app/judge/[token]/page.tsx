@@ -18,7 +18,7 @@ export default async function JudgeTokenPage({ params, searchParams }: { params:
 	}
 
 	return (
-		<div className='min-h-screen bg-transparent pb-12'>
+		<div className='min-h-screen bg-slate-50'>
 			<JudgeScoringForm
 				token={token}
 				eventTitle={session.event.title}

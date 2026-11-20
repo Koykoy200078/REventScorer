@@ -44,6 +44,8 @@ export default function ScrollToBottomButton() {
 					behavior: 'smooth',
 				})
 			}}
+			// Stage 5 Task 5 (R17): above the judge page's sticky dock (--es-dock-height), 1.5rem elsewhere.
+			style={{ bottom: 'calc(var(--es-dock-height, 0px) + 1.5rem)' }}
 			className='fixed bottom-6 right-6 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-slate-800 text-white shadow-lg shadow-slate-900/20 transition-all hover:scale-110 hover:bg-slate-700 focus:outline-none focus:ring-4 focus:ring-slate-300 print:hidden'
 			aria-label={isAtBottom ? 'Scroll to top' : 'Scroll to bottom'}
 			title={isAtBottom ? 'Scroll to top' : 'Scroll to bottom'}

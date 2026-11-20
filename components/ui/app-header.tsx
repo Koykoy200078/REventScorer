@@ -164,14 +164,16 @@ export default function AppHeader({
 			{...rest}
 		>
 			<div className='h-16 w-full px-gutter-desktop flex items-center justify-between gap-space-md'>
-				<div className='flex items-center gap-space-md min-w-0 shrink-0'>
+				{/* Stage 5 Task 5 (R18): the left cluster shrinks so a long title truncates instead of
+				    pushing the header wider than a 768 px screen; the logo keeps its size. */}
+				<div className='flex items-center gap-space-md min-w-0'>
 					{lead === undefined ? (
-						<div className='flex items-center gap-space-xs'>
+						<div className='flex items-center gap-space-xs shrink-0'>
 							<div className='w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-xs'>
 								<Icon name='gavel' className='text-[19px]' />
 							</div>
 							{brand ? (
-								<span className='font-headline-sm text-headline-sm text-slate-900 font-bold tracking-tight'>{brand}</span>
+								<span className='hidden lg:inline font-headline-sm text-headline-sm text-slate-900 font-bold tracking-tight'>{brand}</span>
 							) : null}
 						</div>
 					) : (
@@ -179,8 +181,8 @@ export default function AppHeader({
 					)}
 					{title || subtitle ? (
 						<>
-							<div aria-hidden className='h-5 w-px bg-slate-200' />
-							<div className='flex flex-col truncate'>
+							<div aria-hidden className='hidden sm:block h-5 w-px bg-slate-200' />
+							<div className='hidden sm:flex flex-col truncate'>
 								{title ? (
 									<span className='font-label-md text-label-md text-slate-800 font-medium truncate'>{title}</span>
 								) : null}

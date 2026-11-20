@@ -44,6 +44,10 @@ const UNIFIED_ON =
 	'flex flex-col text-left p-2.5 rounded-lg border-2 border-emerald-500 bg-emerald-50/70 shadow-xs transition-all text-emerald-950 ring-2 ring-emerald-600/20 relative'
 const UNIFIED_QUEUED =
 	'flex flex-col text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-all text-slate-700 shadow-xs'
+/** The T-3 roster card shells, for a list that is not a tab list (the judge's contestant picker). */
+export function rosterCardClassName(state: 'active' | 'done' | 'other'): string {
+	return state === 'active' ? UNIFIED_ON : state === 'done' ? UNIFIED_DONE : UNIFIED_QUEUED
+}
 // U37c2458; py-0.2 (no such v3 key, so no padding in screen.png) is written as a 1px hairline.
 const UNIFIED_TAG =
 	'absolute -top-1.5 right-2 px-1.5 py-px rounded-full bg-emerald-600 text-white font-label-sm text-[10px] font-bold uppercase tracking-wider'

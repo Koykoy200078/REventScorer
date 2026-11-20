@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { JudgeActions } from '@/components/judge/actions'
+import { ContestantPicker } from '@/components/judge/contestant-picker'
 import { CriterionList } from '@/components/judge/criterion-list'
 import { DirectRatingPanel } from '@/components/judge/direct-rating-panel'
+import { JudgeMeta } from '@/components/judge/judge-context'
+import { JudgeDock } from '@/components/judge/judge-dock'
+import { JudgeHeader } from '@/components/judge/judge-header'
 import { JudgeNotices } from '@/components/judge/notices'
 import { RemarksSection } from '@/components/judge/remarks'
-import { JudgeRoster } from '@/components/judge/roster'
+import { DockSpacer, type DockVariant } from '@/components/ui/sticky-dock'
 
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { baselineAfterSave, browserDraftStorage, DRAFT_WRITE_DELAY_MS, draftToKeep, formFollowsSave, hasUnsavedChanges, initialBaselines, ownDraftToKeep, queuedRowToShow, queuedSaveBaseline, restoredDetails, restoredRow, savedFormRow, storedDraftToKeep, summarizeDraftStatus, writePendingDrafts } from '@/lib/judge/draft-state'
@@ -15,16 +18,18 @@ import type { ContestantBaseline, DraftOutcome, DraftStatus, QueuedSave } from '
 import { clearContestantDraft, loadDraft, readContestantDraft, saveContestantDraft } from '@/lib/judge/draft-store'
 import type { ContestantDraft } from '@/lib/judge/draft-store'
 import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
-import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, formatDate, hasPositiveDraftScore } from '@/lib/judge/matrix'
+import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
 import { applicableSubCriteriaForContestant } from '@/lib/judge/members'
 import { buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
 import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
 import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
 import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
-import { advanceTarget } from '@/lib/judge/status'
+import { advanceTarget, rosterStatus, saveButtonLabel } from '@/lib/judge/status'
+import type { RosterStatus } from '@/lib/judge/status'
 import { autoResolveStrand, isTVLAcademicTrack } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import { resolveJudgeLayout } from '@/lib/judge/layout'
 import type { JudgeView } from '@/lib/judge/layout'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -49,7 +54,7 @@ interface JudgeScoringFormProps {
 	initialView?: JudgeView | null
 }
 
-export function JudgeScoringForm({ token, eventTitle, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, eventDescription, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
 	const { criteria, scores: existingScores } = useMemo(() => migrateLegacyDirectRating(rawCriteria, rawExistingScores, directRatingConfig), [rawCriteria, rawExistingScores, directRatingConfig])
@@ -507,6 +512,11 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		noteJudgeChange(contestantId)
 	}
 
+	const goToContestantRef = useRef<(index: number) => void>(() => {})
+	useEffect(() => {
+		goToContestantRef.current = goToContestant
+	})
+
 	function goToContestant(index: number): void {
 		setActiveContestantIndex(Math.max(0, Math.min(index, contestants.length - 1)))
 		setError(null)
@@ -903,6 +913,37 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		}
 	}
 
+	// Stage 5 Task 5 Step 6: the shell. Every hook below runs before the empty-roster return and is
+	// safe without an active contestant.
+	const [pickerOpen, setPickerOpen] = useState(false)
+	const layout = useMemo(() => resolveJudgeLayout({ criteria, directRatingConfig }, activeContestant), [criteria, directRatingConfig, activeContestant])
+	const dockVariant: DockVariant = layout === 'unified' ? 'unified' : layout === 'group' ? 'group' : 'individual'
+	// The picker's statuses, memoised by value: a keystroke that changes no entry's status keeps the
+	// same object, so the memoised picker does not re-render its entries (critique m9).
+	const statusSignature = contestants.map((contestant) => contestant.id + ':' + rosterStatus({ queued: queuedContestantIds.has(contestant.id), saved: savedContestantIds.has(contestant.id), hasDraft: draftScoredContestantIds.has(contestant.id) })).join('|')
+	const statusById = useMemo(() => {
+		const byId: Record<string, RosterStatus> = {}
+		for (const entry of statusSignature.split('|')) {
+			const at = entry.lastIndexOf(':')
+			if (at > 0) byId[entry.slice(0, at)] = entry.slice(at + 1) as RosterStatus
+		}
+		return byId
+	}, [statusSignature])
+	const contestantNames = useMemo(() => contestants.map((contestant) => contestant.name), [contestants])
+	const saveLabel = saveButtonLabel({ names: contestantNames, activeIndex: activeContestantIndex, adminEditMode, isSaving })
+	const selectFromPicker = useCallback((index: number) => goToContestantRef.current(index), [])
+	// Judge page only (R16): focused cells scroll clear of the fixed header, the dock and the scroll
+	// button above it.
+	useEffect(() => {
+		const root = document.documentElement
+		root.style.scrollPaddingTop = 'calc(4rem + .75rem)'
+		root.style.scrollPaddingBottom = 'calc(var(--es-dock-height, 0px) + 4.5rem + .75rem)'
+		return () => {
+			root.style.scrollPaddingTop = ''
+			root.style.scrollPaddingBottom = ''
+		}
+	}, [])
+
 	if (contestants.length === 0) {
 		return (
 			<div className='mx-auto w-full max-w-7xl px-4 py-8 sm:px-8'>
@@ -912,81 +953,87 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 	}
 
 	return (
-		<div ref={topRef} className='mx-auto w-full max-w-7xl px-4 py-8 sm:px-8'>
-			<div className='rounded-3xl border border-cyan-200 bg-white/95 p-6 shadow-xl shadow-cyan-950/10 sm:p-8'>
-				<div className='flex flex-col gap-2'>
-					<p className='text-xs uppercase tracking-[0.18em] text-cyan-800/80'>Judge Session</p>
-					<h1 className='text-3xl font-semibold tracking-tight text-cyan-950'>{eventTitle}</h1>
-					<p className='text-sm text-cyan-900/80'>
-						Judge: <span className='font-semibold'>{judge.name}</span>
-					</p>
-					<p className='text-sm text-cyan-900/80'>Max possible score: {maxPossibleScore.toFixed(2)}</p>
-					{lastSubmittedAt ? <p className='text-xs text-emerald-700'>Last submitted: {formatDate(lastSubmittedAt)}</p> : null}
-					{queuedUploads.length > 0 ? <p data-testid='pending-uploads' className='text-xs text-amber-700'>Pending uploads: {queuedUploads.length}. Saved locally and waiting to sync.</p> : null}
-					{isAutoSyncing ? <p className='text-xs text-cyan-800'>Auto-uploading pending saves...</p> : null}
-				</div>
-
-				<JudgeRoster contestants={contestants} activeContestantIndex={activeContestantIndex} savedContestantIds={savedContestantIds} queuedContestantIds={queuedContestantIds} draftScoredContestantIds={draftScoredContestantIds} slotLabelsByContestant={slotLabelsByContestant} goToContestant={goToContestant} />
-
-				<form onSubmit={submitScores} className='mt-6 flex flex-col gap-4'>
-					<section className='rounded-2xl border border-cyan-100 bg-white p-4 sm:p-5'>
-						<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-							<div>
-								<div className='flex items-center gap-2'>
-									<h2 className='text-xl font-semibold text-cyan-950'>Now Scoring: {activeContestant.name}</h2>
-									{activeContestant.entryType === 'individual' ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800'>Individual</span> : null}
+		<div ref={topRef} className='min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
+			<JudgeHeader
+				eventTitle={eventTitle}
+				eventDescription={eventDescription}
+				judgeName={judge.name}
+				adminEditMode={adminEditMode}
+				index={activeContestantIndex}
+				count={contestants.length}
+				picker={<ContestantPicker contestants={contestants} activeIndex={activeContestantIndex} statusById={statusById} slotLabels={slotLabelsByContestant} open={pickerOpen} onOpenChange={setPickerOpen} onSelect={selectFromPicker} />}
+				onPrev={() => goToContestant(activeContestantIndex - 1)}
+				onNext={() => goToContestant(activeContestantIndex + 1)}
+			/>
+			<main className='w-full pt-16 bg-slate-50 min-h-[calc(100vh-4rem)] flex flex-col'>
+				<form onSubmit={submitScores}>
+					<div className='w-full px-gutter-desktop'>
+						<div className='w-full max-w-5xl mx-auto py-space-lg flex flex-col gap-space-lg'>
+							<JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} />
+							<JudgeNotices error={error} successMessage={successMessage} queuedCount={queuedUploads.length} isAutoSyncing={isAutoSyncing} />
+							<section className='rounded-2xl border border-cyan-100 bg-white p-4 sm:p-5'>
+								<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+									<div>
+										<div className='flex items-center gap-2'>
+											<h2 className='text-xl font-semibold text-cyan-950'>Now Scoring: {activeContestant.name}</h2>
+											{activeContestant.entryType === 'individual' ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800'>Individual</span> : null}
+										</div>
+										<p className='mt-1 text-sm text-cyan-900/90'>
+											Entry {activeContestantIndex + 1} of {contestants.length}
+										</p>
+										{activeSlotLabel ? <p className='text-xs text-cyan-900/80'>Slot: {activeSlotLabel}</p> : null}
+									</div>
+									<div className='flex flex-wrap items-center gap-2'>
+										<span className='rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>
+											Current Total: {activeContestantTotal.toFixed(2)} / {maxPossibleScore.toFixed(2)}
+										</span>
+										{isDirectScoreMode ? (
+											<span className='rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900'>
+												Final Rating: {activeDirectFinalRating.toFixed(2)} / {directFinalRatingMaxPossible.toFixed(2)}
+											</span>
+										) : null}
+										<span className='rounded-full bg-white px-3 py-1 text-xs font-medium text-cyan-900 ring-1 ring-cyan-200'>
+											Scored Fields: {scoredFieldCount} / {totalSubCriterionCount}
+										</span>
+									</div>
 								</div>
-								<p className='mt-1 text-sm text-cyan-900/90'>
-									Entry {activeContestantIndex + 1} of {contestants.length}
-								</p>
-								{activeSlotLabel ? <p className='text-xs text-cyan-900/80'>Slot: {activeSlotLabel}</p> : null}
-							</div>
-							<div className='flex flex-wrap items-center gap-2'>
-								<span className='rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>
-									Current Total: {activeContestantTotal.toFixed(2)} / {maxPossibleScore.toFixed(2)}
-								</span>
-								{isDirectScoreMode ? (
-									<span className='rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900'>
-										Final Rating: {activeDirectFinalRating.toFixed(2)} / {directFinalRatingMaxPossible.toFixed(2)}
-									</span>
-								) : null}
-								<span className='rounded-full bg-white px-3 py-1 text-xs font-medium text-cyan-900 ring-1 ring-cyan-200'>
-									Scored Fields: {scoredFieldCount} / {totalSubCriterionCount}
-								</span>
-							</div>
+
+								<div className='mt-4 space-y-4'>
+									{isDirectScoreMode ? (
+										<DirectRatingPanel
+											activeContestant={activeContestant}
+											activeContestantId={activeContestantId}
+											directScoreFields={directScoreFields}
+											scores={scores}
+											noatScoreByContestantId={noatScoreByContestantId}
+											contestantDetails={contestantDetails}
+											activeDirectFinalRating={activeDirectFinalRating}
+											directFinalRatingMaxPossible={directFinalRatingMaxPossible}
+											activeDirectBaseFinalRating={activeDirectBaseFinalRating}
+											directScoreMaxPossible={directScoreMaxPossible}
+											activeDirectAppliedInterviewBonus={activeDirectAppliedInterviewBonus}
+											updateScore={updateScore}
+											updateContestantDetailsField={updateContestantDetailsField}
+										/>
+									) : (
+										<CriterionList criteria={criteria} activeContestant={activeContestant} activeContestantId={activeContestantId} scores={scores} directRatingConfig={directRatingConfig} rubricLegendText={rubricLegendText} updateScore={updateScore} />
+									)}
+								</div>
+								<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
+							</section>
+							<p className='font-body-sm text-body-sm text-slate-500'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
 						</div>
-
-						<div className='mt-4 space-y-4'>
-							{isDirectScoreMode ? (
-								<DirectRatingPanel
-									activeContestant={activeContestant}
-									activeContestantId={activeContestantId}
-									directScoreFields={directScoreFields}
-									scores={scores}
-									noatScoreByContestantId={noatScoreByContestantId}
-									contestantDetails={contestantDetails}
-									activeDirectFinalRating={activeDirectFinalRating}
-									directFinalRatingMaxPossible={directFinalRatingMaxPossible}
-									activeDirectBaseFinalRating={activeDirectBaseFinalRating}
-									directScoreMaxPossible={directScoreMaxPossible}
-									activeDirectAppliedInterviewBonus={activeDirectAppliedInterviewBonus}
-									updateScore={updateScore}
-									updateContestantDetailsField={updateContestantDetailsField}
-								/>
-							) : (
-								<CriterionList criteria={criteria} activeContestant={activeContestant} activeContestantId={activeContestantId} scores={scores} directRatingConfig={directRatingConfig} rubricLegendText={rubricLegendText} updateScore={updateScore} />
-							)}
-						</div>
-						<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
-					</section>
-
-					<JudgeNotices error={error} successMessage={successMessage} />
-
-					<JudgeActions activeContestant={activeContestant} activeContestantIndex={activeContestantIndex} contestants={contestants} isSaving={isSaving} draftStatus={draftStatus} goToContestant={goToContestant} />
-
-					<p className='text-xs text-cyan-900/90'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
+					</div>
+					<DockSpacer variant={dockVariant} />
+					<JudgeDock
+						variant={dockVariant}
+						total={{ label: 'Current total', value: activeContestantTotal.toFixed(2), outOf: `/ ${maxPossibleScore.toFixed(2)}` }}
+						prev={{ onClick: () => goToContestant(activeContestantIndex - 1), disabled: activeContestantIndex === 0 }}
+						next={{ onClick: () => goToContestant(activeContestantIndex + 1), disabled: activeContestantIndex >= contestants.length - 1 }}
+						save={{ label: saveLabel, isSaving, draftStatus }}
+					/>
 				</form>
-			</div>
+			</main>
 		</div>
 	)
 }
