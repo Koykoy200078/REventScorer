@@ -841,6 +841,13 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		switcherFocusRef.current = false
 		document.querySelector<HTMLElement>('[data-testid="view-switcher"] [role="radio"][aria-checked="true"]')?.focus()
 	}, [view])
+	// Save sits in the fixed dock at the bottom and the notices are at the top: a refused save, one the
+	// device could not keep, or a skipped auto-upload brings its error into view (final review #1).
+	useLayoutEffect(() => {
+		if (!error) return
+		const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+		document.querySelector('[data-testid="judge-error"]')?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+	}, [error])
 	// A cell the step check stopped Save on is shown, focused and given the browser's own message.
 	useLayoutEffect(() => {
 		if (!reveal) return
@@ -957,7 +964,8 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 				<DockTotal variant='individual' label='Final rating (your preview)' value={<PreviewValue value={shownValue} kind={kind} hook />} outOf={nowrap('/ 100')} percent={percentText(shownValue, 100)} />
 				{draftIndicator}
 				<p className='font-body-sm text-body-sm text-slate-500'>
-					Base {dash ? '—' : (preview?.result.baseFinalRating ?? 0).toFixed(2)} · strand bonus +{dash ? '—' : (preview?.result.bonusPoints ?? 0).toFixed(2)}
+					{/* compile's bonusPoints are added to Interview, in Interview points (final review #6). */}
+					Base {dash ? '—' : (preview?.result.baseFinalRating ?? 0).toFixed(2)} · strand bonus +{dash ? '—' : (preview?.result.bonusPoints ?? 0).toFixed(2)} Interview points
 				</p>
 			</div>
 		)
