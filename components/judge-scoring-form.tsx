@@ -3,246 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Select from 'react-select'
 
-import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, DIRECT_RATING_TRACK_STRAND_TREE, normalizeDirectRatingConfig, resolveStrandAlignmentBonus, DIRECT_SCORE_FIELD_ORDER, DIRECT_SCORE_FIELD_LABELS } from '@/lib/direct-rating-config'
+import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, DIRECT_RATING_STRAND_SELECT_GROUPS, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
+import { baselineAfterSave, browserDraftStorage, DRAFT_WRITE_DELAY_MS, draftToKeep, formFollowsSave, hasUnsavedChanges, initialBaselines, ownDraftToKeep, queuedRowToShow, queuedSaveBaseline, restoredDetails, restoredRow, savedFormRow, storedDraftToKeep, summarizeDraftStatus, writePendingDrafts } from '@/lib/judge/draft-state'
+import type { ContestantBaseline, DraftOutcome, DraftStatus, QueuedSave } from '@/lib/judge/draft-state'
+import { clearContestantDraft, loadDraft, readContestantDraft, saveContestantDraft } from '@/lib/judge/draft-store'
+import type { ContestantDraft } from '@/lib/judge/draft-store'
+import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
+import { buildContestantDetailsPayload, buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, formatDate, hasPositiveDraftScore } from '@/lib/judge/matrix'
+import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
+import { applicableSubCriteriaForContestant, criterionScopeLabel, groupSubCriteriaByMember, isIndividualCriterion } from '@/lib/judge/members'
+import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
+import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
+import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
+import { autoResolveStrand, DIRECT_REMARK_OPTIONS, isTVLAcademicTrack, TVL_LEAF_STRAND_OPTIONS } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
-
-type InputScoreMatrix = Record<string, Record<string, string>>
-type InputContestantDetailsMap = Record<string, { strand: string; remark: string; additionalInfo: string }>
-type DirectScoreField = ReturnType<typeof detectDirectRatingScoreFields>[number]
-
-const DIRECT_REMARK_OPTIONS = ['Nihangyo + off-track', 'ON TRACK', 'ON TRACK with HIGH POTENTIAL', 'Transferee', 'OFF-TRACK with HIGH GRADES (STEM)', 'OFF-TRACK with POTENTIAL', 'OFF-TRACK']
-
-const TVL_TRACK_NAME = 'Technical-Vocational-Livelihood (TVL) Track'
-
-function getTVLLeafStrandOptions(): Array<{ value: string; label: string; group: string }> {
-	const tvlTree = DIRECT_RATING_TRACK_STRAND_TREE.find((t) => t.track === TVL_TRACK_NAME)
-	if (!tvlTree) return []
-	const result: Array<{ value: string; label: string; group: string }> = []
-	for (const node of tvlTree.nodes) {
-		if (node.children && node.children.length > 0) {
-			for (const child of node.children) {
-				result.push({ value: child.value, label: child.label, group: node.label })
-			}
-		} else {
-			result.push({ value: node.value, label: node.label, group: TVL_TRACK_NAME })
-		}
-	}
-	return result
-}
-
-const TVL_LEAF_STRAND_OPTIONS = getTVLLeafStrandOptions()
-
-function isTVLAcademicTrack(academicTrack: string | undefined): boolean {
-	if (!academicTrack) return false
-	const upper = academicTrack.toUpperCase()
-	return upper.includes('TVL') || upper.includes('TECHNICAL-VOCATIONAL') || upper.includes('TECHNICAL') || upper.includes('VOCATIONAL')
-}
-
-function autoResolveStrand(academicTrack: string | undefined): string | null {
-	if (!academicTrack) return null
-	const lower = academicTrack.toLowerCase()
-	if (lower.includes('science') || lower.includes('stem')) return 'Science, Technology, Engineering, and Mathematics (STEM)'
-	if (lower.includes('accountancy') || lower.includes('abm')) return 'Accountancy, Business and Management (ABM)'
-	if (lower.includes('humanities') || lower.includes('humss')) return 'Humanities and Social Sciences (HUMSS)'
-	if (lower.includes('general academic') || lower.includes('gas')) return 'General Academic Strand (GAS)'
-	if (lower.includes('sports')) return 'Sports Track'
-	if (lower.includes('arts') || lower.includes('design')) return 'Arts and Design Track'
-	return null
-}
-
-interface SubmitScoresRequestBody {
-	scores: ScoreMatrix
-	contestantId: string
-	contestantDetails?: JudgeContestantDetailsMap
-}
-
-interface SubmitScoresResponseBody {
-	error?: string
-	submittedAt?: string
-}
-
-interface QueuedScoreUpload {
-	id: string
-	token: string
-	contestantId: string
-	contestantName: string
-	payload: SubmitScoresRequestBody
-	queuedAt: string
-}
-
-const QUEUED_SCORE_UPLOADS_STORAGE_KEY = 'eventscorer:queued-score-uploads:v1'
-const AUTO_SYNC_INTERVAL_MS = 15_000
-
-class SubmitScoresError extends Error {
-	status?: number
-
-	constructor(message: string, status?: number) {
-		super(message)
-		this.name = 'SubmitScoresError'
-		this.status = status
-	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === 'object'
-}
-
-function queuedScoreUploadId(token: string, contestantId: string): string {
-	return `${token}:${contestantId}`
-}
-
-function readQueuedScoreUploads(): QueuedScoreUpload[] {
-	if (typeof window === 'undefined') {
-		return []
-	}
-
-	try {
-		const raw = window.localStorage.getItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY)
-		if (!raw) {
-			return []
-		}
-
-		const parsed = JSON.parse(raw) as unknown
-		if (!Array.isArray(parsed)) {
-			return []
-		}
-
-		const normalized: QueuedScoreUpload[] = []
-
-		for (const entry of parsed) {
-			if (!isRecord(entry)) {
-				continue
-			}
-
-			const token = typeof entry.token === 'string' ? entry.token.trim() : ''
-			const contestantId = typeof entry.contestantId === 'string' ? entry.contestantId.trim() : ''
-			const contestantName = typeof entry.contestantName === 'string' ? entry.contestantName.trim() : ''
-			const queuedAt = typeof entry.queuedAt === 'string' ? entry.queuedAt : new Date().toISOString()
-
-			if (!token || !contestantId || !contestantName) {
-				continue
-			}
-
-			const payload = entry.payload
-			if (!isRecord(payload)) {
-				continue
-			}
-
-			const payloadContestantId = typeof payload.contestantId === 'string' ? payload.contestantId.trim() : ''
-			const payloadScores = payload.scores
-			const payloadContestantDetails = payload.contestantDetails
-
-			if (!payloadContestantId || !isRecord(payloadScores) || (payloadContestantDetails !== undefined && !isRecord(payloadContestantDetails))) {
-				continue
-			}
-
-			normalized.push({
-				id: typeof entry.id === 'string' && entry.id.trim().length > 0 ? entry.id : queuedScoreUploadId(token, contestantId),
-				token,
-				contestantId,
-				contestantName,
-				payload: {
-					contestantId: payloadContestantId,
-					scores: payloadScores as ScoreMatrix,
-					...(payloadContestantDetails !== undefined ? { contestantDetails: payloadContestantDetails as JudgeContestantDetailsMap } : {}),
-				},
-				queuedAt,
-			})
-		}
-
-		return normalized
-	} catch {
-		return []
-	}
-}
-
-function writeQueuedScoreUploads(queue: QueuedScoreUpload[]): void {
-	if (typeof window === 'undefined') {
-		return
-	}
-
-	if (queue.length === 0) {
-		window.localStorage.removeItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY)
-		return
-	}
-
-	window.localStorage.setItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY, JSON.stringify(queue))
-}
-
-function listQueuedScoreUploadsForToken(token: string): QueuedScoreUpload[] {
-	const normalizedToken = token.trim()
-	if (!normalizedToken) {
-		return []
-	}
-
-	return readQueuedScoreUploads()
-		.filter((entry) => entry.token === normalizedToken)
-		.sort((left, right) => new Date(left.queuedAt).getTime() - new Date(right.queuedAt).getTime())
-}
-
-function upsertQueuedScoreUpload(upload: QueuedScoreUpload): void {
-	const queue = readQueuedScoreUploads()
-	const existingIndex = queue.findIndex((entry) => entry.id === upload.id)
-
-	if (existingIndex >= 0) {
-		queue[existingIndex] = upload
-	} else {
-		queue.push(upload)
-	}
-
-	writeQueuedScoreUploads(queue)
-}
-
-function removeQueuedScoreUpload(uploadId: string): void {
-	const queue = readQueuedScoreUploads()
-	const nextQueue = queue.filter((entry) => entry.id !== uploadId)
-
-	if (nextQueue.length === queue.length) {
-		return
-	}
-
-	writeQueuedScoreUploads(nextQueue)
-}
-
-function shouldQueueScoreUpload(error: unknown): boolean {
-	if (typeof navigator !== 'undefined' && !navigator.onLine) {
-		return true
-	}
-
-	if (error instanceof TypeError) {
-		return true
-	}
-
-	if (error instanceof SubmitScoresError && typeof error.status === 'number' && error.status >= 500) {
-		return true
-	}
-
-	return false
-}
-
-function isServerUnreachableScoreUploadError(error: unknown): boolean {
-	if (typeof navigator !== 'undefined' && !navigator.onLine) {
-		return true
-	}
-
-	if (error instanceof TypeError) {
-		return true
-	}
-
-	if (error instanceof SubmitScoresError && typeof error.status === 'number' && [502, 503, 504].includes(error.status)) {
-		return true
-	}
-
-	if (error instanceof Error) {
-		const normalizedMessage = error.message.toLowerCase()
-		if (normalizedMessage.includes('upstream') || normalizedMessage.includes('unavailable') || normalizedMessage.includes('network')) {
-			return true
-		}
-	}
-
-	return false
-}
 
 interface JudgeScoringFormProps {
 	token: string
@@ -259,440 +34,6 @@ interface JudgeScoringFormProps {
 	submittedAt?: string
 	initialContestantId?: string
 	adminEditMode?: boolean
-}
-
-function round(value: number): number {
-	return Math.round(value * 1000) / 1000
-}
-
-function parseAndClampScore(rawValue: string, maxScore: number): number {
-	const parsedValue = Number.parseFloat(rawValue)
-	const finiteValue = Number.isFinite(parsedValue) ? parsedValue : 0
-	return Math.max(0, Math.min(finiteValue, maxScore))
-}
-
-function normalizeScoreInput(rawValue: string, maxScore: number): string {
-	if (rawValue.trim() === '') {
-		return ''
-	}
-
-	const parsedValue = Number.parseFloat(rawValue)
-	if (!Number.isFinite(parsedValue)) {
-		return '0'
-	}
-
-	if (parsedValue < 0) {
-		return '0'
-	}
-
-	if (parsedValue > maxScore) {
-		return String(round(maxScore))
-	}
-
-	return rawValue
-}
-
-function isIndividualCriterion(criterion: EventCriterion): boolean {
-	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
-		return true
-	}
-
-	return criterion.subCriteria.some((subCriterion) => {
-		const separatorIndex = subCriterion.name.indexOf(' - ')
-		if (separatorIndex === -1) {
-			return false
-		}
-
-		const memberLabel = subCriterion.name.slice(0, separatorIndex).trim()
-		return /(\d+)\s*$/.test(memberLabel)
-	})
-}
-
-function criterionScopeLabel(criterion: EventCriterion): string {
-	return isIndividualCriterion(criterion) ? 'Per Contestant (Individual)' : 'Group Criteria Only'
-}
-
-function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
-	const separatorIndex = name.indexOf(' - ')
-	if (separatorIndex === -1) {
-		return { memberLabel: 'Individual', displayName: name }
-	}
-
-	const memberLabel = name.slice(0, separatorIndex).trim()
-	const displayName = name.slice(separatorIndex + 3).trim()
-	return { memberLabel: memberLabel || 'Individual', displayName: displayName || name }
-}
-
-function memberIndexFromLabel(memberLabel: string): number | null {
-	const match = memberLabel.match(/(\d+)\s*$/)
-	if (!match) {
-		return null
-	}
-
-	const index = Number.parseInt(match[1], 10)
-	return Number.isFinite(index) && index > 0 ? index : null
-}
-
-function normalizedParticipants(contestant?: EventContestant): string[] {
-	if (!contestant?.participants) {
-		return []
-	}
-
-	return contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
-}
-
-function defaultMemberCountFromSubCriteria(subCriteria: EventCriterion['subCriteria']): number {
-	let maxMemberCount = 0
-
-	for (const subCriterion of subCriteria) {
-		const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterion.name).memberLabel)
-		if (memberIndex && memberIndex > maxMemberCount) {
-			maxMemberCount = memberIndex
-		}
-	}
-
-	return maxMemberCount > 0 ? maxMemberCount : 1
-}
-
-function allowedMemberCountForContestant(contestant: EventContestant | undefined, subCriteria: EventCriterion['subCriteria']): number {
-	const defaultMemberCount = defaultMemberCountFromSubCriteria(subCriteria)
-
-	if (!contestant) {
-		return defaultMemberCount
-	}
-
-	if (contestant.entryType === 'individual') {
-		return 1
-	}
-
-	const participants = normalizedParticipants(contestant)
-	return participants.length > 0 ? participants.length : defaultMemberCount
-}
-
-function resolvedMemberLabel(memberLabel: string, contestant?: EventContestant): string {
-	const participants = normalizedParticipants(contestant)
-	if (participants.length === 0) {
-		const memberIndex = memberIndexFromLabel(memberLabel)
-		if (contestant?.entryType === 'individual' && memberIndex === 1) {
-			return contestant.name
-		}
-
-		return memberLabel
-	}
-
-	const memberIndex = memberIndexFromLabel(memberLabel)
-	if (!memberIndex) {
-		return memberLabel
-	}
-
-	const participantName = participants[memberIndex - 1]?.trim()
-	return participantName && participantName.length > 0 ? participantName : memberLabel
-}
-
-function groupSubCriteriaByMember(subCriteria: EventCriterion['subCriteria'], contestant?: EventContestant): Array<{ memberLabel: string; memberDisplayLabel: string; items: Array<{ subCriterion: EventCriterion['subCriteria'][number]; displayName: string }> }> {
-	const allowedMemberCount = allowedMemberCountForContestant(contestant, subCriteria)
-	const grouped = new Map<string, Array<{ subCriterion: EventCriterion['subCriteria'][number]; displayName: string }>>()
-
-	for (const subCriterion of subCriteria) {
-		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
-		const memberIndex = memberIndexFromLabel(memberLabel)
-		if (memberIndex && memberIndex > allowedMemberCount) {
-			continue
-		}
-
-		const existing = grouped.get(memberLabel)
-		if (existing) {
-			existing.push({ subCriterion, displayName })
-		} else {
-			grouped.set(memberLabel, [{ subCriterion, displayName }])
-		}
-	}
-
-	return Array.from(grouped.entries()).map(([memberLabel, items]) => ({
-		memberLabel,
-		memberDisplayLabel: resolvedMemberLabel(memberLabel, contestant),
-		items,
-	}))
-}
-
-function applicableSubCriteriaForContestant(criterion: EventCriterion, contestant?: EventContestant): EventCriterion['subCriteria'] {
-	if (!isIndividualCriterion(criterion)) {
-		return criterion.subCriteria
-	}
-
-	const allowedMemberCount = allowedMemberCountForContestant(contestant, criterion.subCriteria)
-	return criterion.subCriteria.filter((subCriterion) => {
-		const memberIndex = memberIndexFromLabel(splitMemberCriterionName(subCriterion.name).memberLabel)
-		return !memberIndex || memberIndex <= allowedMemberCount
-	})
-}
-
-function hasPositiveDraftScore(scores: InputScoreMatrix, contestantId: string, criteria: EventCriterion[], ignoredSubCriterionIds: Set<string> = new Set()): boolean {
-	for (const criterion of criteria) {
-		for (const subCriterion of criterion.subCriteria) {
-			if (ignoredSubCriterionIds.has(subCriterion.id)) {
-				continue
-			}
-			const rawValue = scores[contestantId]?.[subCriterion.id] ?? ''
-			const parsedValue = Number.parseFloat(rawValue)
-			if (Number.isFinite(parsedValue) && parsedValue > 0) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-function detectInitiallyScoredContestants(contestants: EventContestant[], criteria: EventCriterion[], existingScores?: ScoreMatrix, existingSavedContestantIds?: string[]): Set<string> {
-	if (Array.isArray(existingSavedContestantIds) && existingSavedContestantIds.length > 0) {
-		const validContestantIds = new Set(contestants.map((contestant) => contestant.id))
-		const filteredSavedIds = existingSavedContestantIds.filter((contestantId) => validContestantIds.has(contestantId))
-		return new Set(filteredSavedIds)
-	}
-
-	if (!existingScores) {
-		return new Set<string>()
-	}
-
-	const initialScored = contestants
-		.filter((contestant) => {
-			for (const criterion of criteria) {
-				for (const subCriterion of criterion.subCriteria) {
-					const rawScore = existingScores[contestant.id]?.[subCriterion.id]
-					if (typeof rawScore === 'number' && rawScore > 0) {
-						return true
-					}
-				}
-			}
-
-			return false
-		})
-		.map((contestant) => contestant.id)
-
-	return new Set(initialScored)
-}
-
-function buildInputMatrix(contestants: EventContestant[], criteria: EventCriterion[], existingScores?: ScoreMatrix): InputScoreMatrix {
-	const matrix: InputScoreMatrix = {}
-
-	for (const contestant of contestants) {
-		matrix[contestant.id] = {}
-
-		for (const criterion of criteria) {
-			for (const subCriterion of criterion.subCriteria) {
-				const existingValue = existingScores?.[contestant.id]?.[subCriterion.id]
-				matrix[contestant.id][subCriterion.id] = typeof existingValue === 'number' ? String(existingValue) : '0'
-			}
-		}
-	}
-
-	return matrix
-}
-
-function buildInputContestantDetails(contestants: EventContestant[], existingContestantDetails?: JudgeContestantDetailsMap): InputContestantDetailsMap {
-	const details: InputContestantDetailsMap = {}
-
-	for (const contestant of contestants) {
-		const existing = existingContestantDetails?.[contestant.id]
-
-		details[contestant.id] = {
-			strand: typeof existing?.strand === 'string' ? existing.strand : '',
-			remark: typeof existing?.remark === 'string' ? existing.remark : '',
-			additionalInfo: typeof existing?.additionalInfo === 'string' ? existing.additionalInfo : '',
-		}
-	}
-
-	return details
-}
-
-function buildContestantDetailsPayload(contestantDetails: InputContestantDetailsMap): JudgeContestantDetailsMap {
-	const payload: JudgeContestantDetailsMap = {}
-
-	for (const [contestantId, details] of Object.entries(contestantDetails)) {
-		const strand = details.strand.trim()
-		const remark = details.remark.trim()
-		const additionalInfo = details.additionalInfo.trim()
-
-		if (!strand && !remark && !additionalInfo) {
-			continue
-		}
-
-		payload[contestantId] = {
-			...(strand ? { strand } : {}),
-			...(remark ? { remark } : {}),
-			...(additionalInfo ? { additionalInfo } : {}),
-		}
-	}
-
-	return payload
-}
-
-function formatDate(iso: string): string {
-	return new Intl.DateTimeFormat('en-US', {
-		dateStyle: 'medium',
-		timeStyle: 'short',
-	}).format(new Date(iso))
-}
-
-function migrateLegacyDirectRating(
-	rawCriteria: EventCriterion[],
-	rawScores: ScoreMatrix | undefined,
-	directRatingConfig: DirectRatingConfig | undefined
-): { criteria: EventCriterion[]; scores: ScoreMatrix | undefined } {
-	const subCriteriaList = rawCriteria.flatMap((c) => c.subCriteria)
-	const oldAveId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
-	const oldNoatId = subCriteriaList.find((sc) => sc.name.toLowerCase() === 'noat')?.id
-	const oldInterviewSubCriterion = subCriteriaList.find((sc) => !sc.name.toLowerCase().includes('ave') && !sc.name.toLowerCase().includes('gpa') && sc.name.toLowerCase() !== 'noat')
-
-	if (!oldInterviewSubCriterion || !oldAveId || !oldNoatId) {
-		return { criteria: rawCriteria, scores: rawScores }
-	}
-
-	const hasNewFields = subCriteriaList.some((sc) => sc.name.toLowerCase().includes('communication') || sc.name.toLowerCase().includes('personality'))
-	if (hasNewFields) {
-		if (!rawScores) {
-			return { criteria: rawCriteria, scores: undefined }
-		}
-
-		const newInterviewContentId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('content') || sc.name.toLowerCase().includes('course'))?.id
-		const newInterviewCommId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('communication'))?.id
-		const newInterviewPersId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('personality'))?.id
-		const newInterviewInterestId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('interest') || sc.name.toLowerCase().includes('commitment'))?.id
-		const newInterviewSpecialId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('special') || sc.name.toLowerCase().includes('talents'))?.id
-		
-		const aveGpaId = subCriteriaList.find((sc) => sc.name.toLowerCase().includes('ave') || sc.name.toLowerCase().includes('gpa'))?.id
-		const noatId = subCriteriaList.find((sc) => sc.name.toLowerCase() === 'noat')?.id
-
-		const knownIds = new Set([newInterviewContentId, newInterviewCommId, newInterviewPersId, newInterviewInterestId, newInterviewSpecialId, aveGpaId, noatId].filter(Boolean))
-
-		const migratedScores: ScoreMatrix = {}
-		
-		for (const [contestantId, contestantScores] of Object.entries(rawScores)) {
-			migratedScores[contestantId] = { ...contestantScores }
-
-			// Find old interview score ID (explicit legacy key, or fallback to first unknown key)
-			let oldInterviewId: string | undefined = 'legacy-interview'
-			if (contestantScores[oldInterviewId] === undefined) {
-				oldInterviewId = Object.keys(contestantScores).find((key) => !knownIds.has(key) && key !== 'legacy-aveGpa' && key !== 'legacy-noat')
-			}
-			const oldScore = oldInterviewId ? Number(contestantScores[oldInterviewId]) : NaN
-
-			const alreadyMigrated = newInterviewCommId ? contestantScores[newInterviewCommId] !== undefined : false
-
-			if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
-				const contentMax = directRatingConfig?.maxScores?.interviewContent ?? 40
-				const commMax = directRatingConfig?.maxScores?.interviewComm ?? 20
-				const persMax = directRatingConfig?.maxScores?.interviewPers ?? 20
-				const interestMax = directRatingConfig?.maxScores?.interviewInterest ?? 10
-				const specialMax = directRatingConfig?.maxScores?.interviewSpecial ?? 10
-				const totalMax = contentMax + commMax + persMax + interestMax + specialMax
-
-				if (totalMax > 0 && newInterviewContentId && newInterviewCommId && newInterviewPersId && newInterviewInterestId && newInterviewSpecialId) {
-					const contentScore = round((oldScore * contentMax) / totalMax)
-					const commScore = round((oldScore * commMax) / totalMax)
-					const persScore = round((oldScore * persMax) / totalMax)
-					const interestScore = round((oldScore * interestMax) / totalMax)
-					const specialScore = round(oldScore - (contentScore + commScore + persScore + interestScore))
-
-					migratedScores[contestantId][newInterviewContentId] = contentScore
-					migratedScores[contestantId][newInterviewCommId] = commScore
-					migratedScores[contestantId][newInterviewPersId] = persScore
-					migratedScores[contestantId][newInterviewInterestId] = interestScore
-					migratedScores[contestantId][newInterviewSpecialId] = specialScore
-				}
-			}
-
-			// Map old AVE/GPA and NOAT to new UUIDs
-			if (aveGpaId && contestantScores['legacy-aveGpa'] !== undefined && contestantScores[aveGpaId] === undefined) {
-				migratedScores[contestantId][aveGpaId] = contestantScores['legacy-aveGpa']
-			}
-			if (noatId && contestantScores['legacy-noat'] !== undefined && contestantScores[noatId] === undefined) {
-				migratedScores[contestantId][noatId] = contestantScores['legacy-noat']
-			}
-		}
-
-		return { criteria: rawCriteria, scores: migratedScores }
-	}
-
-	// Calculate the split manually from the old subcriterion if config doesn't exist, otherwise use config
-	const interviewContentMax = directRatingConfig?.maxScores?.interviewContent ?? round((oldInterviewSubCriterion.maxScore * 8) / 20)
-	const interviewCommMax = directRatingConfig?.maxScores?.interviewComm ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
-	const interviewPersMax = directRatingConfig?.maxScores?.interviewPers ?? round((oldInterviewSubCriterion.maxScore * 4) / 20)
-	const interviewInterestMax = directRatingConfig?.maxScores?.interviewInterest ?? round((oldInterviewSubCriterion.maxScore * 2) / 20)
-	const interviewSpecialMax = directRatingConfig?.maxScores?.interviewSpecial ?? round(oldInterviewSubCriterion.maxScore - (interviewContentMax + interviewCommMax + interviewPersMax + interviewInterestMax))
-
-	const normalizedConfig = normalizeDirectRatingConfig({
-		...(directRatingConfig ?? {}),
-		maxScores: {
-			...(directRatingConfig?.maxScores ?? {}),
-			aveGpa: directRatingConfig?.maxScores?.aveGpa ?? subCriteriaList.find((sc) => sc.id === oldAveId)?.maxScore ?? 100,
-			noat: directRatingConfig?.maxScores?.noat ?? subCriteriaList.find((sc) => sc.id === oldNoatId)?.maxScore ?? 100,
-			interviewContent: interviewContentMax,
-			interviewComm: interviewCommMax,
-			interviewPers: interviewPersMax,
-			interviewInterest: interviewInterestMax,
-			interviewSpecial: interviewSpecialMax,
-		}
-	})
-
-	const migratedCriteria: EventCriterion[] = [
-		{
-			id: 'legacy-migrated-criterion',
-			name: 'Direct Rating',
-			maxScore: Object.values(normalizedConfig.maxScores).reduce((sum, score) => sum + score, 0),
-			subCriteria: DIRECT_SCORE_FIELD_ORDER.map((fieldKey) => ({
-				id: `legacy-migrated-${fieldKey}`,
-				name: DIRECT_SCORE_FIELD_LABELS[fieldKey],
-				maxScore: normalizedConfig.maxScores[fieldKey],
-			})),
-		},
-	]
-
-	if (!rawScores) {
-		return { criteria: migratedCriteria, scores: undefined }
-	}
-
-	const migratedScores: ScoreMatrix = {}
-
-	for (const [contestantId, contestantScores] of Object.entries(rawScores)) {
-		migratedScores[contestantId] = { ...contestantScores }
-
-		const alreadyMigrated = contestantScores['legacy-migrated-interviewComm'] !== undefined
-		const oldScore = Number(contestantScores[oldInterviewSubCriterion.id])
-
-		if (!alreadyMigrated && Number.isFinite(oldScore) && oldScore > 0) {
-			const contentMax = normalizedConfig.maxScores.interviewContent
-			const commMax = normalizedConfig.maxScores.interviewComm
-			const persMax = normalizedConfig.maxScores.interviewPers
-			const interestMax = normalizedConfig.maxScores.interviewInterest
-			const specialMax = normalizedConfig.maxScores.interviewSpecial
-			const totalMax = contentMax + commMax + persMax + interestMax + specialMax
-
-			if (totalMax > 0) {
-				const contentScore = round((oldScore * contentMax) / totalMax)
-				const commScore = round((oldScore * commMax) / totalMax)
-				const persScore = round((oldScore * persMax) / totalMax)
-				const interestScore = round((oldScore * interestMax) / totalMax)
-				const specialScore = round(oldScore - (contentScore + commScore + persScore + interestScore))
-
-				migratedScores[contestantId]['legacy-migrated-interviewContent'] = contentScore
-				migratedScores[contestantId]['legacy-migrated-interviewComm'] = commScore
-				migratedScores[contestantId]['legacy-migrated-interviewPers'] = persScore
-				migratedScores[contestantId]['legacy-migrated-interviewInterest'] = interestScore
-				migratedScores[contestantId]['legacy-migrated-interviewSpecial'] = specialScore
-			}
-		}
-
-		if (oldAveId && contestantScores[oldAveId] !== undefined && contestantScores['legacy-migrated-aveGpa'] === undefined) {
-			migratedScores[contestantId]['legacy-migrated-aveGpa'] = contestantScores[oldAveId]
-		}
-		if (oldNoatId && contestantScores[oldNoatId] !== undefined && contestantScores['legacy-migrated-noat'] === undefined) {
-			migratedScores[contestantId]['legacy-migrated-noat'] = contestantScores[oldNoatId]
-		}
-	}
-
-	return { criteria: migratedCriteria, scores: migratedScores }
 }
 
 export function JudgeScoringForm({ token, eventTitle, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
@@ -734,6 +75,38 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 	const [lastSubmittedAt, setLastSubmittedAt] = useState<string | undefined>(submittedAt)
 	const [queuedUploads, setQueuedUploads] = useState<QueuedScoreUpload[]>([])
 	const [isAutoSyncing, setIsAutoSyncing] = useState(false)
+	// D30: unsaved scores are kept on this device as a draft per contestant (lib/judge/draft-state.ts
+	// and draft-store.ts). The baselines are the saved rows as last known from the server; a
+	// contestant the judge changed (or whose draft was restored) is unsaved while it differs.
+	const [draftStatus, setDraftStatus] = useState<DraftStatus>('none')
+	const [loadedBaselines] = useState(() => initialBaselines(contestants, existingScores, buildInputContestantDetails(contestants, existingContestantDetails)))
+	const baselinesRef = useRef<Record<string, ContestantBaseline>>(loadedBaselines)
+	const latestStateRef = useRef({ scores, contestantDetails, queuedCount: 0 })
+	const touchedContestantIdsRef = useRef(new Set<string>())
+	const pendingDraftIdsRef = useRef(new Set<string>())
+	const draftOutcomesRef = useRef(new Map<string, DraftOutcome>())
+	const draftTimerRef = useRef<number | null>(null)
+	const draftsRestoredRef = useRef(false)
+	// Review P2: for a contestant whose baseline came from this page's upload of a queued save, that
+	// save's queue time, until a save confirmed straight away sets the baseline instead. Another tab's
+	// draft of the contestant is kept only if it follows that very save (lib/judge/draft-state.ts
+	// storedDraftToKeep): once uploaded, the save is no longer in the queue to tell it by.
+	const uploadedQueuedAtRef = useRef(new Map<string, string>())
+	// Review of the D30 fixes (other tabs of the judge link, or the admin edit tab, on one device):
+	// when each contestant's form row last took a value here (the judge's change, this page's own
+	// queued save, or the draft or queued row restored into it), and the latest queued save of it this
+	// page saw (kept after it leaves the queue, until a save confirmed straight away). A save queued
+	// later elsewhere is newer than the form: the form writes no draft over it and yields to it once
+	// this page uploads it (lib/judge/draft-state.ts ownDraftToKeep, formFollowsSave); drafts of later
+	// changes name that save (also after another tab uploaded it unbeknown to this page).
+	const formSinceRef = useRef(new Map<string, number>())
+	const seenSaveRef = useRef(new Map<string, QueuedSave>())
+	// Admin edit mode (?fromAdmin=1) keeps its drafts apart from the judge's own, so on a shared
+	// device neither brings back the other's unsaved changes.
+	const draftToken = adminEditMode ? `${token}:admin` : token
+	// The event's own cells (before the legacy migration): only these tell whether a kept draft
+	// is stale (lib/judge/draft-store.ts loadDraft).
+	const rawSubCriterionIds = useMemo(() => new Set(rawCriteria.flatMap((criterion) => criterion.subCriteria.map((subCriterion) => subCriterion.id))), [rawCriteria])
 	const activeContestant = contestants[activeContestantIndex]
 	const activeContestantId = activeContestant?.id ?? ''
 	const normalizedLegend = useMemo(() => normalizeRubricLegend(rubricLegend), [rubricLegend])
@@ -978,6 +351,125 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		}, 0)
 	}, [activeContestant, activeContestantId, criteria, scores])
 
+	const contestantsById = useMemo(() => new Map(contestants.map((contestant) => [contestant.id, contestant])), [contestants])
+	const lockedSubCriterionIds = useCallback((contestantId: string): ReadonlySet<string> => (directNoatField && noatScoreByContestantId.has(contestantId) ? new Set([directNoatField.subCriterionId]) : new Set<string>()), [directNoatField, noatScoreByContestantId])
+
+	// D30: whether a contestant has unsaved changes. Only a contestant the judge changed (or whose
+	// draft was restored) can have them. It reads the latest committed state (latestStateRef), so
+	// it also answers from timers and page events.
+	const isUnsaved = useCallback(
+		(contestantId: string): boolean => {
+			const contestant = contestantsById.get(contestantId)
+			if (!contestant || !touchedContestantIdsRef.current.has(contestantId)) return false
+			const latest = latestStateRef.current
+			return hasUnsavedChanges(criteria, contestant, latest.scores[contestantId], latest.contestantDetails[contestantId], baselinesRef.current[contestantId], lockedSubCriterionIds(contestantId))
+		},
+		[contestantsById, criteria, lockedSubCriterionIds],
+	)
+
+	// D30: writes the draft of every contestant changed since the last write, or clears it when the
+	// contestant holds nothing unsaved any more (lib/judge/draft-state.ts draftToKeep: a save still
+	// queued for it counts too). A full or blocked storage never stops scoring: the draft status says
+	// so (Task 5's "Draft kept on this device" label) and the leave-page warning stays. Review F3: the
+	// contestant stays pending, so the next flush writes it again (the next change, the page hidden or
+	// unloading, a sync that freed space), and the older stored draft stays meanwhile, as the best
+	// copy this device has (lib/judge/draft-state.ts writePendingDrafts). A contestant this tab never
+	// changed can still have a draft on this device, from another tab of the same judge link: it is
+	// rebased onto the new baseline only while it is current against it and the save still queued
+	// (or just uploaded), and cleared otherwise, never rebased into a draft a later load would trust
+	// (review P1/P2: lib/judge/draft-state.ts storedDraftToKeep). A contestant this tab changed is
+	// written only while its form follows the save of it still queued, or the latest one this page saw
+	// (that save is named in the draft, also after it left the queue); a form older than a save queued
+	// in another tab writes nothing over it (lib/judge/draft-state.ts ownDraftToKeep).
+	const flushDraftWrites = useCallback(() => {
+		if (draftTimerRef.current !== null) {
+			window.clearTimeout(draftTimerRef.current)
+			draftTimerRef.current = null
+		}
+		if (pendingDraftIdsRef.current.size === 0) return
+
+		const storage = browserDraftStorage()
+		const latest = latestStateRef.current
+		const queue = listQueuedScoreUploadsForToken(token)
+		const report = writePendingDrafts(
+			storage,
+			draftToken,
+			{ pending: pendingDraftIdsRef.current, outcomes: draftOutcomesRef.current },
+			(contestantId) => {
+				const contestant = contestantsById.get(contestantId)
+				const baseline = baselinesRef.current[contestantId]
+				const queued = queuedSaveBaseline(rawCriteria, directRatingConfig, contestantId, queue, baseline)
+				const locked = lockedSubCriterionIds(contestantId)
+				if (queued) seenSaveRef.current.set(contestantId, queued)
+
+				if (!touchedContestantIdsRef.current.has(contestantId)) {
+					const stored = storage ? readContestantDraft(storage, draftToken, contestantId) : null
+					if (!stored) return null
+					return { draft: contestant ? storedDraftToKeep(criteria, contestant, stored, baseline, queued, uploadedQueuedAtRef.current.get(contestantId), locked, rawSubCriterionIds) : null, own: false }
+				}
+				if (!contestant) return { draft: null, own: true }
+				return ownDraftToKeep(criteria, contestant, { values: latest.scores[contestantId] ?? {}, details: latest.contestantDetails[contestantId] }, formSinceRef.current.get(contestantId), baseline, queued, seenSaveRef.current.get(contestantId), locked)
+			},
+			new Date(),
+		)
+		// A contestant whose draft is cleared holds nothing unsaved; one whose clear failed stays this
+		// page's until a retry clears it.
+		for (const contestantId of report.cleared) touchedContestantIdsRef.current.delete(contestantId)
+		for (const { error } of report.failed) console.warn(`Unsaved scores could not be kept on this device (${error}).`)
+		setDraftStatus(summarizeDraftStatus(draftOutcomesRef.current))
+	}, [contestantsById, criteria, directRatingConfig, draftToken, lockedSubCriterionIds, rawCriteria, rawSubCriterionIds, token])
+
+	const scheduleDraftWrite = useCallback(() => {
+		if (draftTimerRef.current !== null) window.clearTimeout(draftTimerRef.current)
+		draftTimerRef.current = window.setTimeout(flushDraftWrites, DRAFT_WRITE_DELAY_MS)
+	}, [flushDraftWrites])
+
+	// A change the judge made (never the NOAT prefill or the strand and remark auto-fill).
+	const noteJudgeChange = useCallback(
+		(contestantId: string): void => {
+			touchedContestantIdsRef.current.add(contestantId)
+			formSinceRef.current.set(contestantId, Date.now())
+			pendingDraftIdsRef.current.add(contestantId)
+			scheduleDraftWrite()
+		},
+		[scheduleDraftWrite],
+	)
+
+	// D30: the server confirmed a save of this contestant (a direct save, or a queued one uploaded:
+	// then with its queue time). Its row becomes the baseline; then its draft is cleared, or kept
+	// against the new baseline when the judge changed it again since. An upload is re-checked on the
+	// next write, so a draft being restored at the same moment has reached the form first. Review of
+	// the D30 fixes: an uploaded save queued after this page's form of the contestant last took a value
+	// (in another tab of the judge link, or the admin edit tab) is newer than the form, so the form
+	// yields to it: it shows the uploaded row, and the contestant is settled like one this page never
+	// changed (its draft here is cleared, or kept only if it follows that save).
+	const confirmSavedScores = useCallback(
+		(contestantId: string, payload: SubmitScoresRequestBody, writeNow: boolean, uploadedQueuedAt?: string) => {
+			const baseline = baselineAfterSave(rawCriteria, directRatingConfig, contestantId, payload, baselinesRef.current[contestantId])
+			baselinesRef.current = { ...baselinesRef.current, [contestantId]: baseline }
+			if (uploadedQueuedAt === undefined) {
+				uploadedQueuedAtRef.current.delete(contestantId)
+				seenSaveRef.current.delete(contestantId)
+			} else {
+				uploadedQueuedAtRef.current.set(contestantId, uploadedQueuedAt)
+				seenSaveRef.current.set(contestantId, { ...baseline, queuedAt: uploadedQueuedAt })
+				if (touchedContestantIdsRef.current.has(contestantId) && !formFollowsSave(formSinceRef.current.get(contestantId), uploadedQueuedAt)) {
+					const row = savedFormRow(criteria, baseline)
+					setScores((previous) => ({ ...previous, [contestantId]: restoredRow(criteria, previous[contestantId], row.values, lockedSubCriterionIds(contestantId)) }))
+					setContestantDetails((previous) => ({ ...previous, [contestantId]: restoredDetails(previous[contestantId], row.details) }))
+					touchedContestantIdsRef.current.delete(contestantId)
+					draftOutcomesRef.current.delete(contestantId)
+					formSinceRef.current.set(contestantId, Date.parse(uploadedQueuedAt))
+					setDraftStatus(summarizeDraftStatus(draftOutcomesRef.current))
+				}
+			}
+			pendingDraftIdsRef.current.add(contestantId)
+			if (writeNow) flushDraftWrites()
+			else scheduleDraftWrite()
+		},
+		[criteria, directRatingConfig, flushDraftWrites, lockedSubCriterionIds, rawCriteria, scheduleDraftWrite],
+	)
+
 	function updateScore(contestantId: string, subCriterionId: string, value: string, maxScore: number): void {
 		const normalizedValue = normalizeScoreInput(value, maxScore)
 
@@ -988,6 +480,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				[subCriterionId]: normalizedValue,
 			},
 		}))
+		noteJudgeChange(contestantId)
 	}
 
 	function updateContestantDetailsField(contestantId: string, field: 'strand' | 'remark' | 'additionalInfo', value: string): void {
@@ -998,6 +491,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				[field]: value,
 			},
 		}))
+		noteJudgeChange(contestantId)
 	}
 
 	function goToContestant(index: number): void {
@@ -1015,6 +509,77 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 	const refreshQueuedUploads = useCallback(() => {
 		setQueuedUploads(listQueuedScoreUploadsForToken(token))
 	}, [token])
+
+	// What this device kept for the judge link, read after mount (never during render, so hydration
+	// sees the server's values): the queued saves, then, once, the drafts loadDraft still trusts
+	// (it drops a draft whose contestant was saved since it began, unless the save still queued for
+	// it here replaces that row: review F2). Each is checked again first: one that holds nothing
+	// unsaved any more (the same values saved elsewhere, changes only in deleted cells) is cleared,
+	// the others are rewritten against today's baseline and queue, so a later reload judges them by
+	// the row the server holds now. A contestant with a queued save but no such draft shows the
+	// queued row while it differs from the server's (lib/judge/draft-state.ts queuedRowToShow), and
+	// a draft of it is written. A restored contestant is unsaved again.
+	const restoreDeviceState = useCallback(() => {
+		refreshQueuedUploads()
+		if (draftsRestoredRef.current) return
+		draftsRestoredRef.current = true
+		const storage = browserDraftStorage()
+		const queue = listQueuedScoreUploadsForToken(token)
+		const queuedBaselines = new Map<string, QueuedSave>()
+		for (const { contestantId } of queue) {
+			const queued = queuedSaveBaseline(rawCriteria, directRatingConfig, contestantId, queue, baselinesRef.current[contestantId])
+			if (!queued) continue
+			queuedBaselines.set(contestantId, queued)
+			seenSaveRef.current.set(contestantId, queued)
+		}
+
+		const restored = new Map<string, Pick<ContestantDraft, 'values' | 'details'>>()
+		if (storage) {
+			const queuedRows = Object.fromEntries([...queuedBaselines].map(([contestantId, queued]) => [contestantId, { row: queued.scores, queuedAt: queued.queuedAt }]))
+			for (const [contestantId, draft] of Object.entries(loadDraft(storage, draftToken, existingScores, rawSubCriterionIds, queuedRows))) {
+				const contestant = contestantsById.get(contestantId)
+				if (!contestant) continue
+				const rebased = draftToKeep(criteria, contestant, draft, baselinesRef.current[contestantId], queuedBaselines.get(contestantId), lockedSubCriterionIds(contestantId))
+				if (!rebased) {
+					clearContestantDraft(storage, draftToken, contestantId)
+					continue
+				}
+				// A failed rewrite leaves the draft as loadDraft trusted it, and is tried again on the next write.
+				if (!saveContestantDraft(storage, draftToken, contestantId, rebased, new Date()).ok) pendingDraftIdsRef.current.add(contestantId)
+				restored.set(contestantId, draft)
+				draftOutcomesRef.current.set(contestantId, 'kept')
+				// The form takes the draft as it was written (a draft kept while a save is queued was
+				// written after that save).
+				const queuedAt = queuedBaselines.get(contestantId)?.queuedAt
+				formSinceRef.current.set(contestantId, Math.max(Date.parse(draft.updatedAt) || 0, queuedAt === undefined ? 0 : Date.parse(queuedAt) || 0))
+			}
+		}
+		for (const [contestantId, queued] of queuedBaselines) {
+			const contestant = contestantsById.get(contestantId)
+			if (!contestant || restored.has(contestantId)) continue
+			const row = queuedRowToShow(criteria, contestant, queue, baselinesRef.current[contestantId], lockedSubCriterionIds(contestantId))
+			if (!row) continue
+			restored.set(contestantId, row)
+			pendingDraftIdsRef.current.add(contestantId)
+			formSinceRef.current.set(contestantId, Date.parse(queued.queuedAt))
+		}
+		if (restored.size === 0) return
+
+		setScores((previous) => {
+			const next = { ...previous }
+			for (const [contestantId, draft] of restored) next[contestantId] = restoredRow(criteria, previous[contestantId], draft.values, lockedSubCriterionIds(contestantId))
+			return next
+		})
+		setContestantDetails((previous) => {
+			const next = { ...previous }
+			for (const [contestantId, draft] of restored) next[contestantId] = restoredDetails(previous[contestantId], draft.details)
+			return next
+		})
+		for (const contestantId of restored.keys()) touchedContestantIdsRef.current.add(contestantId)
+		setDraftStatus(summarizeDraftStatus(draftOutcomesRef.current))
+		// After the restored rows reached the form (the write reads them from latestStateRef).
+		if (pendingDraftIdsRef.current.size > 0) scheduleDraftWrite()
+	}, [contestantsById, criteria, directRatingConfig, draftToken, existingScores, lockedSubCriterionIds, rawCriteria, rawSubCriterionIds, refreshQueuedUploads, scheduleDraftWrite, token])
 
 	const markContestantsAsSaved = useCallback((contestantIds: string[]) => {
 		if (contestantIds.length === 0) {
@@ -1075,6 +640,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 
 			const syncedContestantIds: string[] = []
 			let syncedCount = 0
+			let removedCount = 0
 			let latestSubmittedAtValue: string | undefined
 			let permanentErrorMessage: string | null = null
 
@@ -1083,6 +649,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 					try {
 						const responseBody = await submitPayload(pendingUpload.payload)
 						removeQueuedScoreUpload(pendingUpload.id)
+						removedCount += 1
+						confirmSavedScores(pendingUpload.contestantId, pendingUpload.payload, false, pendingUpload.queuedAt)
 						syncedContestantIds.push(pendingUpload.contestantId)
 						syncedCount += 1
 
@@ -1092,6 +660,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 					} catch (syncError) {
 						if (syncError instanceof SubmitScoresError && typeof syncError.status === 'number' && syncError.status >= 400 && syncError.status < 500) {
 							removeQueuedScoreUpload(pendingUpload.id)
+							removedCount += 1
 
 							if (!permanentErrorMessage) {
 								permanentErrorMessage = `Auto-upload skipped ${pendingUpload.contestantName}: ${syncError.message}`
@@ -1107,6 +676,8 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				refreshQueuedUploads()
 				setIsAutoSyncing(false)
 				autoSyncInProgressRef.current = false
+				// Review F3: the uploads freed space on this device, so draft writes it refused are tried again.
+				if (removedCount > 0 && pendingDraftIdsRef.current.size > 0) scheduleDraftWrite()
 			}
 
 			if (syncedContestantIds.length > 0) {
@@ -1124,18 +695,24 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				setError(permanentErrorMessage)
 			}
 		},
-		[markContestantsAsSaved, refreshQueuedUploads, submitPayload, token],
+		[confirmSavedScores, markContestantsAsSaved, refreshQueuedUploads, scheduleDraftWrite, submitPayload, token],
 	)
 
 	useEffect(() => {
-		refreshQueuedUploads()
+		restoreDeviceState()
 		void syncQueuedUploads(false)
-	}, [refreshQueuedUploads, syncQueuedUploads])
+	}, [restoreDeviceState, syncQueuedUploads])
 
 	useEffect(() => {
-		if (queuedUploads.length === 0) return
+		latestStateRef.current = { scores, contestantDetails, queuedCount: queuedUploads.length }
+	}, [contestantDetails, queuedUploads.length, scores])
 
+	// D30 (and B12's duplicate): the form's one leave-page warning, registered once. It asks while
+	// saves are queued or a contestant has unsaved changes, and not otherwise.
+	useEffect(() => {
 		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+			const anyUnsaved = [...touchedContestantIdsRef.current].some((contestantId) => isUnsaved(contestantId))
+			if (latestStateRef.current.queuedCount === 0 && !anyUnsaved) return
 			e.preventDefault()
 			e.returnValue = ''
 		}
@@ -1144,7 +721,24 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		return () => {
 			window.removeEventListener('beforeunload', handleBeforeUnload)
 		}
-	}, [queuedUploads.length])
+	}, [isUnsaved])
+
+	// D30: what the write delay has not written yet is written when the page is hidden or unloads.
+	useEffect(() => {
+		const handlePageHide = () => {
+			flushDraftWrites()
+		}
+		const handleVisibilityChange = () => {
+			if (document.visibilityState === 'hidden') flushDraftWrites()
+		}
+
+		window.addEventListener('pagehide', handlePageHide)
+		document.addEventListener('visibilitychange', handleVisibilityChange)
+		return () => {
+			window.removeEventListener('pagehide', handlePageHide)
+			document.removeEventListener('visibilitychange', handleVisibilityChange)
+		}
+	}, [flushDraftWrites])
 
 	// Auto-fill strand and additional remark from contestant data when switching contestants
 	useEffect(() => {
@@ -1187,20 +781,6 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 			window.removeEventListener('online', handleOnline)
 		}
 	}, [syncQueuedUploads])
-
-	useEffect(() => {
-		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-			if (queuedUploads.length > 0) {
-				e.preventDefault()
-				e.returnValue = ''
-			}
-		}
-
-		window.addEventListener('beforeunload', handleBeforeUnload)
-		return () => {
-			window.removeEventListener('beforeunload', handleBeforeUnload)
-		}
-	}, [queuedUploads.length])
 
 	useEffect(() => {
 		if (queuedUploads.length === 0) {
@@ -1291,6 +871,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 		try {
 			const responseBody = await submitPayload(requestPayload)
 			removeQueuedScoreUpload(queuedScoreUploadId(token, activeContestant.id))
+			confirmSavedScores(activeContestant.id, requestPayload, true)
 			refreshQueuedUploads()
 
 			if (responseBody.submittedAt) {
@@ -1314,15 +895,29 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 				const serverUnreachable = isServerUnreachableScoreUploadError(submitError)
 				const retryLabel = serverUnreachable ? 'the server is reachable' : 'internet is available'
 
-				upsertQueuedScoreUpload({
-					id: queuedScoreUploadId(token, activeContestant.id),
-					token,
-					contestantId: activeContestant.id,
-					contestantName: activeContestant.name,
-					payload: requestPayload,
-					queuedAt: new Date().toISOString(),
-				})
+				const queuedAt = new Date().toISOString()
+				try {
+					upsertQueuedScoreUpload({
+						id: queuedScoreUploadId(token, activeContestant.id),
+						token,
+						contestantId: activeContestant.id,
+						contestantName: activeContestant.name,
+						payload: requestPayload,
+						queuedAt,
+					})
+				} catch {
+					// Neither uploaded nor kept on this device (its storage is full or blocked): the judge
+					// is told and stays on the contestant, whose scores stay unsaved (the leave-page
+					// warning holds).
+					setError(`This save could not be kept on this device. Keep this page open and save again when ${retryLabel}.`)
+					return
+				}
 				refreshQueuedUploads()
+				// D30: the draft also remembers the row this queued save leaves once it uploads, and the
+				// form follows this save (it took the saved values when it was queued).
+				formSinceRef.current.set(activeContestant.id, Date.parse(queuedAt))
+				pendingDraftIdsRef.current.add(activeContestant.id)
+				flushDraftWrites()
 				setError(null)
 
 				if (adminEditMode) {
@@ -1739,7 +1334,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 						<button suppressHydrationWarning type='button' onClick={() => goToContestant(activeContestantIndex + 1)} disabled={activeContestantIndex >= contestants.length - 1} className='rounded-full border border-cyan-300 bg-white px-5 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50'>
 							Next Entry
 						</button>
-						<button suppressHydrationWarning type='submit' disabled={isSaving} data-testid='save-scores' className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
+						<button suppressHydrationWarning type='submit' disabled={isSaving} data-testid='save-scores' data-draft-status={draftStatus} className='rounded-full bg-cyan-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
 							{isSaving ? `Saving ${activeContestant.name}...` : `Save ${activeContestant.name} Scores`}
 						</button>
 					</div>
