@@ -1,36 +1,105 @@
-import type { EventContestant } from '@/lib/types'
+import { Card } from '@/components/ui/card'
+import Icon from '@/components/ui/icon'
+import Textarea from '@/components/ui/textarea'
+import { isOverLimit, REMARK_LIMIT, remarkLength } from '@/lib/judge/remark'
 
-// Stage 5 Task 5 Step 5: the Additional Remark box, moved verbatim out of
-// components/judge-scoring-form.tsx. Step 10 rebuilds it as Section C.
+const LIMIT_TEXT = REMARK_LIMIT.toLocaleString('en-US')
+
+/**
+ * Section C, the entry's additional remark (Stage 5 Task 5, spec §6, ruling R14): one remark per
+ * entry, never per examinee, in each view's own card: Unified (C-1 "Section C: Remarks", TA-1),
+ * Group only (C-7 "Remarks", TA-2) and Individual only and direct (C-8 "Remarks for {entry}", TA-3).
+ * The field keeps the hook additional-remark and has no maxLength: 2,000 characters are counted,
+ * never enforced (the server keeps the first 2,000 after trimming). The hint is worked out from the
+ * whole details triple (remarkHint), so it says when an emptied remark would stay saved (B45).
+ */
 export function RemarksSection({
-	activeContestant,
-	activeContestantId,
-	contestantDetails,
-	updateContestantDetailsField,
+	variant,
+	contestantName,
+	value,
+	laptopNote,
+	multiExaminee,
+	hint,
+	onChange,
 }: {
-	activeContestant: EventContestant
-	activeContestantId: string
-	contestantDetails: Record<string, { strand: string; remark: string; additionalInfo: string }>
-	updateContestantDetailsField: (contestantId: string, field: 'strand' | 'remark' | 'additionalInfo', value: string) => void
+	variant: 'unified' | 'group' | 'individual'
+	contestantName: string
+	value: string
+	laptopNote: boolean
+	multiExaminee: boolean
+	hint: { tone: 'muted' | 'warning'; text: string }
+	onChange: (value: string) => void
 }) {
+	const length = remarkLength(value)
+	const counter = (
+		<span data-testid='remark-counter' className={isOverLimit(value) ? 'text-rose-700 font-semibold' : 'text-slate-500'}>
+			{length.toLocaleString('en-US')} / {LIMIT_TEXT} {variant === 'unified' ? 'chars' : 'characters'}
+		</span>
+	)
+	const hintNode = (
+		<span data-testid='remark-hint' className={hint.tone === 'warning' ? 'flex items-center gap-1 text-amber-700' : 'text-slate-500'}>
+			{hint.tone === 'warning' ? <Icon name='info' className='text-[15px] shrink-0' /> : null}
+			<span>{hint.text}</span>
+		</span>
+	)
+	const field = (
+		<>
+			{laptopNote ? <p className='font-body-sm text-body-sm text-slate-500'>Auto-filled from laptop availability — you may overwrite</p> : null}
+			<Textarea
+				variant={variant}
+				label='Additional remark'
+				data-testid='additional-remark'
+				suppressHydrationWarning
+				value={value}
+				onChange={(event) => onChange(event.target.value)}
+				placeholder='Enter any additional remark here...'
+				hint={hintNode}
+				counter={counter}
+			/>
+		</>
+	)
+	const optional = <span className='font-label-sm text-label-sm text-slate-500'>Optional</span>
+
+	if (variant === 'unified') {
+		return (
+			<Card variant='unified-section' as='section'>
+				<div className='flex items-center justify-between gap-space-sm'>
+					<h3 className='flex items-center gap-space-xs font-headline-sm text-headline-sm text-slate-900 font-bold'>
+						<Icon name='rate_review' className='text-[20px] text-emerald-600' />
+						Section C: Remarks
+					</h3>
+					{optional}
+				</div>
+				{field}
+			</Card>
+		)
+	}
+
+	if (variant === 'group') {
+		return (
+			<Card variant='group-remarks' as='section'>
+				<div className='flex items-center justify-between gap-space-sm'>
+					<h3 className='flex items-center gap-space-xs font-headline-sm text-headline-sm text-on-surface font-semibold'>
+						<Icon name='rate_review' className='text-[20px] text-primary' />
+						Remarks
+					</h3>
+					{optional}
+				</div>
+				{field}
+			</Card>
+		)
+	}
+
 	return (
-						<div className='mt-6'>
-							<label className='block rounded-xl border border-cyan-200 bg-white p-4 text-sm font-medium text-slate-900 shadow-sm'>
-								<span className='block text-sm font-semibold text-cyan-950'>Additional Remark (Optional)</span>
-								<p className='mt-1 text-xs text-cyan-900/70'>
-									Add any additional comments or observations for this contestant.
-									{activeContestant.laptopAvailable ? <span className='ml-1 text-cyan-700/70'>(Auto-filled from laptop availability — you may overwrite)</span> : null}
-								</p>
-								<textarea
-									suppressHydrationWarning
-									data-testid='additional-remark'
-									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
-									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
-									placeholder='Enter any additional remark here...'
-									rows={3}
-									className='mt-3 w-full resize-none rounded-lg border border-cyan-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 caret-slate-900 outline-none ring-cyan-600 transition focus:border-cyan-500 focus:ring-2'
-								/>
-							</label>
-						</div>
+		<Card variant='individual-remarks' as='section'>
+			<div className='flex flex-col gap-0.5'>
+				<div className='flex items-center justify-between gap-space-sm'>
+					<h3 className='font-headline-sm text-headline-sm text-on-surface font-semibold break-words min-w-0'>Remarks for {contestantName}</h3>
+					{optional}
+				</div>
+				{multiExaminee ? <p className='font-body-sm text-body-sm text-slate-500'>This remark belongs to the whole entry, not to one examinee.</p> : null}
+			</div>
+			{field}
+		</Card>
 	)
 }

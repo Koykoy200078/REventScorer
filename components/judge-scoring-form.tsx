@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { JudgeBatchRail } from '@/components/judge/batch-rail'
 import { ContestantPicker } from '@/components/judge/contestant-picker'
+import { DraftIndicator } from '@/components/judge/draft-indicator'
 import { DirectRatingPanel } from '@/components/judge/direct-rating-panel'
 import { ExamineeRoster, type ExamineeFigures } from '@/components/judge/examinee-roster'
 import { GroupSection } from '@/components/judge/group-section'
@@ -11,6 +12,7 @@ import { IndividualSection } from '@/components/judge/individual-section'
 import { ContextStripGroup, ContextStripIndividual, JudgeMeta, UnifiedContext } from '@/components/judge/judge-context'
 import { JudgeDock, PreviewLine, PreviewValue, type DockNav } from '@/components/judge/judge-dock'
 import { JudgeHeader } from '@/components/judge/judge-header'
+import { JudgeTip } from '@/components/judge/judge-tip'
 import { JudgeNotices } from '@/components/judge/notices'
 import { RemarksSection } from '@/components/judge/remarks'
 import { ViewSwitcher } from '@/components/judge/view-switcher'
@@ -28,6 +30,7 @@ import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
 import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
 import { buildContestantRow, buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
+import { remarkHint } from '@/lib/judge/remark'
 import { batchFillRow, batchScope, countEntered, resetConfirmText, resetRow } from '@/lib/judge/presets'
 import type { BatchPercent } from '@/lib/judge/presets'
 import { normalizeScoreInput } from '@/lib/judge/score-input'
@@ -885,6 +888,9 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 	const examineeTotals = cellTotals((examinee?.cells ?? []).map((cell) => cell.subCriterion), inputRow)
 	const formatMax = (value: number) => value.toFixed(2)
 	const onCell = (subCriterionId: string, raw: string, max: number) => updateScore(activeContestantId, subCriterionId, raw, max)
+	const sectionVariant = view === 'unified' ? 'unified' : view === 'group' ? 'group' : 'individual'
+	// D30's draft state, once per page in the dock's summary (spec §7.1, R15).
+	const draftIndicator = <DraftIndicator status={draftStatus} />
 	const meta = <JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} legendText={view !== 'direct' && !directRatingConfig ? rubricLegendText : null} />
 	const toggle = layout === 'unified' ? <ViewSwitcher variant='toggle' value={view === 'direct' ? 'unified' : view} onChange={setView} weighted={weighted} /> : null
 	// The examinee tabs and the selected member-group share one <Tabs>; with one examinee there is
@@ -948,6 +954,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		dockSummary = (
 			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
 				<DockTotal variant='individual' label='Final rating (your preview)' value={<PreviewValue value={shownValue} kind={kind} hook />} outOf='/ 100' percent={percentText(shownValue, 100)} />
+				{draftIndicator}
 				<p className='font-body-sm text-body-sm text-slate-500'>
 					Base {dash ? '—' : (preview?.result.baseFinalRating ?? 0).toFixed(2)} · strand bonus +{dash ? '—' : (preview?.result.bonusPoints ?? 0).toFixed(2)}
 				</p>
@@ -958,6 +965,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
 				<DockTotal variant='group' label={kind === 'weighted' && countedNames.length > 0 ? countedNames.join(' and ') : 'Group criteria'} value={formatScore(countedTotals.score)} outOf={`/ ${formatScore(countedTotals.max)} pts`} percent={percentText(countedTotals.score, countedTotals.max)} />
 				<PreviewLine value={shownValue} kind={kind} outOf={outOf} />
+				{draftIndicator}
 			</div>
 		)
 		dockStatus = <DockStatus variant='group'>{`${groupEntered.entered} of ${groupEntered.total} group fields entered`}</DockStatus>
@@ -966,6 +974,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
 				<DockTotal variant='individual' label={`${examinee.displayLabel} — subtotal`} value={formatScore(examineeEntered.score)} outOf={`/ ${formatScore(examineeEntered.max)} pts`} percent={percentText(examineeEntered.score, examineeEntered.max)} />
 				<PreviewLine value={shownValue} kind={kind} outOf={outOf} />
+				{draftIndicator}
 			</div>
 		)
 		dockStatus = (
@@ -981,6 +990,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 					<span className='hidden sm:inline'>× 0.6 +</span>
 					<DockTerm className='hidden sm:inline' label='Members (average):' value={dash ? '—' : `${(preview?.result.individualRating ?? 0).toFixed(2)}%`} />
 					<span className='hidden sm:inline'>× 0.4</span>
+					{draftIndicator}
 				</>
 			) : (
 				<>
@@ -993,6 +1003,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 							<DockSum className='hidden sm:inline'>{(shownValue ?? 0).toFixed(2)}</DockSum>
 						</>
 					) : null}
+					{draftIndicator}
 				</>
 			)
 		dockSummary = (
@@ -1007,14 +1018,17 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		)
 	} else {
 		dockSummary = (
-			<DockTotal
-				variant={dockVariant}
-				label={kind === 'weighted' ? 'Your preview' : 'Your total'}
-				value={<PreviewValue value={shownValue} kind={kind} hook />}
-				outOf={kind === 'weighted' ? '/ 100' : `/ ${formatScore(outOf)} pts`}
-				percent={percentText(shownValue, outOf)}
-				title={kind === 'total' ? "Out of this entry's maximum" : undefined}
-			/>
+			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
+				<DockTotal
+					variant={dockVariant}
+					label={kind === 'weighted' ? 'Your preview' : 'Your total'}
+					value={<PreviewValue value={shownValue} kind={kind} hook />}
+					outOf={kind === 'weighted' ? '/ 100' : `/ ${formatScore(outOf)} pts`}
+					percent={percentText(shownValue, outOf)}
+					title={kind === 'total' ? "Out of this entry's maximum" : undefined}
+				/>
+				{draftIndicator}
+			</div>
 		)
 		dockStatus =
 			dockVariant === 'group' ? (
@@ -1136,8 +1150,16 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 									) : null}
 								</>,
 							)}
-							<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
-							<p className='font-body-sm text-body-sm text-slate-500'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
+							<RemarksSection
+								variant={sectionVariant}
+								contestantName={activeContestant.name}
+								value={activeDetails?.additionalInfo ?? ''}
+								laptopNote={Boolean(activeContestant.laptopAvailable)}
+								multiExaminee={manyExaminees}
+								hint={remarkHint({ entryName: activeContestant.name, current: activeDetails ?? { strand: '', remark: '', additionalInfo: '' }, stored: storedDetails[activeContestantId] })}
+								onChange={(text) => updateContestantDetailsField(activeContestantId, 'additionalInfo', text)}
+							/>
+							<JudgeTip variant={sectionVariant} />
 						</div>
 					</div>
 					<DockSpacer variant={dockVariant} />
