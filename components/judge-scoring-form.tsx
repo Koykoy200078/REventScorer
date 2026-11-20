@@ -1314,6 +1314,7 @@ export function JudgeScoringForm({ token, eventTitle, contestants, criteria: raw
 								</p>
 								<textarea
 									suppressHydrationWarning
+									data-testid='additional-remark'
 									value={contestantDetails[activeContestantId]?.additionalInfo ?? ''}
 									onChange={(inputEvent) => updateContestantDetailsField(activeContestantId, 'additionalInfo', inputEvent.target.value)}
 									placeholder='Enter any additional remark here...'
