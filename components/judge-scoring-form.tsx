@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
+import { JudgeBatchRail } from '@/components/judge/batch-rail'
 import { ContestantPicker } from '@/components/judge/contestant-picker'
 import { DirectRatingPanel } from '@/components/judge/direct-rating-panel'
 import { ExamineeRoster } from '@/components/judge/examinee-roster'
@@ -25,6 +26,8 @@ import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
 import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
 import { buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
+import { batchFillRow, batchScope, countEntered, resetConfirmText, resetRow } from '@/lib/judge/presets'
+import type { BatchPercent } from '@/lib/judge/presets'
 import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
 import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
 import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
@@ -34,7 +37,7 @@ import type { MemberStatus, RosterStatus } from '@/lib/judge/status'
 import { previewKind } from '@/lib/judge/summary'
 import { autoResolveStrand, isTVLAcademicTrack } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
-import { contestantCells, resolveJudgeLayout, resolveView, revealTarget, selectedExaminee, withViewParam } from '@/lib/judge/layout'
+import { contestantCells, resolveJudgeLayout, resolveView, revealTarget, selectedExaminee, visibleCells, withViewParam } from '@/lib/judge/layout'
 import type { JudgeView } from '@/lib/judge/layout'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -1003,6 +1006,24 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 			children
 		)
 	const memberPanel = (section: React.ReactNode) => (tabsOn ? <TabPanel>{section}</TabPanel> : section)
+	// Step 8: Batch Fill and Reset act on the cells the view shows (spec §5; ruling R28 for Unified:
+	// the selected examinee plus the group criteria). The direct view has no rail (owner).
+	const shownIds = visibleCells(cells, layout, view, examinee?.memberLabel, directFieldIds)
+	const scope = batchScope(shownIds, maxBySubId, lockedIds)
+	const enteredInScope = countEntered(inputRow, scope)
+	const scopeLabel = view === 'unified' ? `${examinee?.displayLabel ?? activeContestant.name} and the group criteria` : view === 'group' ? 'the group criteria' : manyExaminees || layout === 'unified' ? (examinee?.displayLabel ?? activeContestant.name) : activeContestant.name
+	const applyBatch = (percent: BatchPercent) => {
+		if (scope.length === 0) return
+		setScores((previous) => ({ ...previous, [activeContestantId]: batchFillRow(previous[activeContestantId] ?? {}, scope, maxBySubId, percent) }))
+		noteJudgeChange(activeContestantId)
+	}
+	const resetScope = () => {
+		if (enteredInScope === 0) return
+		if (!window.confirm(resetConfirmText(scopeLabel, enteredInScope))) return
+		setScores((previous) => ({ ...previous, [activeContestantId]: resetRow(previous[activeContestantId] ?? {}, scope) }))
+		noteJudgeChange(activeContestantId)
+	}
+	const batch = (variant: 'unified' | 'group' | 'individual', label: string) => <JudgeBatchRail variant={variant} label={label} scopeSize={scope.length} enteredCount={enteredInScope} onFill={applyBatch} onReset={resetScope} />
 
 	return (
 		<div ref={topRef} className='min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
@@ -1053,7 +1074,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 											entryMax={entryTotals.max}
 											meta={meta}
 											switcher={toggle}
-											roster={<ExamineeRoster variant='unified' examinees={cells.examinees} selected={examinee?.memberLabel} statusByMember={statusByMember} />}
+											roster={<ExamineeRoster variant='unified' examinees={cells.examinees} selected={examinee?.memberLabel} statusByMember={statusByMember} batch={batch('unified', `Batch fill (${examinee?.displayLabel ?? activeContestant.name} + group criteria):`)} />}
 										/>
 									) : null}
 									<JudgeNotices error={error} successMessage={successMessage} queuedCount={queuedUploads.length} isAutoSyncing={isAutoSyncing} />
@@ -1063,17 +1084,17 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 											<GroupSection variant='unified' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
 										</>
 									) : null}
-									{view === 'group' ? <GroupSection variant='group' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} /> : null}
+									{view === 'group' ? <GroupSection variant='group' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} batch={batch('group', 'Quick batch calibrations:')} /> : null}
 									{view === 'individual' && (layout === 'unified' || manyExaminees) ? (
 										<>
 											<ExamineeRoster variant='individual' examinees={cells.examinees} selected={examinee?.memberLabel} statusByMember={statusByMember} />
-											{memberPanel(<IndividualSection variant='individual' examinee={examinee} index={examineeIndex} count={cells.examinees.length} entryName={activeContestant.name} inputRow={inputRow} locked={lockedIds} onCell={onCell} />)}
+											{memberPanel(<IndividualSection variant='individual' examinee={examinee} index={examineeIndex} count={cells.examinees.length} entryName={activeContestant.name} inputRow={inputRow} locked={lockedIds} onCell={onCell} batch={batch('individual', 'Quick calibrations:')} />)}
 											{layout === 'individual' ? <GroupSection variant='entry' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} /> : null}
 										</>
 									) : null}
 									{view === 'individual' && layout === 'individual' && !manyExaminees ? (
 										<>
-											<IndividualSection variant='individual-entry' examinee={examinee} index={0} count={cells.examinees.length} entryName={activeContestant.name} entryTotals={entryTotals} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
+											<IndividualSection variant='individual-entry' examinee={examinee} index={0} count={cells.examinees.length} entryName={activeContestant.name} entryTotals={entryTotals} inputRow={inputRow} locked={lockedIds} onCell={onCell} batch={batch('individual', 'Quick calibrations:')} />
 											<GroupSection variant='entry' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
 										</>
 									) : null}
