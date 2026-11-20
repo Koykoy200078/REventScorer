@@ -57,7 +57,7 @@ const STYLE: Record<ScoreInputVariant, InputStyle> = {
 
 // SI-1's outer block U58c1 and its hint line U58c895; SI-2's wide box U284.
 const BLOCK = 'flex flex-col items-end gap-1 self-start md:self-auto'
-const HINT = 'text-[11px] text-slate-400 font-medium'
+const HINT = 'text-[11px] text-slate-500 font-medium'
 const WIDE_GROUP_BOX = 'flex items-center gap-1.5 bg-teal-50/70 border border-teal-200 px-2.5 py-1 rounded-md self-start md:self-auto'
 const PLACEHOLDER = 'placeholder:text-slate-400'
 

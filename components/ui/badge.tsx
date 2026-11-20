@@ -23,7 +23,7 @@ const BADGES = {
 		'px-space-xs py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-label-sm text-label-sm font-mono font-bold',
 	/** Participant score pill, not scored yet: A754 to A757. */
 	'admin-score-pending':
-		'px-space-xs py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-400 font-label-sm text-label-sm font-mono',
+		'px-space-xs py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 font-label-sm text-label-sm font-mono',
 	/** Judge status pill, scored: A509 and the other 10. */
 	'admin-judge-scored':
 		'inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-label-sm text-label-sm font-medium',
@@ -116,7 +116,7 @@ const BADGES = {
 		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-mono font-semibold text-label-md',
 	/** Rank circle, pending: A745. */
 	'admin-rank-circle-pending':
-		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-400 font-mono font-semibold text-label-md',
+		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-500 font-mono font-semibold text-label-md',
 	/** Avatar initials, emerald: A69. */
 	'admin-avatar-emerald':
 		'w-6 h-6 rounded-full bg-emerald-600 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
