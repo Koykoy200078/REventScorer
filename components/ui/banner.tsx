@@ -16,7 +16,8 @@ const STRIP = {
 	individual: {
 		root: 'w-full bg-surface border-b border-outline-variant/15 py-space-sm px-gutter-desktop',
 		inner: 'max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-space-sm',
-		start: 'flex items-center gap-space-md',
+		// min-w-0 (Stage 5 Task 5, critique M6): a long unbroken name wraps instead of overflowing from md.
+		start: 'flex items-center gap-space-md min-w-0',
 		end: 'flex items-center gap-space-md',
 	},
 	admin: {

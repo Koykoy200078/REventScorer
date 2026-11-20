@@ -55,6 +55,9 @@ export type SegmentedControlProps<V extends string> = Omit<
 		value: V
 		onChange: (value: V) => void
 		disabled?: boolean
+		/** 'toggle' (default): SC-1, the in-page strip. 'header': SC-2's look, as radio buttons (the judge
+		 * header's view switcher, Stage 5 Task 5: a view change makes no request, so no Links). */
+		variant?: 'toggle' | 'header'
 	}
 
 /**
@@ -72,9 +75,11 @@ export function SegmentedControl<V extends string>({
 	value,
 	onChange,
 	disabled = false,
+	variant = 'toggle',
 	className,
 	...rest
 }: SegmentedControlProps<V>) {
+	const look = variant === 'header' ? { strip: SWITCHER, on: SWITCHER_ON, off: SWITCHER_OFF } : { strip: TOGGLE, on: TOGGLE_ON, off: TOGGLE_OFF }
 	const buttons = useRef<Array<HTMLButtonElement | null>>([])
 	const enabled = items.flatMap((item, index) => (disabled || item.disabled ? [] : [index]))
 	const checked = items.findIndex((item) => item.value === value)
@@ -92,7 +97,7 @@ export function SegmentedControl<V extends string>({
 	}
 
 	return (
-		<div role='radiogroup' className={cx(TOGGLE, className)} {...rest}>
+		<div role='radiogroup' className={cx(look.strip, className)} {...rest}>
 			{items.map((item, index) => {
 				const isOn = index === checked
 				return (
@@ -111,7 +116,7 @@ export function SegmentedControl<V extends string>({
 							if (!isOn) onChange(item.value)
 						}}
 						onKeyDown={(event) => handleKeyDown(event, index)}
-						className={cx(isOn ? TOGGLE_ON : TOGGLE_OFF, CLICKABLE, FOCUS_RING, DISABLED)}
+						className={cx(isOn ? look.on : look.off, CLICKABLE, FOCUS_RING, DISABLED)}
 					>
 						{item.label}
 					</button>

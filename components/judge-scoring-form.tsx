@@ -1,16 +1,20 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { ContestantPicker } from '@/components/judge/contestant-picker'
-import { CriterionList } from '@/components/judge/criterion-list'
 import { DirectRatingPanel } from '@/components/judge/direct-rating-panel'
-import { JudgeMeta } from '@/components/judge/judge-context'
+import { ExamineeRoster } from '@/components/judge/examinee-roster'
+import { GroupSection } from '@/components/judge/group-section'
+import { IndividualSection } from '@/components/judge/individual-section'
+import { ContextStripGroup, ContextStripIndividual, JudgeMeta, UnifiedContext } from '@/components/judge/judge-context'
 import { JudgeDock } from '@/components/judge/judge-dock'
 import { JudgeHeader } from '@/components/judge/judge-header'
 import { JudgeNotices } from '@/components/judge/notices'
 import { RemarksSection } from '@/components/judge/remarks'
+import { ViewSwitcher } from '@/components/judge/view-switcher'
 import { DockSpacer, type DockVariant } from '@/components/ui/sticky-dock'
+import { TabPanel, Tabs } from '@/components/ui/tabs'
 
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import { baselineAfterSave, browserDraftStorage, DRAFT_WRITE_DELAY_MS, draftToKeep, formFollowsSave, hasUnsavedChanges, initialBaselines, ownDraftToKeep, queuedRowToShow, queuedSaveBaseline, restoredDetails, restoredRow, savedFormRow, storedDraftToKeep, summarizeDraftStatus, writePendingDrafts } from '@/lib/judge/draft-state'
@@ -20,16 +24,17 @@ import type { ContestantDraft } from '@/lib/judge/draft-store'
 import { migrateLegacyDirectRating } from '@/lib/judge/legacy-direct'
 import { buildInputContestantDetails, buildInputMatrix, detectInitiallyScoredContestants, hasPositiveDraftScore } from '@/lib/judge/matrix'
 import type { InputContestantDetailsMap, InputScoreMatrix } from '@/lib/judge/matrix'
-import { applicableSubCriteriaForContestant } from '@/lib/judge/members'
 import { buildSaveRequest, buildScorePayload } from '@/lib/judge/payload'
 import { normalizeScoreInput, parseAndClampScore, round } from '@/lib/judge/score-input'
 import { AUTO_SYNC_INTERVAL_MS, isServerUnreachableScoreUploadError, listQueuedScoreUploadsForToken, queuedScoreUploadId, removeQueuedScoreUpload, shouldQueueScoreUpload, SubmitScoresError, upsertQueuedScoreUpload } from '@/lib/judge/score-queue'
 import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBody } from '@/lib/judge/score-queue'
-import { advanceTarget, rosterStatus, saveButtonLabel } from '@/lib/judge/status'
-import type { RosterStatus } from '@/lib/judge/status'
+import { browserStepMismatch, firstStepMismatch, stepCheckOrder } from '@/lib/judge/step-check'
+import { advanceTarget, cellTotals, memberStatus, rosterStatus, saveButtonLabel } from '@/lib/judge/status'
+import type { MemberStatus, RosterStatus } from '@/lib/judge/status'
+import { previewKind } from '@/lib/judge/summary'
 import { autoResolveStrand, isTVLAcademicTrack } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
-import { resolveJudgeLayout } from '@/lib/judge/layout'
+import { contestantCells, resolveJudgeLayout, resolveView, revealTarget, selectedExaminee, withViewParam } from '@/lib/judge/layout'
 import type { JudgeView } from '@/lib/judge/layout'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
@@ -48,13 +53,20 @@ interface JudgeScoringFormProps {
 	submittedAt?: string
 	initialContestantId?: string
 	adminEditMode?: boolean
-	/** Stage 5 Task 5: the event's own scoring type and description, and the view from ?view= (accepted, not used yet). */
+	/** Stage 5 Task 5: the event's own scoring type and description, and the view from ?view=. */
 	eventScoringType?: EventScoringType
 	eventDescription?: string
 	initialView?: JudgeView | null
 }
 
-export function JudgeScoringForm({ token, eventTitle, eventDescription, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+const BODY_INNER = {
+	unified: 'w-full max-w-5xl mx-auto py-space-xl flex flex-col gap-space-xl',
+	group: 'w-full max-w-5xl mx-auto py-space-xl flex flex-col gap-space-lg',
+	individual: 'w-full max-w-5xl mx-auto py-space-lg flex flex-col gap-space-lg',
+	direct: 'w-full max-w-5xl mx-auto py-space-lg flex flex-col gap-space-lg',
+} as const
+
+export function JudgeScoringForm({ token, eventTitle, eventDescription, eventScoringType, initialView, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
 	const { criteria, scores: existingScores } = useMemo(() => migrateLegacyDirectRating(rawCriteria, rawExistingScores, directRatingConfig), [rawCriteria, rawExistingScores, directRatingConfig])
@@ -151,8 +163,6 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 		return entries
 	}, [contestants, directNoatField])
 
-	const maxPossibleScore = useMemo(() => round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)), [criteria, activeContestant])
-	const totalSubCriterionCount = useMemo(() => criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, activeContestant).length, 0), [criteria, activeContestant])
 	const slotLabelsByContestant = useMemo(() => {
 		const labels = new Map<string, string>()
 		if (!presentationSlots) {
@@ -206,22 +216,6 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 		})
 	}, [directNoatField, noatScoreByContestantId])
 
-	const activeContestantTotal = useMemo(() => {
-		if (!activeContestantId) {
-			return 0
-		}
-
-		return round(
-			criteria.reduce((total, criterion) => {
-				const criterionTotal = applicableSubCriteriaForContestant(criterion, activeContestant).reduce((subTotal, subCriterion) => {
-					const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
-					return subTotal + parseAndClampScore(rawValue, subCriterion.maxScore)
-				}, 0)
-
-				return total + criterionTotal
-			}, 0),
-		)
-	}, [activeContestant, activeContestantId, criteria, scores])
 
 	const directScoreMaxPossible = useMemo(() => {
 		if (!isDirectScoreMode || directScoreFields.length === 0) {
@@ -353,21 +347,6 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 		return 100
 	}, [isDirectScoreMode])
 
-	const scoredFieldCount = useMemo(() => {
-		if (!activeContestantId) {
-			return 0
-		}
-
-		return criteria.reduce((sum, criterion) => {
-			const countInCriterion = applicableSubCriteriaForContestant(criterion, activeContestant).reduce((count, subCriterion) => {
-				const rawValue = scores[activeContestantId]?.[subCriterion.id] ?? '0'
-				const parsedValue = Number.parseFloat(rawValue)
-				return count + (Number.isFinite(parsedValue) && parsedValue > 0 ? 1 : 0)
-			}, 0)
-
-			return sum + countInCriterion
-		}, 0)
-	}, [activeContestant, activeContestantId, criteria, scores])
 
 	const contestantsById = useMemo(() => new Map(contestants.map((contestant) => [contestant.id, contestant])), [contestants])
 	const lockedSubCriterionIds = useCallback((contestantId: string): ReadonlySet<string> => (directNoatField && noatScoreByContestantId.has(contestantId) ? new Set([directNoatField.subCriterionId]) : new Set<string>()), [directNoatField, noatScoreByContestantId])
@@ -826,6 +805,17 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 			return
 		}
 
+		// The browser checks the cells on screen; this checks the active entry's other cells the same
+		// way, shows the first one that would fail and stops before the confirm (no POST).
+		const bad = firstStepMismatch(stepCheckOrder(cells, layout, directFieldIds), scores[activeContestant.id] ?? {}, lockedSubCriterionIds(activeContestant.id), (raw, id) => browserStepMismatch(raw, maxBySubId.get(id) ?? 0))
+		if (bad) {
+			const target = revealTarget(cells, layout, view, bad)
+			if (target.view) setView(target.view)
+			if (target.memberLabel) setExamineeChoice({ contestantId: activeContestant.id, memberLabel: target.memberLabel })
+			setReveal((previous) => ({ subId: bad, n: (previous?.n ?? 0) + 1 }))
+			return
+		}
+
 		const isResubmission = savedContestantIds.has(activeContestant.id)
 		const confirmationMessage = isResubmission ? `Resubmit scores for ${activeContestant.name}? This will overwrite your previously saved scores for this entry.` : `Submit scores for ${activeContestant.name}?`
 
@@ -917,7 +907,48 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 	// safe without an active contestant.
 	const [pickerOpen, setPickerOpen] = useState(false)
 	const layout = useMemo(() => resolveJudgeLayout({ criteria, directRatingConfig }, activeContestant), [criteria, directRatingConfig, activeContestant])
-	const dockVariant: DockVariant = layout === 'unified' ? 'unified' : layout === 'group' ? 'group' : 'individual'
+	// Step 7: the view (?view= is the judge's preference; only a unified entry has a choice), the
+	// selected examinee (derived, so it never outlives its contestant) and the cells they show.
+	const [requestedView, setRequestedView] = useState<JudgeView | null>(initialView ?? null)
+	const [examineeChoice, setExamineeChoice] = useState<{ contestantId: string; memberLabel: string } | null>(null)
+	const [reveal, setReveal] = useState<{ subId: string; n: number } | null>(null)
+	const switcherFocusRef = useRef(false)
+	const view = resolveView(layout, requestedView)
+	const cells = useMemo(() => contestantCells(criteria, activeContestant), [criteria, activeContestant])
+	const examinee = selectedExaminee(cells, examineeChoice?.contestantId === activeContestantId ? examineeChoice.memberLabel : undefined)
+	const weighted = useMemo(() => previewKind({ criteria: rawCriteria, contestants, directRatingConfig, eventScoringType }) === 'weighted', [rawCriteria, contestants, directRatingConfig, eventScoringType])
+	const inputRow = useMemo(() => scores[activeContestantId] ?? {}, [scores, activeContestantId])
+	const lockedIds = useMemo(() => lockedSubCriterionIds(activeContestantId), [lockedSubCriterionIds, activeContestantId])
+	const directFieldIds = useMemo(() => directScoreFields.map((field) => field.subCriterionId), [directScoreFields])
+	const entryCells = useMemo(() => [...cells.groupBlocks.flatMap((block) => block.cells), ...cells.examinees.flatMap((candidate) => candidate.cells)].map((cell) => cell.subCriterion), [cells])
+	const entryTotals = cellTotals(entryCells, inputRow)
+	const maxBySubId = useMemo(() => new Map<string, number>([...entryCells.map((cell) => [cell.id, cell.maxScore] as const), ...directScoreFields.map((field) => [field.subCriterionId, field.maxScore] as const)]), [entryCells, directScoreFields])
+	const statusByMember = useMemo(() => {
+		const byLabel: Record<string, MemberStatus> = {}
+		for (const candidate of cells.examinees) byLabel[candidate.memberLabel] = memberStatus(candidate.cells.map((cell) => cell.subCriterion), inputRow, lockedIds)
+		return byLabel
+	}, [cells, inputRow, lockedIds])
+	const dockVariant: DockVariant = view === 'unified' ? 'unified' : view === 'group' ? 'group' : 'individual'
+	const setView = (next: JudgeView) => {
+		// Only the in-page toggle (SC-1) remounts on a view change; focus follows it (critique M7).
+		switcherFocusRef.current = document.activeElement?.closest('[data-testid="view-switcher"]') != null
+		setRequestedView(next)
+		// No request (F5): the URL keeps fromAdmin and contestantId; 'unified' removes ?view=.
+		window.history.replaceState(null, '', window.location.pathname + withViewParam(window.location.search, next))
+	}
+	const selectExaminee = (memberLabel: string) => setExamineeChoice({ contestantId: activeContestantId, memberLabel })
+	useLayoutEffect(() => {
+		if (!switcherFocusRef.current) return
+		switcherFocusRef.current = false
+		document.querySelector<HTMLElement>('[data-testid="view-switcher"] [role="radio"][aria-checked="true"]')?.focus()
+	}, [view])
+	// A cell the step check stopped Save on is shown, focused and given the browser's own message.
+	useLayoutEffect(() => {
+		if (!reveal) return
+		const input = document.querySelector<HTMLInputElement>(`[data-testid="score-input"][data-subcriterion-id="${CSS.escape(reveal.subId)}"]`)
+		input?.focus()
+		input?.reportValidity()
+	}, [reveal])
 	// The picker's statuses, memoised by value: a keystroke that changes no entry's status keeps the
 	// same object, so the memoised picker does not re-render its entries (critique m9).
 	const statusSignature = contestants.map((contestant) => contestant.id + ':' + rosterStatus({ queued: queuedContestantIds.has(contestant.id), saved: savedContestantIds.has(contestant.id), hasDraft: draftScoredContestantIds.has(contestant.id) })).join('|')
@@ -952,6 +983,27 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 		)
 	}
 
+	const participants = (activeContestant.participants ?? []).map((name) => name.trim()).filter(Boolean)
+	const manyExaminees = cells.examinees.length >= 2
+	const examineeIndex = Math.max(0, cells.examinees.findIndex((candidate) => candidate.memberLabel === examinee?.memberLabel))
+	const examineeTotals = cellTotals((examinee?.cells ?? []).map((cell) => cell.subCriterion), inputRow)
+	const formatMax = (value: number) => value.toFixed(2)
+	const onCell = (subCriterionId: string, raw: string, max: number) => updateScore(activeContestantId, subCriterionId, raw, max)
+	const meta = <JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} legendText={view !== 'direct' && !directRatingConfig ? rubricLegendText : null} />
+	const toggle = layout === 'unified' ? <ViewSwitcher variant='toggle' value={view === 'direct' ? 'unified' : view} onChange={setView} weighted={weighted} /> : null
+	// The examinee tabs and the selected member-group share one <Tabs>; with one examinee there is
+	// neither (spec §2.5 ExamineeRoster).
+	const tabsOn = manyExaminees && examinee !== undefined && (view === 'unified' || view === 'individual')
+	const withTabs = (children: React.ReactNode) =>
+		tabsOn && examinee ? (
+			<Tabs variant={view === 'unified' ? 'unified' : 'individual'} value={examinee.memberLabel} onChange={selectExaminee}>
+				{children}
+			</Tabs>
+		) : (
+			children
+		)
+	const memberPanel = (section: React.ReactNode) => (tabsOn ? <TabPanel>{section}</TabPanel> : section)
+
 	return (
 		<div ref={topRef} className='min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
 			<JudgeHeader
@@ -962,44 +1014,70 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 				index={activeContestantIndex}
 				count={contestants.length}
 				picker={<ContestantPicker contestants={contestants} activeIndex={activeContestantIndex} statusById={statusById} slotLabels={slotLabelsByContestant} open={pickerOpen} onOpenChange={setPickerOpen} onSelect={selectFromPicker} />}
+				switcher={layout === 'unified' ? <div className='hidden lg:flex'><ViewSwitcher variant='header' value={view === 'direct' ? 'unified' : view} onChange={setView} weighted={weighted} /></div> : null}
 				onPrev={() => goToContestant(activeContestantIndex - 1)}
 				onNext={() => goToContestant(activeContestantIndex + 1)}
 			/>
 			<main className='w-full pt-16 bg-slate-50 min-h-[calc(100vh-4rem)] flex flex-col'>
-				<form onSubmit={submitScores}>
+				<form data-testid='judge-form' data-layout={layout} data-view={view} onSubmit={submitScores}>
+					{view === 'group' ? (
+						<ContextStripGroup eventTitle={eventTitle} contestant={activeContestant} slotLabel={activeSlotLabel} participantCount={participants.length} entryMax={entryTotals.max} meta={meta} switcher={toggle} />
+					) : null}
+					{view === 'individual' || view === 'direct' ? (
+						<ContextStripIndividual
+							contestant={activeContestant}
+							slotLabel={activeSlotLabel}
+							badge={view === 'direct' ? 'Direct rating (100 max)' : manyExaminees || layout === 'unified' ? `Individual only (${formatMax(examineeTotals.max)} pts max)` : `Individual entry (${formatMax(entryTotals.max)} pts max)`}
+							description={
+								view === 'direct'
+									? 'Enter AVE/GPA, NOAT, and Interview directly. NOAT may be admin-provided and read-only. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.'
+									: manyExaminees || layout === 'unified'
+										? `Criteria for ${examinee?.displayLabel ?? activeContestant.name} only.`
+										: 'Criteria for this entry.'
+							}
+							meta={meta}
+							switcher={toggle}
+						/>
+					) : null}
 					<div className='w-full px-gutter-desktop'>
-						<div className='w-full max-w-5xl mx-auto py-space-lg flex flex-col gap-space-lg'>
-							<JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} />
-							<JudgeNotices error={error} successMessage={successMessage} queuedCount={queuedUploads.length} isAutoSyncing={isAutoSyncing} />
-							<section className='rounded-2xl border border-cyan-100 bg-white p-4 sm:p-5'>
-								<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-									<div>
-										<div className='flex items-center gap-2'>
-											<h2 className='text-xl font-semibold text-cyan-950'>Now Scoring: {activeContestant.name}</h2>
-											{activeContestant.entryType === 'individual' ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800'>Individual</span> : null}
-										</div>
-										<p className='mt-1 text-sm text-cyan-900/90'>
-											Entry {activeContestantIndex + 1} of {contestants.length}
-										</p>
-										{activeSlotLabel ? <p className='text-xs text-cyan-900/80'>Slot: {activeSlotLabel}</p> : null}
-									</div>
-									<div className='flex flex-wrap items-center gap-2'>
-										<span className='rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-900'>
-											Current Total: {activeContestantTotal.toFixed(2)} / {maxPossibleScore.toFixed(2)}
-										</span>
-										{isDirectScoreMode ? (
-											<span className='rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900'>
-												Final Rating: {activeDirectFinalRating.toFixed(2)} / {directFinalRatingMaxPossible.toFixed(2)}
-											</span>
-										) : null}
-										<span className='rounded-full bg-white px-3 py-1 text-xs font-medium text-cyan-900 ring-1 ring-cyan-200'>
-											Scored Fields: {scoredFieldCount} / {totalSubCriterionCount}
-										</span>
-									</div>
-								</div>
-
-								<div className='mt-4 space-y-4'>
-									{isDirectScoreMode ? (
+						<div className={BODY_INNER[view]}>
+							{withTabs(
+								<>
+									{view === 'unified' ? (
+										<UnifiedContext
+											contestant={activeContestant}
+											index={activeContestantIndex}
+											count={contestants.length}
+											slotLabel={activeSlotLabel}
+											examineeCount={cells.examinees.length}
+											entryMax={entryTotals.max}
+											meta={meta}
+											switcher={toggle}
+											roster={<ExamineeRoster variant='unified' examinees={cells.examinees} selected={examinee?.memberLabel} statusByMember={statusByMember} />}
+										/>
+									) : null}
+									<JudgeNotices error={error} successMessage={successMessage} queuedCount={queuedUploads.length} isAutoSyncing={isAutoSyncing} />
+									{view === 'unified' ? (
+										<>
+											{memberPanel(<IndividualSection variant='unified' examinee={examinee} index={examineeIndex} count={cells.examinees.length} entryName={activeContestant.name} inputRow={inputRow} locked={lockedIds} onCell={onCell} />)}
+											<GroupSection variant='unified' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
+										</>
+									) : null}
+									{view === 'group' ? <GroupSection variant='group' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} /> : null}
+									{view === 'individual' && (layout === 'unified' || manyExaminees) ? (
+										<>
+											<ExamineeRoster variant='individual' examinees={cells.examinees} selected={examinee?.memberLabel} statusByMember={statusByMember} />
+											{memberPanel(<IndividualSection variant='individual' examinee={examinee} index={examineeIndex} count={cells.examinees.length} entryName={activeContestant.name} inputRow={inputRow} locked={lockedIds} onCell={onCell} />)}
+											{layout === 'individual' ? <GroupSection variant='entry' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} /> : null}
+										</>
+									) : null}
+									{view === 'individual' && layout === 'individual' && !manyExaminees ? (
+										<>
+											<IndividualSection variant='individual-entry' examinee={examinee} index={0} count={cells.examinees.length} entryName={activeContestant.name} entryTotals={entryTotals} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
+											<GroupSection variant='entry' blocks={cells.groupBlocks} participants={participants} inputRow={inputRow} locked={lockedIds} onCell={onCell} />
+										</>
+									) : null}
+									{view === 'direct' ? (
 										<DirectRatingPanel
 											activeContestant={activeContestant}
 											activeContestantId={activeContestantId}
@@ -1015,19 +1093,17 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, contesta
 											updateScore={updateScore}
 											updateContestantDetailsField={updateContestantDetailsField}
 										/>
-									) : (
-										<CriterionList criteria={criteria} activeContestant={activeContestant} activeContestantId={activeContestantId} scores={scores} directRatingConfig={directRatingConfig} rubricLegendText={rubricLegendText} updateScore={updateScore} />
-									)}
-								</div>
-								<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
-							</section>
+									) : null}
+								</>,
+							)}
+							<RemarksSection activeContestant={activeContestant} activeContestantId={activeContestantId} contestantDetails={contestantDetails} updateContestantDetailsField={updateContestantDetailsField} />
 							<p className='font-body-sm text-body-sm text-slate-500'>Tip: Save each contestant right after the presentation. If internet/service fails, scores are kept locally and auto-upload when connection is back.</p>
 						</div>
 					</div>
 					<DockSpacer variant={dockVariant} />
 					<JudgeDock
 						variant={dockVariant}
-						total={{ label: 'Current total', value: activeContestantTotal.toFixed(2), outOf: `/ ${maxPossibleScore.toFixed(2)}` }}
+						total={{ label: 'Current total', value: entryTotals.score.toFixed(2), outOf: `/ ${entryTotals.max.toFixed(2)}` }}
 						prev={{ onClick: () => goToContestant(activeContestantIndex - 1), disabled: activeContestantIndex === 0 }}
 						next={{ onClick: () => goToContestant(activeContestantIndex + 1), disabled: activeContestantIndex >= contestants.length - 1 }}
 						save={{ label: saveLabel, isSaving, draftStatus }}
