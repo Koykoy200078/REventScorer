@@ -65,9 +65,9 @@ export function UnifiedContext({
 	return (
 		<Card variant='unified-section' as='section'>
 			<div className='flex flex-col gap-space-md'>
-				<div className='flex flex-col gap-space-xs min-w-0'>
+				<div className='flex flex-col gap-space-xs min-w-0 [overflow-wrap:anywhere]'>
 					<p className='font-label-sm text-label-sm text-emerald-700 uppercase tracking-wider font-bold'>{overline}</p>
-					<h1 className='font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg text-slate-900 font-bold break-words min-w-0'>{entryHeading(contestant)}</h1>
+					<h1 className='font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg text-slate-900 font-bold [overflow-wrap:anywhere] min-w-0'>{entryHeading(contestant)}</h1>
 					<p className='font-body-sm text-body-sm text-slate-500'>{structure}</p>
 					{meta}
 				</div>
@@ -100,10 +100,10 @@ export function ContextStripGroup({
 		<ContextStrip
 			variant='group'
 			start={
-				<div className='flex flex-col gap-space-sm min-w-0'>
+				<div className='flex flex-col gap-space-sm min-w-0 [overflow-wrap:anywhere]'>
 					<ContextOverline label={eventTitle} detail={slotLabel ? `Slot ${slotLabel}` : undefined} />
 					<ContextTitle variant='group' subtitle={contestant.section}>
-						<span className='break-words'>{contestant.name}</span>
+						<span className='[overflow-wrap:anywhere]'>{contestant.name}</span>
 					</ContextTitle>
 					<ContextDescription variant='group'>
 						Scores below apply to the whole entry
@@ -149,9 +149,9 @@ export function ContextStripIndividual({
 			start={
 				<>
 					{slotLabel ? <ContextSlot label={`Slot ${slotLabel}`} detail={contestant.section} /> : null}
-					<div className='flex flex-col gap-space-xs min-w-0'>
+					<div className='flex flex-col gap-space-xs min-w-0 [overflow-wrap:anywhere]'>
 						<ContextTitle variant='individual' badges={<Badge variant='individual-mode'>{badge}</Badge>}>
-							<span className='break-words'>{contestant.name}</span>
+							<span className='[overflow-wrap:anywhere]'>{contestant.name}</span>
 						</ContextTitle>
 						<ContextDescription variant='individual'>{description}</ContextDescription>
 						{formula ? <ContextDescription variant='individual'>{formula}</ContextDescription> : null}

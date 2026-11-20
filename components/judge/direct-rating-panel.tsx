@@ -70,7 +70,7 @@ export function DirectRatingPanel({
 			<Card key={field.subCriterionId} variant='individual-rubric'>
 				<div className='flex flex-col gap-1 min-w-0'>
 					<div className='flex flex-wrap items-center gap-space-xs'>
-						<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-bold break-words'>
+						<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-bold [overflow-wrap:anywhere]'>
 							{field.label}
 						</h3>
 						{locked ? <Badge variant='individual-role'>Admin provided</Badge> : null}
@@ -114,7 +114,7 @@ export function DirectRatingPanel({
 						</Badge>
 						<Badge variant='individual-subtotal'>Final rating: {finalRating === null ? '—' : formatScore(finalRating)} / 100</Badge>
 					</div>
-					<h2 className='font-headline-md text-headline-md text-on-surface font-bold break-words'>{contestant.name}</h2>
+					<h2 className='font-headline-md text-headline-md text-on-surface font-bold [overflow-wrap:anywhere]'>{contestant.name}</h2>
 					<p className='font-body-sm text-body-sm text-on-surface-variant'>Enter AVE/GPA, NOAT, and Interview directly. NOAT may be admin-provided and read-only. Strand bonus is applied to Interview only, and Final Rating stays on a 0-100 scale.</p>
 				</div>
 			</Card>

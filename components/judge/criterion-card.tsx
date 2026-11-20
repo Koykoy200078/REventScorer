@@ -59,7 +59,7 @@ export function CriterionCard({ variant, number, title, parentName, subCriterion
 				<div className='flex flex-col md:flex-row md:items-start justify-between gap-space-sm'>
 					<div className='min-w-0'>
 						<div className='flex flex-wrap items-center gap-space-xs'>
-							<h3 id={titleId} className='font-headline-sm text-headline-sm text-slate-900 font-bold break-words'>
+							<h3 id={titleId} className='font-headline-sm text-headline-sm text-slate-900 font-bold [overflow-wrap:anywhere]'>
 								{title}
 							</h3>
 							<Badge variant='unified-sub-max'>Sub max: {formatScore(max)}</Badge>
@@ -78,7 +78,7 @@ export function CriterionCard({ variant, number, title, parentName, subCriterion
 			<Card variant='unified-group' className={wide ? 'md:col-span-2' : undefined}>
 				<div className='flex flex-col gap-1.5'>
 					<div className='flex flex-wrap items-center justify-between gap-2'>
-						<h3 id={titleId} className='font-headline-sm text-headline-sm text-slate-900 font-bold break-words min-w-0'>
+						<h3 id={titleId} className='font-headline-sm text-headline-sm text-slate-900 font-bold [overflow-wrap:anywhere] min-w-0'>
 							{title}
 						</h3>
 						<ScoreInput variant='unified-group' label='Manual:' wide={wide} {...input} />
@@ -97,7 +97,7 @@ export function CriterionCard({ variant, number, title, parentName, subCriterion
 					<div className='flex items-start gap-space-md min-w-0'>
 						<Badge variant='group-number'>{number}</Badge>
 						<div className='min-w-0'>
-							<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-semibold break-words'>
+							<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-semibold [overflow-wrap:anywhere]'>
 								{title}
 							</h3>
 							<p className='font-body-sm text-body-sm text-slate-500'>Max available: {formatScore(max)} pts</p>
@@ -119,7 +119,7 @@ export function CriterionCard({ variant, number, title, parentName, subCriterion
 				<span className='font-label-sm text-label-sm text-slate-500 uppercase tracking-wider font-semibold'>
 					Criterion {String(number).padStart(2, '0')} • Sub max: {formatScore(max)} pts
 				</span>
-				<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-bold break-words'>
+				<h3 id={titleId} className='font-headline-sm text-headline-sm text-on-surface font-bold [overflow-wrap:anywhere]'>
 					{title}
 				</h3>
 				{parentName ? <p className='font-body-sm text-body-sm text-on-surface-variant'>{parentName}</p> : null}

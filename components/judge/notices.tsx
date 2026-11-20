@@ -10,9 +10,9 @@ import Icon from '@/components/ui/icon'
 export function JudgeNotices({ error, successMessage, queuedCount, isAutoSyncing }: { error: string | null; successMessage: string | null; queuedCount: number; isAutoSyncing: boolean }) {
 	return (
 		<>
-			{successMessage ? <InfoRow data-testid='judge-success' role='status' tone='emerald' icon='check_circle' heading={successMessage} /> : null}
+			{successMessage ? <InfoRow data-testid='judge-success' role='status' tone='emerald' icon='check_circle' heading={successMessage} className='[overflow-wrap:anywhere]' /> : null}
 			{error ? (
-				<div data-testid='judge-error' role='alert' className='p-space-sm rounded-lg bg-rose-50 border border-rose-200 flex items-start gap-space-xs'>
+				<div data-testid='judge-error' role='alert' className='p-space-sm rounded-lg bg-rose-50 border border-rose-200 flex items-start gap-space-xs [overflow-wrap:anywhere]'>
 					<Icon name='warning' className='text-rose-600 text-[18px] shrink-0 mt-0.5' />
 					<span className='font-label-md text-label-md text-rose-700 font-bold'>{error}</span>
 				</div>

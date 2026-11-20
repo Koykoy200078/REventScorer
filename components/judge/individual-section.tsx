@@ -72,7 +72,7 @@ export function IndividualSection({
 				<div aria-hidden className='w-14 h-14 rounded-xl bg-surface-container-high flex items-center justify-center text-primary font-display text-2xl font-bold shrink-0 shadow-inner'>
 					{initials(name)}
 				</div>
-				<div className='flex flex-col min-w-0'>
+				<div className='flex flex-col min-w-0 [overflow-wrap:anywhere]'>
 					<div className='flex flex-wrap items-center gap-space-xs mb-1'>
 						<Badge variant='individual-part'>{part}</Badge>
 						<Badge variant='individual-subtotal'>
@@ -80,7 +80,7 @@ export function IndividualSection({
 						</Badge>
 					</div>
 					<div className='flex flex-wrap items-center gap-space-sm min-w-0'>
-						<h2 className='font-headline-md text-headline-md text-on-surface font-bold break-words min-w-0'>{name}</h2>
+						<h2 className='font-headline-md text-headline-md text-on-surface font-bold [overflow-wrap:anywhere] min-w-0'>{name}</h2>
 						{role ? <Badge variant='individual-role'>{role}</Badge> : null}
 					</div>
 					{description ? <p className='font-body-sm text-body-sm text-on-surface-variant mt-1'>{description}</p> : null}
@@ -101,15 +101,15 @@ export function IndividualSection({
 						</div>
 						<div className='min-w-0'>
 							<div className='flex items-center gap-space-sm flex-wrap'>
-								<h2 className='font-headline-sm text-headline-sm text-slate-900 font-bold break-words min-w-0'>
+								<h2 className='font-headline-sm text-headline-sm text-slate-900 font-bold [overflow-wrap:anywhere] min-w-0'>
 									Part A: Individual • Examinee {index + 1} of {count}: {examinee.displayLabel}
 								</h2>
 								<Badge variant='unified-section-teal'>Individual max: {formatScore(totals.max)} pts</Badge>
 							</div>
-							<p className='font-body-sm text-body-sm text-emerald-800 mt-0.5 font-medium'>These scores are {examinee.displayLabel}&apos;s alone.</p>
+							<p className='font-body-sm text-body-sm text-emerald-800 mt-0.5 font-medium [overflow-wrap:anywhere]'>These scores are {examinee.displayLabel}&apos;s alone.</p>
 						</div>
 					</div>
-					<KpiReadout tone='emerald' label={`${examinee.displayLabel} subtotal:`} value={formatScore(totals.score)} outOf={`/ ${formatScore(totals.max)} pts`} />
+					<KpiReadout className='min-w-0 max-w-full flex-wrap [overflow-wrap:anywhere]' tone='emerald' label={`${examinee.displayLabel} subtotal:`} value={formatScore(totals.score)} outOf={`/ ${formatScore(totals.max)} pts`} />
 				</Card>
 				<div className='flex flex-col gap-space-md'>{cards('unified-individual')}</div>
 			</div>
@@ -131,7 +131,7 @@ export function IndividualSection({
 			{candidateHeader(entryName, 'Individual entry', entryTotals ?? totals)}
 			{examinee ? (
 				<div data-testid='member-group' data-member-label={examinee.memberLabel} className='flex flex-col gap-space-md'>
-					<p className='font-body-sm text-body-sm text-slate-500'>
+					<p className='font-body-sm text-body-sm text-slate-500 [overflow-wrap:anywhere]'>
 						{examinee.displayLabel} · {examinee.memberLabel}
 					</p>
 					<div className='flex flex-col gap-space-md'>{cards('individual')}</div>

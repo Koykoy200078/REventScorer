@@ -948,12 +948,13 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 	const examineeEntered = examinee ? figures[examinee.memberLabel] : undefined
 	const ring = (entered: number, total: number) => <ProgressRing value={entered} max={Math.max(total, 1)} aria-label={`${entered} of ${total} fields entered`} />
 	const dash = shownValue === null
+	const nowrap = (text: string) => <span className='whitespace-nowrap'>{text}</span>
 	let dockSummary: React.ReactNode
 	let dockStatus: React.ReactNode = null
 	if (mode.figure === 'direct') {
 		dockSummary = (
-			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
-				<DockTotal variant='individual' label='Final rating (your preview)' value={<PreviewValue value={shownValue} kind={kind} hook />} outOf='/ 100' percent={percentText(shownValue, 100)} />
+			<div className='flex flex-col gap-0.5 min-w-0 max-w-full [overflow-wrap:anywhere]'>
+				<DockTotal variant='individual' label='Final rating (your preview)' value={<PreviewValue value={shownValue} kind={kind} hook />} outOf={nowrap('/ 100')} percent={percentText(shownValue, 100)} />
 				{draftIndicator}
 				<p className='font-body-sm text-body-sm text-slate-500'>
 					Base {dash ? '—' : (preview?.result.baseFinalRating ?? 0).toFixed(2)} · strand bonus +{dash ? '—' : (preview?.result.bonusPoints ?? 0).toFixed(2)}
@@ -962,8 +963,8 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		)
 	} else if (mode.figure === 'group-subtotal') {
 		dockSummary = (
-			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
-				<DockTotal variant='group' label={kind === 'weighted' && countedNames.length > 0 ? countedNames.join(' and ') : 'Group criteria'} value={formatScore(countedTotals.score)} outOf={`/ ${formatScore(countedTotals.max)} pts`} percent={percentText(countedTotals.score, countedTotals.max)} />
+			<div className='flex flex-col gap-0.5 min-w-0 max-w-full [overflow-wrap:anywhere]'>
+				<DockTotal variant='group' label={kind === 'weighted' && countedNames.length > 0 ? countedNames.join(' and ') : 'Group criteria'} value={formatScore(countedTotals.score)} outOf={nowrap(`/ ${formatScore(countedTotals.max)} pts`)} percent={percentText(countedTotals.score, countedTotals.max)} />
 				<PreviewLine value={shownValue} kind={kind} outOf={outOf} />
 				{draftIndicator}
 			</div>
@@ -971,8 +972,8 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		dockStatus = <DockStatus variant='group'>{`${groupEntered.entered} of ${groupEntered.total} group fields entered`}</DockStatus>
 	} else if (mode.figure === 'examinee-subtotal' && examinee && examineeEntered) {
 		dockSummary = (
-			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
-				<DockTotal variant='individual' label={`${examinee.displayLabel} — subtotal`} value={formatScore(examineeEntered.score)} outOf={`/ ${formatScore(examineeEntered.max)} pts`} percent={percentText(examineeEntered.score, examineeEntered.max)} />
+			<div className='flex flex-col gap-0.5 min-w-0 max-w-full [overflow-wrap:anywhere]'>
+				<DockTotal variant='individual' label={`${examinee.displayLabel} — subtotal`} value={formatScore(examineeEntered.score)} outOf={nowrap(`/ ${formatScore(examineeEntered.max)} pts`)} percent={percentText(examineeEntered.score, examineeEntered.max)} />
 				<PreviewLine value={shownValue} kind={kind} outOf={outOf} />
 				{draftIndicator}
 			</div>
@@ -1018,12 +1019,12 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 		)
 	} else {
 		dockSummary = (
-			<div className='flex flex-col gap-0.5 shrink-0 whitespace-nowrap'>
+			<div className='flex flex-col gap-0.5 min-w-0 max-w-full [overflow-wrap:anywhere]'>
 				<DockTotal
 					variant={dockVariant}
 					label={kind === 'weighted' ? 'Your preview' : 'Your total'}
 					value={<PreviewValue value={shownValue} kind={kind} hook />}
-					outOf={kind === 'weighted' ? '/ 100' : `/ ${formatScore(outOf)} pts`}
+					outOf={nowrap(kind === 'weighted' ? '/ 100' : `/ ${formatScore(outOf)} pts`)}
 					percent={percentText(shownValue, outOf)}
 					title={kind === 'total' ? "Out of this entry's maximum" : undefined}
 				/>

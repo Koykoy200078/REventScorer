@@ -45,5 +45,6 @@ export function JudgeBatchRail({
 		disabled: enteredCount === 0,
 		onClick: onReset,
 	})
-	return <BatchRail variant={variant} label={label} actions={actions} />
+	// A long examinee name in the label wraps instead of widening the page (spec §8).
+	return <BatchRail variant={variant} label={label} actions={actions} className='flex-wrap min-w-0 max-w-full [overflow-wrap:anywhere]' />
 }

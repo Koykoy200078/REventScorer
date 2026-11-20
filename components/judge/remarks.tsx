@@ -37,7 +37,7 @@ export function RemarksSection({
 		</span>
 	)
 	const hintNode = (
-		<span data-testid='remark-hint' className={hint.tone === 'warning' ? 'flex items-center gap-1 text-amber-700' : 'text-slate-500'}>
+		<span data-testid='remark-hint' className={hint.tone === 'warning' ? 'flex items-center gap-1 text-amber-700 min-w-0 [overflow-wrap:anywhere]' : 'text-slate-500 min-w-0 [overflow-wrap:anywhere]'}>
 			{hint.tone === 'warning' ? <Icon name='info' className='text-[15px] shrink-0' /> : null}
 			<span>{hint.text}</span>
 		</span>
@@ -94,7 +94,7 @@ export function RemarksSection({
 		<Card variant='individual-remarks' as='section'>
 			<div className='flex flex-col gap-0.5'>
 				<div className='flex items-center justify-between gap-space-sm'>
-					<h3 className='font-headline-sm text-headline-sm text-on-surface font-semibold break-words min-w-0'>Remarks for {contestantName}</h3>
+					<h3 className='font-headline-sm text-headline-sm text-on-surface font-semibold [overflow-wrap:anywhere] min-w-0'>Remarks for {contestantName}</h3>
 					{optional}
 				</div>
 				{multiExaminee ? <p className='font-body-sm text-body-sm text-slate-500'>This remark belongs to the whole entry, not to one examinee.</p> : null}

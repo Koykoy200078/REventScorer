@@ -105,13 +105,13 @@ export function GroupSection({
 									</div>
 									{participants.length > 0 ? (
 										<p className='font-body-sm text-body-sm text-slate-600 mt-0.5'>
-											{membersPhrase(participants.length, 'Applied to')}: <span className='font-semibold text-slate-800'>{participants.join(', ')}</span>
+											{membersPhrase(participants.length, 'Applied to')}: <span className='font-semibold text-slate-800 [overflow-wrap:anywhere]'>{participants.join(', ')}</span>
 										</p>
 									) : null}
 									{formula ? <p className='font-body-sm text-body-sm text-slate-500 mt-0.5'>{formula}</p> : null}
 								</div>
 							</div>
-							<KpiReadout tone='teal' label='Group subtotal:' value={formatScore(totals.score)} outOf={`/ ${formatScore(totals.max)} pts`} />
+							<KpiReadout className='min-w-0 max-w-full flex-wrap' tone='teal' label='Group subtotal:' value={formatScore(totals.score)} outOf={`/ ${formatScore(totals.max)} pts`} />
 						</Card>
 						{blocks.counted.map((block) => unifiedBlock(block, blocks.counted.length >= 2))}
 					</>
