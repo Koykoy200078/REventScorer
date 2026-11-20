@@ -19,7 +19,8 @@ import type { QueuedScoreUpload, SubmitScoresRequestBody, SubmitScoresResponseBo
 import { advanceTarget, rosterStatus } from '@/lib/judge/status'
 import { autoResolveStrand, DIRECT_REMARK_OPTIONS, isTVLAcademicTrack, TVL_LEAF_STRAND_OPTIONS } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
-import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
+import type { JudgeView } from '@/lib/judge/layout'
+import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
 
 interface JudgeScoringFormProps {
 	token: string
@@ -36,6 +37,10 @@ interface JudgeScoringFormProps {
 	submittedAt?: string
 	initialContestantId?: string
 	adminEditMode?: boolean
+	/** Stage 5 Task 5: the event's own scoring type and description, and the view from ?view= (accepted, not used yet). */
+	eventScoringType?: EventScoringType
+	eventDescription?: string
+	initialView?: JudgeView | null
 }
 
 export function JudgeScoringForm({ token, eventTitle, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
