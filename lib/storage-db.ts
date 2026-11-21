@@ -1003,7 +1003,12 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
 	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges, replacedIds)
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
-	const directRatingConfig = source.directRatingConfig !== undefined || previousEvent.directRatingConfig || derivedDirectRatingConfig ? normalizeDirectRatingConfig(source.directRatingConfig, derivedDirectRatingConfig ?? previousEvent.directRatingConfig ?? undefined) : undefined
+	// D32: a payload without directRatingConfig (the admin dashboard's editor sends none) keeps the
+	// event's own weights and strand bonus; only the maximum scores follow the criteria. Before, the
+	// config derived from the criteria (default weights, no bonus) replaced them and changed scores.
+	const storedDirectRatingConfig = previousEvent.directRatingConfig ? normalizeDirectRatingConfig(previousEvent.directRatingConfig) : undefined
+	const fallbackDirectRatingConfig = storedDirectRatingConfig && derivedDirectRatingConfig ? { ...storedDirectRatingConfig, maxScores: { ...derivedDirectRatingConfig.maxScores } } : (derivedDirectRatingConfig ?? storedDirectRatingConfig)
+	const directRatingConfig = source.directRatingConfig !== undefined || previousEvent.directRatingConfig || derivedDirectRatingConfig ? normalizeDirectRatingConfig(source.directRatingConfig, fallbackDirectRatingConfig ?? undefined) : undefined
 
 	return {
 		...previousEvent,
