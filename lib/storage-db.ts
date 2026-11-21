@@ -787,14 +787,18 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 	return contestants
 }
 
-function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'], replacedIds?: Map<string, string>): EventJudge[] {
+// D7: a judge the event already has (same id) keeps its stored link token, and its stored email
+// when the payload's is empty; a token sent by the client is ignored. A new judge gets a new
+// token. So an edit never changes a link, and a browser shown redacted judges (S5) cannot blank one.
+function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'], storedJudges: EventJudge[], replacedIds?: Map<string, string>): EventJudge[] {
 	if (!Array.isArray(rawJudges)) {
 		throw new Error('Judges payload must be an array.')
 	}
 
+	const storedById = new Map(storedJudges.map((judge) => [judge.id, judge]))
 	const usedIds = new Set<string>()
 	const usedNames = new Set<string>()
-	const usedTokens = new Set<string>()
+	const usedTokens = new Set<string>(storedJudges.map((judge) => judge.token))
 	const judges: EventJudge[] = []
 
 	for (const rawJudge of rawJudges) {
@@ -814,12 +818,15 @@ function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'
 		usedNames.add(nameKey)
 
 		const email = typeof rawJudge.email === 'string' ? compactWhitespace(rawJudge.email) : ''
+		const id = normalizeUniqueIdCandidate(rawJudge.id, usedIds, replacedIds)
+		const stored = storedById.get(id)
+		const storedEmail = stored?.email && stored.email.length > 0 ? stored.email : undefined
 
 		judges.push({
-			id: normalizeUniqueIdCandidate(rawJudge.id, usedIds, replacedIds),
+			id,
 			name: judgeName,
-			email: email.length > 0 ? email : undefined,
-			token: normalizeUniqueTokenCandidate(rawJudge.token, usedTokens),
+			email: email.length > 0 ? email : storedEmail,
+			token: stored ? stored.token : normalizeUniqueTokenCandidate(undefined, usedTokens),
 		})
 	}
 
@@ -992,7 +999,7 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	// Over-long ids the page made for new contestants and judges, and the UUIDs that replace them (B46).
 	const replacedIds = new Map<string, string>()
 	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [], replacedIds)
-	const judges = normalizeJudgesForAdminEditor(source.judges ?? [], replacedIds)
+	const judges = normalizeJudgesForAdminEditor(source.judges ?? [], previousEvent.judges, replacedIds)
 	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
 	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges, replacedIds)
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)

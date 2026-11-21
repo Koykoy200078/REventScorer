@@ -3,6 +3,7 @@ import os from 'node:os'
 import type { CreateEventInput, CreateEventResponse } from '@/lib/types'
 import { createEvent, listEventSummaries } from '@/lib/storage'
 import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
+import { isUnlockedRequest } from '@/lib/update-auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,6 +46,11 @@ export async function POST(request: Request): Promise<Response> {
 	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
 	const refused = refuseUnlessOwnOrigin(request)
 	if (refused) return refused
+
+	// S6: creating an event needs the update password.
+	if (!isUnlockedRequest(request)) {
+		return Response.json({ error: 'Update password required.' }, { status: 401 })
+	}
 
 	try {
 		const body = (await request.json()) as CreateEventInput

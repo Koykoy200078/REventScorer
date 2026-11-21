@@ -2,6 +2,7 @@ import { cookies, headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 
 import { AdminLiveDashboard } from '@/components/admin-live-dashboard'
+import { redactJudgeSecrets } from '@/lib/judge-redaction'
 import { compileEventResults } from '@/lib/scoring'
 import { getEventById } from '@/lib/storage'
 import { UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
@@ -15,12 +16,16 @@ export default async function AdminEventPage({ params, searchParams }: { params:
 	const openEditor = resolvedSearchParams?.update === '1' || resolvedSearchParams?.update === 'true' || resolvedSearchParams?.editor === '1' || resolvedSearchParams?.editor === 'true'
 	const cookieStore = await cookies()
 	const authCookie = cookieStore.get(UPDATE_AUTH_COOKIE_NAME)?.value
-	const allowEventEditor = openEditor && verifyUpdateAuthCookieValue(authCookie)
-	const event = await getEventById(eventId)
+	const unlocked = verifyUpdateAuthCookieValue(authCookie)
+	const allowEventEditor = openEditor && unlocked
+	const storedEvent = await getEventById(eventId)
 
-	if (!event) {
+	if (!storedEvent) {
 		notFound()
 	}
+
+	// S5: a browser without the update password gets no judge link token or email.
+	const event = unlocked ? storedEvent : redactJudgeSecrets(storedEvent)
 
 	const compiled = compileEventResults(event)
 	const requestHeaders = await headers()

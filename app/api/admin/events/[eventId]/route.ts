@@ -2,12 +2,17 @@ import { cookies } from 'next/headers'
 
 import { compileEventResults } from '@/lib/scoring'
 import { deleteEventById, getEventById, updateContestantJudgeAssignments, updateContestantProgramTags, updateEventDefinition } from '@/lib/storage'
-import { UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
+import { redactJudgeSecrets } from '@/lib/judge-redaction'
+import { isUnlockedRequest, UPDATE_AUTH_COOKIE_NAME, verifyUpdateAuthCookieValue } from '@/lib/update-auth'
 import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request: Request, context: { params: Promise<{ eventId: string }> }): Promise<Response> {
+const UPDATE_PASSWORD_REQUIRED = { error: 'Update password required.' }
+
+// S5: without the update password the event comes without its judges' link tokens and emails;
+// the compiled results are the same either way (the golden snapshot reads them without it).
+export async function GET(request: Request, context: { params: Promise<{ eventId: string }> }): Promise<Response> {
 	const { eventId } = await context.params
 	const event = await getEventById(eventId)
 
@@ -16,14 +21,20 @@ export async function GET(_request: Request, context: { params: Promise<{ eventI
 	}
 
 	const compiled = compileEventResults(event)
+	const unlocked = isUnlockedRequest(request)
 
-	return Response.json({ event, compiled })
+	return Response.json({ event: unlocked ? event : redactJudgeSecrets(event), compiled, judgeLinksLocked: !unlocked })
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ eventId: string }> }): Promise<Response> {
 	// S2: only EventScorer's own pages (or server-to-server calls with no Origin) may write.
 	const refused = refuseUnlessOwnOrigin(request)
 	if (refused) return refused
+
+	// S6: every change (program tags, judge assignment, the event editor) needs the update password.
+	if (!isUnlockedRequest(request)) {
+		return Response.json(UPDATE_PASSWORD_REQUIRED, { status: 401 })
+	}
 
 	try {
 		const { eventId } = await context.params
@@ -38,12 +49,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ event
 		let event
 
 		if (body.eventEditor && typeof body.eventEditor === 'object') {
-			const cookieStore = await cookies()
-			const authCookie = cookieStore.get(UPDATE_AUTH_COOKIE_NAME)?.value
-			if (!verifyUpdateAuthCookieValue(authCookie)) {
-				return Response.json({ error: 'Update password required.' }, { status: 401 })
-			}
-
 			event = await updateEventDefinition(eventId, body.eventEditor)
 		} else if (Array.isArray(body.programAssignments)) {
 			event = await updateContestantProgramTags(eventId, body.programAssignments)
