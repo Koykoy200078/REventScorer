@@ -1,6 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+
+import UnlockDialog from '@/components/unlock-dialog'
 
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
@@ -217,6 +219,8 @@ export function CreateScorerForm() {
 	const [error, setError] = useState<string | null>(null)
 	const [created, setCreated] = useState<CreateEventResponse | null>(null)
 	const [copiedValue, setCopiedValue] = useState<string | null>(null)
+	const [isUnlockOpen, setIsUnlockOpen] = useState(false)
+	const pendingPublishRef = useRef<unknown>(null)
 
 	const totalEventMaxScore = useMemo(() => {
 		return criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)
@@ -569,6 +573,14 @@ export function CreateScorerForm() {
 			}),
 		}
 
+		await publishEvent(payload)
+	}
+
+	// Phase 3 Task 13 (S6): creating an event needs the update password. A 401 opens the unlock
+	// dialog and keeps the payload; once unlocked, the same payload is sent again (once).
+	async function publishEvent(payload: unknown): Promise<void> {
+		setError(null)
+		setIsSaving(true)
 		try {
 			const response = await fetch('/api/eventscorer/events', {
 				method: 'POST',
@@ -577,6 +589,12 @@ export function CreateScorerForm() {
 			})
 
 			const responseData = (await response.json()) as CreateEventResponse & { error?: string }
+
+			if (response.status === 401) {
+				pendingPublishRef.current = payload
+				setIsUnlockOpen(true)
+				return
+			}
 
 			if (!response.ok) {
 				throw new Error(responseData.error ?? 'Unable to create scorer event.')
@@ -1232,8 +1250,24 @@ export function CreateScorerForm() {
 					</div>
 				</form>
 
+				<UnlockDialog
+					open={isUnlockOpen}
+					reason='Publishing an event needs the update password.'
+					onCancel={() => {
+						pendingPublishRef.current = null
+						setIsUnlockOpen(false)
+						setError('The event was not published: the update password is required.')
+					}}
+					onUnlocked={() => {
+						const payload = pendingPublishRef.current
+						pendingPublishRef.current = null
+						setIsUnlockOpen(false)
+						if (payload !== null) void publishEvent(payload)
+					}}
+				/>
+
 				{created ? (
-					<section className='mt-8 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
+					<section data-testid='published-event' data-event-id={created.eventId} className='mt-8 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
 						<h2 className='text-lg font-semibold text-cyan-950'>Event Published Successfully</h2>
 						<p className='mt-1 text-sm text-cyan-900/80'>Share each judge link privately.</p>
 

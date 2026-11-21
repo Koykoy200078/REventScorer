@@ -42,9 +42,13 @@ import type { MemberStatus, RosterStatus } from '@/lib/judge/status'
 import { directFormulaWeights, dockMode, formulaSentence, previewDetails, previewKind, previewScore, splitGroupBlocks } from '@/lib/judge/summary'
 import { autoResolveStrand, isTVLAcademicTrack } from '@/lib/judge/strand'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import { shouldKeepQueued } from '@/lib/save-retry'
 import { contestantCells, resolveJudgeLayout, resolveView, revealTarget, selectedExaminee, visibleCells, withViewParam } from '@/lib/judge/layout'
 import type { JudgeView } from '@/lib/judge/layout'
 import type { DirectRatingConfig, EventContestant, EventCriterion, EventPresentationSlot, EventScoringType, JudgeContestantDetailsMap, JudgeProfile, RubricLegendItem, ScoreMatrix } from '@/lib/types'
+
+// Phase 3 Task 13: shown after the server's own text when a queued save is refused for now.
+const KEPT_ON_DEVICE = 'Your scores are kept on this device and were not uploaded. Ask the organiser.'
 
 interface JudgeScoringFormProps {
 	token: string
@@ -526,6 +530,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 			let removedCount = 0
 			let latestSubmittedAtValue: string | undefined
 			let permanentErrorMessage: string | null = null
+			let keptMessage: string | null = null
 
 			try {
 				for (const pendingUpload of pendingUploads) {
@@ -541,6 +546,14 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 							latestSubmittedAtValue = responseBody.submittedAt
 						}
 					} catch (syncError) {
+						// Phase 3 Task 13: a refusal that can pass later (401, 403, 408, 429) keeps the save on
+						// this device and stops here, so the queue keeps its order. The judge is told who can
+						// help, never asked to unlock anything.
+						if (syncError instanceof SubmitScoresError && typeof syncError.status === 'number' && syncError.status < 500 && shouldKeepQueued(syncError.status, false)) {
+							keptMessage = `${syncError.message} ${KEPT_ON_DEVICE}`
+							break
+						}
+
 						if (syncError instanceof SubmitScoresError && typeof syncError.status === 'number' && syncError.status >= 400 && syncError.status < 500) {
 							removeQueuedScoreUpload(pendingUpload.id)
 							removedCount += 1
@@ -571,7 +584,9 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 				setLastSubmittedAt(latestSubmittedAtValue)
 			}
 
-			if (showSuccessMessage && syncedCount > 0) {
+			if (keptMessage) {
+				setError(keptMessage)
+			} else if (showSuccessMessage && syncedCount > 0) {
 				setError(null)
 				setSuccessMessage(`Auto-uploaded ${syncedCount} pending ${syncedCount === 1 ? 'entry' : 'entries'}.`)
 			} else if (permanentErrorMessage) {

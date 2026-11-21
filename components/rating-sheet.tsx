@@ -239,6 +239,13 @@ export function RatingSheet() {
 	const [updatePassword, setUpdatePassword] = useState('')
 	const [updatePasswordError, setUpdatePasswordError] = useState('')
 	const [isVerifyingPassword, setIsVerifyingPassword] = useState(false)
+	// Phase 3 Task 13: why the password box is open ('publish' retries the save, 'load' reads the
+	// event again: a locked read has no judge emails or links), and a key that re-runs the load.
+	const [passwordPurpose, setPasswordPurpose] = useState<'publish' | 'load'>('publish')
+	const [loadKey, setLoadKey] = useState(0)
+	// True while an edited event was read locked and the form was not filled: publishing then would
+	// overwrite the event with an empty form, so it asks to load the event first.
+	const [loadedLocked, setLoadedLocked] = useState(false)
 
 	useEffect(() => {
 		if (!editEventId) return
@@ -249,7 +256,14 @@ export function RatingSheet() {
 			.then((res) => res.json())
 			.then((data: any) => {
 				if (!mounted) return
+				if (data && data.judgeLinksLocked === true) {
+					setLoadedLocked(true)
+					setPasswordPurpose('load')
+					setIsPasswordModalOpen(true)
+					return
+				}
 				if (data && data.event) {
+					setLoadedLocked(false)
 					const ev = data.event
 					setTitle(ev.title || 'Direct Rating Sheet')
 					setDescription(ev.description || '')
@@ -304,7 +318,7 @@ export function RatingSheet() {
 		return () => {
 			mounted = false
 		}
-	}, [editEventId])
+	}, [editEventId, loadKey])
 
 	const totalEntries = entries.length
 	const selectedAlignedStrandSet = new Set([...directRatingConfig.strandBonus.singleAlignedStrands, ...directRatingConfig.strandBonus.multiAlignedStrands].map((strand) => strand.toLowerCase()))
@@ -544,6 +558,11 @@ export function RatingSheet() {
 
 	async function publishRatingSheet() {
 		setError(null)
+		if (editEventId && loadedLocked) {
+			setPasswordPurpose('load')
+			setIsPasswordModalOpen(true)
+			return
+		}
 		setIsSaving(true)
 
 		const contestants = buildContestantsPayload(entries)
@@ -636,6 +655,12 @@ export function RatingSheet() {
 
 			const responseData = await response.json()
 
+			if (response.status === 401) {
+				setPasswordPurpose('publish')
+				setIsPasswordModalOpen(true)
+				return
+			}
+
 			if (!response.ok) {
 				throw new Error(responseData.error ?? 'Unable to publish rating sheet.')
 			}
@@ -659,10 +684,6 @@ export function RatingSheet() {
 			setPublishedAt(new Date().toISOString())
 		} catch (publishError) {
 			const errorMessage = publishError instanceof Error ? publishError.message : 'Unable to publish rating sheet.'
-			if (errorMessage.toLowerCase().includes('password required')) {
-				setIsPasswordModalOpen(true)
-				return
-			}
 			setError(errorMessage)
 			setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 		} finally {
@@ -692,8 +713,11 @@ export function RatingSheet() {
 			setIsPasswordModalOpen(false)
 			setUpdatePassword('')
 			setUpdatePasswordError('')
-			// Re-run the update
-			void publishRatingSheet()
+			if (passwordPurpose === 'load') {
+				setLoadKey((key) => key + 1)
+			} else {
+				void publishRatingSheet()
+			}
 		} catch {
 			setUpdatePasswordError('Unable to verify password. Try again.')
 		} finally {
@@ -1069,7 +1093,7 @@ export function RatingSheet() {
 				<div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4'>
 					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
 						<h3 className='text-lg font-semibold text-slate-900'>Authentication Required</h3>
-						<p className='mt-1 text-sm text-slate-600'>Enter the update password to edit this event.</p>
+						<p className='mt-1 text-sm text-slate-600'>{editEventId ? 'Enter the update password to edit this event.' : 'Enter the update password to publish this rating sheet.'}</p>
 						<form className='mt-4 space-y-3' onSubmit={handlePasswordSubmit}>
 							<div>
 								<label className='text-xs font-medium uppercase tracking-wide text-slate-500'>Password</label>

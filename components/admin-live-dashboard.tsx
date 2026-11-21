@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import UnlockDialog from '@/components/unlock-dialog'
 import { createEditorId } from '@/lib/admin/editor-id'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import { shouldKeepQueued } from '@/lib/save-retry'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
 import { exportAsExcel, exportSectionAnalyticsAsExcel } from './export-excel'
 
@@ -71,12 +73,15 @@ interface AdminLiveDashboardProps {
 	initialOpenEditor?: boolean
 	allowEventEditor?: boolean
 	wsAuthToken?: string
+	/** S5: the page was rendered without the update password, so the judges carry no link or email. */
+	initialJudgeLinksLocked?: boolean
 }
 
 interface AdminEventResponse {
 	event: EventScorer
 	compiled: EventCompiledResults
 	error?: string
+	judgeLinksLocked?: boolean
 }
 
 type QueuedAdminSaveKind = 'program-assignment' | 'judge-assignment' | 'event-editor'
@@ -108,6 +113,13 @@ interface QueuedAdminSaveAction {
 }
 
 const QUEUED_ADMIN_SAVES_STORAGE_KEY = 'eventscorer:queued-admin-saves:v1'
+
+// Phase 3 Task 13: the write a 401 stopped, run once after the unlock.
+type UnlockRetry =
+	| { kind: 'program'; assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }> }
+	| { kind: 'judge'; contestantId: string; judgeIds: string[] }
+	| { kind: 'editor' }
+	| { kind: 'queue' }
 const ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS = 15_000
 
 class AdminSaveError extends Error {
@@ -1368,7 +1380,7 @@ function buildAdminEventEditorSnapshot(event: EventScorer): AdminEventEditorInpu
 	}
 }
 
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken }: AdminLiveDashboardProps) {
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
@@ -1406,6 +1418,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [pendingProgramTarget, setPendingProgramTarget] = useState<ProgramLabel | null>(null)
 
 	const refreshInFlight = useRef(false)
+	// A refresh asked for while one runs is run right after it, so no update is lost.
+	const refreshAgain = useRef(false)
+	// Phase 3 Task 13 (S5, S6): whether this browser has the update password, the write waiting for
+	// it (retried once after the unlock), and whether the queue waits for a sign-in.
+	const [judgeLinksLocked, setJudgeLinksLocked] = useState(initialJudgeLinksLocked)
+	const [unlockRequest, setUnlockRequest] = useState<{ reason: string; retry?: UnlockRetry } | null>(null)
+	const signInNeeded = useRef(false)
 	const adminAutoSyncInFlight = useRef(false)
 
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
@@ -1534,12 +1553,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	}, [event])
 
 	useEffect(() => {
-		if (showEventEditor) {
+		if (showEventEditor || judgeLinksLocked) {
 			return
 		}
 
 		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event)))
-	}, [event, showEventEditor])
+	}, [event, judgeLinksLocked, showEventEditor])
 
 	const updateEventEditorDraft = useCallback((updater: (previous: AdminEventEditorInput) => AdminEventEditorInput) => {
 		setEventEditorDraft((previous) => synchronizeEventEditorDraft(updater(previous)))
@@ -1574,30 +1593,38 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}, [])
 
-	const refreshDashboard = useCallback(async () => {
+	const refreshDashboard = useCallback(async (): Promise<void> => {
 		if (refreshInFlight.current) {
+			refreshAgain.current = true
 			return
 		}
 
 		refreshInFlight.current = true
 		setIsRefreshing(true)
-		setRefreshError(null)
 
 		try {
-			const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
-				cache: 'no-store',
-			})
+			do {
+				refreshAgain.current = false
+				setRefreshError(null)
 
-			const responseBody = (await response.json()) as AdminEventResponse
+				try {
+					const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, {
+						cache: 'no-store',
+					})
 
-			if (!response.ok) {
-				throw new Error(responseBody.error ?? 'Unable to refresh results.')
-			}
+					const responseBody = (await response.json()) as AdminEventResponse
 
-			setEvent(responseBody.event)
-			setCompiled(responseBody.compiled)
-		} catch (error) {
-			setRefreshError(error instanceof Error ? error.message : 'Unable to refresh results.')
+					if (!response.ok) {
+						throw new Error(responseBody.error ?? 'Unable to refresh results.')
+					}
+
+					setEvent(responseBody.event)
+					setCompiled(responseBody.compiled)
+					setJudgeLinksLocked(responseBody.judgeLinksLocked === true)
+				} catch (error) {
+					setRefreshError(error instanceof Error ? error.message : 'Unable to refresh results.')
+				}
+			} while (refreshAgain.current)
 		} finally {
 			refreshInFlight.current = false
 			setIsRefreshing(false)
@@ -1674,6 +1701,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				return
 			}
 
+			// Waiting for a sign-in: only an explicit try (Sync Queue Now, back online) goes on.
+			if (!showNotice && signInNeeded.current) {
+				return
+			}
+
 			if (typeof navigator !== 'undefined' && !navigator.onLine) {
 				return
 			}
@@ -1689,6 +1721,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 			let syncedCount = 0
 			let permanentErrorMessage: string | null = null
+			let needsSignIn = false
 
 			try {
 				for (const pendingSave of pendingSaves) {
@@ -1699,6 +1732,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 						setEvent(responseBody.event)
 						setCompiled(responseBody.compiled)
+						setJudgeLinksLocked(false)
 
 						if (pendingSave.kind === 'event-editor') {
 							setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
@@ -1709,6 +1743,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							setEventEditorNotice('Queued published event changes uploaded. Judge submissions were reset to keep scoring consistent with the updated structure.')
 						}
 					} catch (syncError) {
+						// Phase 3 Task 13: a refusal that can pass later stays queued and stops the loop (the
+						// order is kept); a missing sign-in (401, 403) asks for the update password.
+						if (syncError instanceof AdminSaveError && typeof syncError.status === 'number' && syncError.status < 500 && shouldKeepQueued(syncError.status, false)) {
+							needsSignIn = syncError.status === 401 || syncError.status === 403
+							break
+						}
+
 						if (syncError instanceof AdminSaveError && typeof syncError.status === 'number' && syncError.status >= 400 && syncError.status < 500) {
 							removeQueuedAdminSaveAction(pendingSave.id)
 
@@ -1738,6 +1779,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 			if (permanentErrorMessage) {
 				setRefreshError(permanentErrorMessage)
+			}
+
+			signInNeeded.current = needsSignIn
+			if (needsSignIn) {
+				setAdminQueueNotice('Sign-in needed: unlock to upload queued changes.')
+				setUnlockRequest({ reason: 'Uploading the queued changes needs the update password.', retry: { kind: 'queue' } })
 			}
 		},
 		[event.id, patchAdminEvent, refreshQueuedAdminSaves],
@@ -1802,9 +1849,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
+				setJudgeLinksLocked(false)
 				setAdminQueueNotice(null)
 			} catch (error) {
-				if (shouldQueueAdminSave(error)) {
+				if (error instanceof AdminSaveError && error.status === 401) {
+					setUnlockRequest({ reason: 'Changing a program needs the update password.', retry: { kind: 'program', assignments } })
+				} else if (shouldQueueAdminSave(error)) {
 					for (const assignment of assignments) {
 						const contestantName = contestantsById.get(assignment.contestantId)?.name ?? assignment.contestantId
 
@@ -1927,8 +1977,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	)
 
 	const saveJudgeAssignment = useCallback(
-		async (contestantId: string) => {
-			const judgeIds = judgeAssignmentDrafts[contestantId] ?? assignedJudgeIdsForContestant(event, contestantId)
+		async (contestantId: string, retryJudgeIds?: string[]) => {
+			const judgeIds = retryJudgeIds ?? judgeAssignmentDrafts[contestantId] ?? assignedJudgeIdsForContestant(event, contestantId)
 
 			if (judgeIds.length === 0) {
 				setRefreshError('At least 1 judge must be assigned to each participant.')
@@ -1943,10 +1993,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
+				setJudgeLinksLocked(false)
 				setEditingJudgeAssignmentForContestantId(null)
 				setAdminQueueNotice(null)
 			} catch (error) {
-				if (shouldQueueAdminSave(error)) {
+				if (error instanceof AdminSaveError && error.status === 401) {
+					setUnlockRequest({ reason: 'Changing who judges an entry needs the update password.', retry: { kind: 'judge', contestantId, judgeIds: [...judgeIds] } })
+				} else if (shouldQueueAdminSave(error)) {
 					const contestantName = contestantsById.get(contestantId)?.name ?? contestantId
 
 					upsertQueuedAdminSaveAction({
@@ -1997,6 +2050,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 			setEvent(responseBody.event)
 			setCompiled(responseBody.compiled)
+			setJudgeLinksLocked(false)
 			setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
 			setEditingJudgeAssignmentForContestantId(null)
 			setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
@@ -2004,7 +2058,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setAdminQueueNotice(null)
 			setShowEventEditor(false)
 		} catch (error) {
-			if (shouldQueueAdminSave(error)) {
+			if (error instanceof AdminSaveError && error.status === 401) {
+				setUnlockRequest({ reason: 'Saving the event needs the update password.', retry: { kind: 'editor' } })
+			} else if (shouldQueueAdminSave(error)) {
 				upsertQueuedAdminSaveAction({
 					id: queuedAdminSaveActionId(event.id, 'event-editor'),
 					eventId: event.id,
@@ -3557,8 +3613,20 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</section>
 
-					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Links and Submission Status</h2>
+					<section data-testid='judge-links' data-locked={judgeLinksLocked ? 'true' : 'false'} className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+							<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Links and Submission Status</h2>
+							{judgeLinksLocked ? (
+								<button
+									type='button'
+									data-testid='unlock-judge-links'
+									onClick={() => setUnlockRequest({ reason: 'Judge links are shown only with the update password.' })}
+									className='rounded-full border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700'
+								>
+									Unlock judge links
+								</button>
+							) : null}
+						</div>
 						<div className='mt-4 space-y-3'>
 							{event.judges.map((judge) => {
 								const judgeResult = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
@@ -3567,18 +3635,24 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								const copyValue = baseUrl || typeof window === 'undefined' ? fullJudgeUrl : `${window.location.origin}${judgePath}`
 
 								return (
-									<article key={judge.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<article key={judge.id} data-testid='judge-link-row' data-judge-id={judge.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
 										<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 											<div>
 												<p className='text-sm font-semibold text-[var(--text-primary)]'>{judge.name}</p>
-												<a href={fullJudgeUrl} className='block break-all text-sm text-[var(--text-secondary)] underline'>
-													{fullJudgeUrl}
-												</a>
+												{judgeLinksLocked || !judge.token ? (
+													<p className='text-sm text-[var(--text-secondary)]'>Link hidden until unlocked</p>
+												) : (
+													<a href={fullJudgeUrl} className='block break-all text-sm text-[var(--text-secondary)] underline'>
+														{fullJudgeUrl}
+													</a>
+												)}
 											</div>
 											<div className='flex flex-wrap items-center gap-2'>
+												{judgeLinksLocked || !judge.token ? null : (
 												<button type='button' onClick={() => copyLink(copyValue)} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
 													{copiedLink === copyValue ? 'Copied' : 'Copy Link'}
 												</button>
+												)}
 												<div className='text-sm text-[var(--text-secondary)]'>{judgeResult?.submitted ? <span>Submitted {judgeResult.submittedAt ? formatDate(judgeResult.submittedAt) : ''}</span> : <span>Not submitted yet</span>}</div>
 											</div>
 										</div>
@@ -3752,6 +3826,30 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					))}
 				</div>
 			</div>
+
+			<UnlockDialog
+				open={unlockRequest !== null}
+				reason={unlockRequest?.reason}
+				onCancel={() => setUnlockRequest(null)}
+				onUnlocked={() => {
+					const retry = unlockRequest?.retry
+					setUnlockRequest(null)
+					signInNeeded.current = false
+					// A retried write answers with the whole event, links included; otherwise read it again.
+					if (retry?.kind === 'program') {
+						void saveProgramAssignments(retry.assignments)
+					} else if (retry?.kind === 'judge') {
+						setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
+						void saveJudgeAssignment(retry.contestantId, retry.judgeIds)
+					} else if (retry?.kind === 'editor') {
+						void saveEventEditor()
+					} else if (retry?.kind === 'queue') {
+						void syncQueuedAdminSaves(true)
+					} else {
+						void refreshDashboard()
+					}
+				}}
+			/>
 
 			{isProgramPasswordModalOpen ? (
 				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>

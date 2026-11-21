@@ -34,5 +34,5 @@ export default async function AdminEventPage({ params, searchParams }: { params:
 	const baseUrl = host ? `${protocol}://${host}` : ''
 	const wsAuthToken = buildAdminWsToken(event.id)
 
-	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} initialOpenEditor={allowEventEditor} allowEventEditor={allowEventEditor} wsAuthToken={wsAuthToken ?? undefined} />
+	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} initialOpenEditor={allowEventEditor} allowEventEditor={allowEventEditor} wsAuthToken={wsAuthToken ?? undefined} initialJudgeLinksLocked={!unlocked} />
 }
