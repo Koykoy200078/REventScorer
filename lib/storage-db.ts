@@ -2413,6 +2413,27 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 	}
 }
 
+// D27: the admin editor shows a member criterion's rows once ("Student 1 - X" stands for every
+// member) and sends the other members' rows back without their ids. After a rename (X to Y) an old
+// "Student N - X" matches neither id nor name, so it follows Student 1: the old "Student 1 - X"
+// keeps its id, its new name gives the new wording, and "Student N - X" maps to "Student N - Y".
+function memberRenameTarget(oldCriterion: EventCriterion, newCriterion: EventCriterion, oldSub: EventCriterion['subCriteria'][number]): EventCriterion['subCriteria'][number] | undefined {
+	const { memberLabel, displayName } = splitMemberCriterionName(oldSub.name)
+	if (memberIndexFromLabel(memberLabel) === null) {
+		return undefined
+	}
+
+	const sameWording = (name: string) => splitMemberCriterionName(name).displayName.toLowerCase() === displayName.toLowerCase()
+	const oldFirstMember = oldCriterion.subCriteria.find((sub) => memberIndexFromLabel(splitMemberCriterionName(sub.name).memberLabel) === 1 && sameWording(sub.name))
+	const newFirstMember = oldFirstMember ? newCriterion.subCriteria.find((sub) => sub.id === oldFirstMember.id) : undefined
+	if (!newFirstMember) {
+		return undefined
+	}
+
+	const target = `${memberLabel} - ${splitMemberCriterionName(newFirstMember.name).displayName}`.toLowerCase()
+	return newCriterion.subCriteria.find((sub) => sub.name.toLowerCase() === target)
+}
+
 // B47: every row of an event is deleted here, deepest table first, and the event row last. On
 // MySQL 9.7.4 `DELETE FROM es_events` with ON DELETE CASCADE left rows behind: one of the event's
 // presentation slots and one submission (tables with two cascading parents), and the sub-criteria
@@ -2998,7 +3019,7 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 			const newCriterion = normalizedEvent.criteria.find((c) => c.id === oldCriterion.id) ?? normalizedEvent.criteria.find((c) => c.name === oldCriterion.name)
 			if (!newCriterion) continue
 			for (const oldSub of oldCriterion.subCriteria) {
-				const newSub = newCriterion.subCriteria.find((s) => s.id === oldSub.id) ?? newCriterion.subCriteria.find((s) => s.name === oldSub.name)
+				const newSub = newCriterion.subCriteria.find((s) => s.id === oldSub.id) ?? newCriterion.subCriteria.find((s) => s.name === oldSub.name) ?? memberRenameTarget(oldCriterion, newCriterion, oldSub)
 				if (newSub) {
 					subCriterionMap.set(oldSub.id, newSub.id)
 				}
