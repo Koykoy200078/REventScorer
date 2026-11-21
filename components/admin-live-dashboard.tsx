@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { createEditorId } from '@/lib/admin/editor-id'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventContestant, EventCriterion, EventProgramTag, EventScorer } from '@/lib/types'
 import { exportAsExcel, exportSectionAnalyticsAsExcel } from './export-excel'
@@ -1066,14 +1067,6 @@ function sameJudgeAssignments(left: string[], right: string[]): boolean {
 	return right.every((judgeId) => leftSet.has(judgeId))
 }
 
-function createLocalEditorId(prefix: string): string {
-	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-		return `${prefix}-${crypto.randomUUID()}`
-	}
-
-	return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now().toString(36)}`
-}
-
 function uniqueTrimmedNames(value: string): string[] {
 	const unique = new Set<string>()
 
@@ -1257,7 +1250,7 @@ function buildSynchronizedPresentationSlots(contestants: AdminEventEditorInput['
 		const nextJudgeIds = Array.from(new Set((Array.isArray(currentSlot?.judgeIds) ? currentSlot.judgeIds : fallbackJudgeIds).map((judgeId) => String(judgeId ?? '').trim()).filter((judgeId) => validJudgeIds.has(judgeId))))
 
 		return {
-			id: String(currentSlot?.id ?? '').trim() || createLocalEditorId(`slot-${index + 1}`),
+			id: String(currentSlot?.id ?? '').trim() || createEditorId(),
 			label: String(currentSlot?.label ?? '').trim() || `Slot ${index + 1}`,
 			contestantId,
 			judgeIds: nextJudgeIds,
@@ -1266,12 +1259,12 @@ function buildSynchronizedPresentationSlots(contestants: AdminEventEditorInput['
 }
 
 function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEditorInput {
-	const contestants: AdminEventEditorInput['contestants'] = (Array.isArray(draft.contestants) ? draft.contestants : []).map((contestant, index) => {
+	const contestants: AdminEventEditorInput['contestants'] = (Array.isArray(draft.contestants) ? draft.contestants : []).map((contestant) => {
 		const rawNoatScore = contestant?.noatScore
 		const numericNoatScore = typeof rawNoatScore === 'number' ? (Number.isFinite(rawNoatScore) ? rawNoatScore : null) : typeof rawNoatScore === 'string' && rawNoatScore.trim() !== '' && Number.isFinite(Number(rawNoatScore)) ? Number(rawNoatScore) : null
 
 		return {
-			id: String(contestant?.id ?? '').trim() || createLocalEditorId(`contestant-${index + 1}`),
+			id: String(contestant?.id ?? '').trim() || createEditorId(),
 			name: typeof contestant?.name === 'string' ? contestant.name : '',
 			entryType: contestant?.entryType === 'individual' ? 'individual' : 'group',
 			programTag: contestant?.programTag === 'BSINT' || contestant?.programTag === 'BSCS' ? contestant.programTag : null,
@@ -1283,18 +1276,18 @@ function synchronizeEventEditorDraft(draft: AdminEventEditorInput): AdminEventEd
 		}
 	})
 
-	const judges: AdminEventEditorInput['judges'] = (Array.isArray(draft.judges) ? draft.judges : []).map((judge, index) => ({
-		id: String(judge?.id ?? '').trim() || createLocalEditorId(`judge-${index + 1}`),
+	const judges: AdminEventEditorInput['judges'] = (Array.isArray(draft.judges) ? draft.judges : []).map((judge) => ({
+		id: String(judge?.id ?? '').trim() || createEditorId(),
 		name: typeof judge?.name === 'string' ? judge.name : '',
 		email: typeof judge?.email === 'string' ? judge.email : '',
 		token: typeof judge?.token === 'string' ? judge.token : '',
 	}))
 
-	const criteria: AdminEventEditorInput['criteria'] = (Array.isArray(draft.criteria) ? draft.criteria : []).map((criterion, criterionIndex) => ({
-		id: String(criterion?.id ?? '').trim() || createLocalEditorId(`criterion-${criterionIndex + 1}`),
+	const criteria: AdminEventEditorInput['criteria'] = (Array.isArray(draft.criteria) ? draft.criteria : []).map((criterion) => ({
+		id: String(criterion?.id ?? '').trim() || createEditorId(),
 		name: typeof criterion?.name === 'string' ? criterion.name : '',
-		subCriteria: (Array.isArray(criterion?.subCriteria) ? criterion.subCriteria : []).map((subCriterion, subCriterionIndex) => ({
-			id: String(subCriterion?.id ?? '').trim() || createLocalEditorId(`subcriterion-${criterionIndex + 1}-${subCriterionIndex + 1}`),
+		subCriteria: (Array.isArray(criterion?.subCriteria) ? criterion.subCriteria : []).map((subCriterion) => ({
+			id: String(subCriterion?.id ?? '').trim() || createEditorId(),
 			name: typeof subCriterion?.name === 'string' ? subCriterion.name : '',
 			maxScore: Number.isFinite(Number(subCriterion?.maxScore)) ? Number(subCriterion?.maxScore) : 0,
 		})),
@@ -2488,7 +2481,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												onClick={() => {
 													updateEventEditorDraft((previous) => ({
 														...previous,
-														judges: [...previous.judges, { id: createLocalEditorId('judge'), name: '', email: '' }],
+														judges: [...previous.judges, { id: createEditorId(), name: '', email: '' }],
 													}))
 												}}
 												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
@@ -2549,7 +2542,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												onClick={() => {
 													updateEventEditorDraft((previous) => ({
 														...previous,
-														contestants: [...previous.contestants, { id: createLocalEditorId('contestant'), name: '', entryType: 'group', participants: [], programTag: null, noatScore: null }],
+														contestants: [...previous.contestants, { id: createEditorId(), name: '', entryType: 'group', participants: [], programTag: null, noatScore: null }],
 													}))
 												}}
 												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
@@ -2717,9 +2710,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														criteria: [
 															...previous.criteria,
 															{
-																id: createLocalEditorId('criterion'),
+																id: createEditorId(),
 																name: '',
-																subCriteria: [{ id: createLocalEditorId('subcriterion'), name: '', maxScore: 0 }],
+																subCriteria: [{ id: createEditorId(), name: '', maxScore: 0 }],
 															},
 														],
 													}))
@@ -2842,7 +2835,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																			criterionItemIndex === criterionIndex
 																				? {
 																						...criterionItem,
-																						subCriteria: [...criterionItem.subCriteria, { id: createLocalEditorId('subcriterion'), name: '', maxScore: 0 }],
+																						subCriteria: [...criterionItem.subCriteria, { id: createEditorId(), name: '', maxScore: 0 }],
 																					}
 																				: criterionItem,
 																		),

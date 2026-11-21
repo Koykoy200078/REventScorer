@@ -396,9 +396,16 @@ function normalizeContestantParticipants(value: unknown): string[] {
 	return uniqueCaseInsensitive(cleaned)
 }
 
-function normalizeUniqueIdCandidate(value: unknown, usedIds: Set<string>): string {
+// The id columns are VARCHAR(36), a UUID. B46: the admin editor sent "<prefix>-<uuid>" ids
+// (42-53 characters) for what it added, and the save was refused ("Data too long for column
+// 'id'"). A candidate longer than that now gets a new UUID; `replacedIds` records the swap so a
+// reference to the candidate in the same payload (a presentation slot's contestant and judges)
+// follows it.
+const MAX_ID_LENGTH = 36
+
+function normalizeUniqueIdCandidate(value: unknown, usedIds: Set<string>, replacedIds?: Map<string, string>): string {
 	const candidate = compactWhitespace(String(value ?? ''))
-	if (candidate.length > 0 && !usedIds.has(candidate)) {
+	if (candidate.length > 0 && candidate.length <= MAX_ID_LENGTH && !usedIds.has(candidate)) {
 		usedIds.add(candidate)
 		return candidate
 	}
@@ -409,6 +416,9 @@ function normalizeUniqueIdCandidate(value: unknown, usedIds: Set<string>): strin
 	}
 
 	usedIds.add(generated)
+	if (replacedIds && candidate.length > MAX_ID_LENGTH) {
+		replacedIds.set(candidate, generated)
+	}
 	return generated
 }
 
@@ -728,7 +738,7 @@ function buildEvent(input: CreateEventInput): EventScorer {
 	}
 }
 
-function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInput['contestants']): EventContestant[] {
+function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInput['contestants'], replacedIds?: Map<string, string>): EventContestant[] {
 	if (!Array.isArray(rawContestants)) {
 		throw new Error('Contestants payload must be an array.')
 	}
@@ -759,7 +769,7 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 		const noatScore = normalizeNoatScore(rawContestant.noatScore)
 
 		contestants.push({
-			id: normalizeUniqueIdCandidate(rawContestant.id, usedIds),
+			id: normalizeUniqueIdCandidate(rawContestant.id, usedIds, replacedIds),
 			name: contestantName,
 			entryType,
 			participants: entryType === 'group' && participants.length > 0 ? participants : undefined,
@@ -777,7 +787,7 @@ function normalizeContestantsForAdminEditor(rawContestants: AdminEventEditorInpu
 	return contestants
 }
 
-function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges']): EventJudge[] {
+function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'], replacedIds?: Map<string, string>): EventJudge[] {
 	if (!Array.isArray(rawJudges)) {
 		throw new Error('Judges payload must be an array.')
 	}
@@ -806,7 +816,7 @@ function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'
 		const email = typeof rawJudge.email === 'string' ? compactWhitespace(rawJudge.email) : ''
 
 		judges.push({
-			id: normalizeUniqueIdCandidate(rawJudge.id, usedIds),
+			id: normalizeUniqueIdCandidate(rawJudge.id, usedIds, replacedIds),
 			name: judgeName,
 			email: email.length > 0 ? email : undefined,
 			token: normalizeUniqueTokenCandidate(rawJudge.token, usedTokens),
@@ -892,7 +902,7 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 	return criteria
 }
 
-function normalizePresentationSlotsForAdminEditor(rawSlots: AdminEventEditorInput['presentationSlots'], contestants: EventContestant[], judges: EventJudge[]): EventPresentationSlot[] | undefined {
+function normalizePresentationSlotsForAdminEditor(rawSlots: AdminEventEditorInput['presentationSlots'], contestants: EventContestant[], judges: EventJudge[], replacedIds: Map<string, string> = new Map()): EventPresentationSlot[] | undefined {
 	if (rawSlots === undefined) {
 		return undefined
 	}
@@ -916,7 +926,8 @@ function normalizePresentationSlotsForAdminEditor(rawSlots: AdminEventEditorInpu
 			throw new Error('Invalid presentation slot payload.')
 		}
 
-		let contestantId = compactWhitespace(String(rawSlot.contestantId ?? ''))
+		const rawContestantId = compactWhitespace(String(rawSlot.contestantId ?? ''))
+		let contestantId = replacedIds.get(rawContestantId) ?? rawContestantId
 		if (!contestantId) {
 			const contestantIndex = Number(rawSlot.contestantIndex)
 			if (Number.isInteger(contestantIndex) && contestantIndex >= 0 && contestantIndex < contestants.length) {
@@ -936,7 +947,12 @@ function normalizePresentationSlotsForAdminEditor(rawSlots: AdminEventEditorInpu
 		let judgeIds: string[] = []
 
 		if (Array.isArray(rawSlot.judgeIds) && rawSlot.judgeIds.length > 0) {
-			judgeIds = uniqueCaseInsensitive(rawSlot.judgeIds.map((judgeId) => compactWhitespace(String(judgeId ?? ''))))
+			judgeIds = uniqueCaseInsensitive(
+				rawSlot.judgeIds.map((judgeId) => {
+					const candidate = compactWhitespace(String(judgeId ?? ''))
+					return replacedIds.get(candidate) ?? candidate
+				}),
+			)
 			judgeIds = judgeIds.filter((judgeId) => validJudgeIds.has(judgeId))
 		} else if (Array.isArray(rawSlot.judgeNames) && rawSlot.judgeNames.length > 0) {
 			judgeIds = uniqueCaseInsensitive(rawSlot.judgeNames.map((judgeName) => compactWhitespace(String(judgeName ?? '').toLowerCase())))
@@ -973,10 +989,12 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const createdBy = typeof source.createdBy === 'string' ? compactWhitespace(source.createdBy) : ''
 	const eventScoringType = normalizeEventScoringType(source.eventScoringType)
 	const rubricLegend = normalizeRubricLegendInput(source.rubricLegend)
-	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [])
-	const judges = normalizeJudgesForAdminEditor(source.judges ?? [])
+	// Over-long ids the page made for new contestants and judges, and the UUIDs that replace them (B46).
+	const replacedIds = new Map<string, string>()
+	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [], replacedIds)
+	const judges = normalizeJudgesForAdminEditor(source.judges ?? [], replacedIds)
 	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
-	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges)
+	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges, replacedIds)
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
 	const directRatingConfig = source.directRatingConfig !== undefined || previousEvent.directRatingConfig || derivedDirectRatingConfig ? normalizeDirectRatingConfig(source.directRatingConfig, derivedDirectRatingConfig ?? previousEvent.directRatingConfig ?? undefined) : undefined
 
