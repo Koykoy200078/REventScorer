@@ -40,6 +40,8 @@ type AdminOnlyProps = {
 	subnav?: ReactNode
 	/** Text of the compact live indicator at the right end of the second row (A2c8612, A2c8756), shown below xl where the status pill is hidden. */
 	subnavStatus?: ReactNode
+	/** The colour of that indicator's dot: emerald while live (A2c8687, the default), amber while connecting, slate when offline. */
+	subnavStatusTone?: 'live' | 'pending' | 'off'
 }
 
 type Without<T> = { [K in keyof T]?: never }
@@ -61,7 +63,7 @@ export type AppHeaderProps = HeaderBaseProps &
  * tile A2c4068, the brand, the divider A2c4399 and the breadcrumb nav A2c4465, then status and the
  * right cluster A2c5483; the second row A2c7454 holds subnav and the compact live indicator A2c8612.
  * Props: variant, brand, title, actions; judge also lead, subtitle and switcher; admin also
- * breadcrumbParent, breadcrumbHref, breadcrumbLabel, status, subnav and subnavStatus. Other native header props
+ * breadcrumbParent, breadcrumbHref, breadcrumbLabel, status, subnav, subnavStatus and subnavStatusTone. Other native header props
  * and className go on the header. The header is fixed and leaves no space behind it: give the main
  * element pt-16 (judge) or pt-28 (admin, two rows).
  * Deviations: the breadcrumb nav A2c4465 adds p-1 -m-1. Its truncate clips overflow at the padding
@@ -82,6 +84,7 @@ export default function AppHeader({
 	actions,
 	subnav,
 	subnavStatus,
+	subnavStatusTone = 'live',
 	className,
 	...rest
 }: AppHeaderProps) {
@@ -145,7 +148,10 @@ export default function AppHeader({
 						{subnav}
 						{subnavStatus ? (
 							<div className='xl:hidden flex items-center gap-space-xs pl-space-md shrink-0'>
-								<span aria-hidden className='inline-flex h-2 w-2 rounded-full bg-emerald-500' />
+								<span
+									aria-hidden
+									className={cx('inline-flex h-2 w-2 rounded-full', subnavStatusTone === 'live' ? 'bg-emerald-500' : subnavStatusTone === 'pending' ? 'bg-amber-500' : 'bg-slate-400')}
+								/>
 								<span className='font-label-sm text-label-sm text-slate-500 font-mono'>{subnavStatus}</span>
 							</div>
 						) : null}

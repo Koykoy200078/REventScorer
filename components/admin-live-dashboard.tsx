@@ -1,24 +1,31 @@
 'use client'
 
-import Link from 'next/link'
+import { saveAs } from 'file-saver'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
+import type { ConnectionState } from '@/components/admin/connection'
+import { EventBand } from '@/components/admin/event-band'
+import { Button } from '@/components/ui/button'
+import { TabPanel, Tabs } from '@/components/ui/tabs'
 import UnlockDialog from '@/components/unlock-dialog'
+import { scoreMatrixRows, toCsv } from '@/lib/admin/csv'
 import { createEditorId } from '@/lib/admin/editor-id'
 import { criterionMaxScore, participantAnalyticsScore, participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
 import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEventEditorPayloadForSubmit, synchronizeEventEditorDraft, uniqueTrimmedNames } from '@/lib/admin/editor-snapshot'
 import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
+import { adminFormulaSentence } from '@/lib/admin/formula'
 import { assignedJudgeIdsForContestant, buildJudgeAssignmentDrafts, sameJudgeAssignments } from '@/lib/admin/judges'
 import { isIndividualPresentationCriterion, mergedIndividualSubCriteriaForContestant } from '@/lib/admin/members'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
-import type { AdminTab } from '@/lib/admin/tabs'
+import { type AdminTab, parseAdminTabParam, searchForTab } from '@/lib/admin/tabs'
 import { ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS, AdminSaveError, type AdminSaveRequestBody, isJudgeAssignmentQueuedAction, isProgramAssignmentQueuedAction, isRecord, listQueuedAdminSaveActionsForEvent, type QueuedAdminSaveAction, queuedAdminSaveActionId, type QueuedAdminSaveKind, queuedAdminSaveKindLabel, removeQueuedAdminSaveAction, shouldQueueAdminSave, upsertQueuedAdminSaveAction } from '@/lib/admin/queue'
+import { entryStatus } from '@/lib/admin/status'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import { shouldKeepQueued } from '@/lib/save-retry'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventScorer } from '@/lib/types'
 import { exportAsExcel, exportSectionAnalyticsAsExcel } from './export-excel'
 
-type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
 interface AdminLiveDashboardProps {
 	initialEvent: EventScorer
@@ -51,37 +58,24 @@ type UnlockRetry =
 	| { kind: 'editor' }
 	| { kind: 'queue' }
 
-function connectionLabel(state: ConnectionState): string {
-	if (state === 'connected') {
-		return 'Live connected'
-	}
-
-	if (state === 'reconnecting') {
-		return 'Reconnecting'
-	}
-
-	if (state === 'connecting') {
-		return 'Connecting'
-	}
-
-	return 'Live offline'
-}
-
-function connectionBadgeClass(state: ConnectionState): string {
-	if (state === 'connected') {
-		return 'rounded-full border border-emerald-300 bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm'
-	}
-
-	return 'rounded-full border border-rose-300 bg-rose-600 px-3 py-1 text-xs font-semibold text-white shadow-sm'
-}
-
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false }: AdminLiveDashboardProps) {
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false, initialTab = 'dashboard' }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
 	const [lastSignalAt, setLastSignalAt] = useState<string | null>(null)
 	const [refreshError, setRefreshError] = useState<string | null>(null)
 	const [isRefreshing, setIsRefreshing] = useState(false)
+	// Task 7 (R40, R45): the open tab (first from ?tab=, so the first render matches the server) and whether the
+	// editor view replaces the tab panel (?update=1 in an unlocked browser). Live refreshes leave both alone.
+	const [activeTab, setActiveTab] = useState<AdminTab>(initialTab)
+	const [editorView, setEditorView] = useState(allowEventEditor)
+	// Any tab, or Back, leaves the editor view; the URL follows without a navigation.
+	const showTab = useCallback((value: string) => {
+		const tab = parseAdminTabParam(value)
+		setActiveTab(tab)
+		setEditorView(false)
+		window.history.replaceState(null, '', window.location.pathname + searchForTab(window.location.search, tab) + window.location.hash)
+	}, [])
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
 	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>(() => buildProgramAssignmentsFromEvent(initialEvent))
 	const [isSavingProgramAssignments, setIsSavingProgramAssignments] = useState(false)
@@ -962,70 +956,38 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}, [event.id, refreshDashboard, wsAuthToken])
 
+	// Every entry, in rank order, whatever the matrix filters (R52).
+	const exportCsv = () => {
+		const programOf = (contestantId: string) => {
+			const contestant = contestantsById.get(contestantId)
+			return resolveProgramLabel(contestant?.name ?? '', contestant, manualAssignments[contestantId])
+		}
+		const statusOf = (contestantId: string) => entryStatus(contestantId, assignedJudgeIdsForContestant(event, contestantId), compiled.judgeBreakdown)
+		saveAs(new Blob([toCsv(scoreMatrixRows(event, compiled, programOf, statusOf))], { type: 'text/csv;charset=utf-8' }), `${event.title} - Score Matrix.csv`)
+	}
+
 	return (
-		<>
-			{/* SCREEN VIEW */}
-			<div className='min-h-screen bg-transparent px-4 py-8 sm:px-8 print:hidden'>
-				<div className='mx-auto w-full max-w-7xl space-y-6'>
-					<header className='rounded-[30px] border border-[var(--border-soft)] bg-[var(--surface-strong)] p-6 shadow-[var(--shadow-soft)] backdrop-blur-xl sm:p-8'>
-						<div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
-							<div>
-								<p className='text-xs uppercase tracking-[0.2em] text-[var(--text-muted)]'>Admin Console</p>
-								<h1 className='mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl'>{event.title}</h1>
-								{event.description ? <p className='mt-2 max-w-3xl text-sm leading-relaxed text-[var(--text-secondary)]'>{event.description}</p> : null}
-								{!isDirectRatingEvent ? (
-									<p className='mt-2 max-w-3xl text-xs text-[var(--text-secondary)]'>Rubric Legend: {rubricLegendText}</p>
-								) : null}
-								<p className='mt-3 text-xs text-[var(--text-muted)]'>
-									Created {formatDate(event.createdAt)}
-									{event.createdBy ? ` by ${event.createdBy}` : ''}
-								</p>
-							</div>
+		<div className='theme-admin min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
+			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={showTab}>
+				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} />
+				{/* SCREEN VIEW */}
+				<main className='w-full pt-28 print:hidden'>
+					<EventBand
+						event={event}
+						formula={adminFormulaSentence(event, compiled)}
+						connectionState={connectionState}
+						lastSignalAt={lastSignalAt}
+						pendingCount={queuedAdminSaves.length}
+						autoSyncing={isAutoSyncingAdminSaves}
+						refreshing={isRefreshing}
+						onForceSync={() => void refreshDashboard()}
+					/>
+				<div className='w-full px-gutter-desktop py-space-xl flex flex-col gap-space-xl'>
 
-							<div className='flex flex-wrap items-center gap-2 print:hidden'>
-								<span data-testid='connection-state' data-state={connectionState} className={connectionBadgeClass(connectionState)}>{connectionLabel(connectionState)}</span>
-								{lastSignalAt ? <span data-testid='last-signal' className='rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-secondary)]'>Last update {formatDate(lastSignalAt)}</span> : null}
-								{queuedAdminSaves.length > 0 ? <span data-testid='pending-count' className='rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-800'>Pending saves {queuedAdminSaves.length}</span> : null}
-								{isAutoSyncingAdminSaves ? <span className='rounded-full border border-cyan-300 bg-cyan-50 px-3 py-1 text-xs text-cyan-800'>Auto-uploading pending saves...</span> : null}
-								<button type='button' data-testid='print-results' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
-									Print Results
-								</button>
-								<button type='button' data-testid='export-excel' onClick={() => exportAsExcel(event, compiled)} className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'>
-									Export as Excel
-								</button>
-								{/* <button type='button' onClick={refreshDashboard} disabled={isRefreshing} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-70'>
-									{isRefreshing ? 'Refreshing...' : 'Refresh now'}
-								</button> */}
-								<Link href='/' className='inline-flex items-center rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
-									Back to Dashboard
-								</Link>
-							</div>
-						</div>
-
-						<div className='mt-5 grid gap-3 sm:grid-cols-4'>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Contestants</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.contestants.length}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Judges</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.judges.length}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Submitted</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
-							</div>
-						</div>
-					</header>
-
-					{refreshError ? <section data-testid='admin-error' className='rounded-2xl border border-rose-400/40 bg-rose-300/15 px-4 py-3 text-sm text-rose-100 dark:text-rose-200'>{refreshError}</section> : null}
-					{adminQueueNotice ? <section data-testid='admin-queue-notice' className='rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800'>{adminQueueNotice}</section> : null}
+					{refreshError ? <section data-testid='admin-error' role='alert' className='rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800'>{refreshError}</section> : null}
+					{adminQueueNotice ? <section data-testid='admin-queue-notice' className='rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800'>{adminQueueNotice}</section> : null}
 					{queuedAdminSaves.length > 0 ? (
-						<section data-testid='pending-queue' className='rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-4'>
+						<section data-testid='pending-queue' className='rounded-xl border border-amber-300 bg-amber-50/80 px-4 py-4'>
 							<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 								<div>
 									<h2 className='text-sm font-semibold uppercase tracking-wide text-amber-900'>Pending Queue</h2>
@@ -1080,8 +1042,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</section>
 					) : null}
 
-					{allowEventEditor ? (
-						<section data-testid='event-editor' className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+					{editorView ? (
+						<section data-testid='event-editor' className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
 								<div>
 									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
@@ -1089,6 +1051,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									<p className='mt-2 text-xs text-amber-700'>Saving this editor resets all current judge submissions so scoring stays consistent with the new structure.</p>
 								</div>
 								<div className='flex flex-wrap items-center gap-2'>
+									<Button variant='admin-outline' icon='arrow_back' data-testid='editor-back' onClick={() => showTab(activeTab)}>
+										Back to {ADMIN_TAB_LABELS[activeTab]}
+									</Button>
 									<button
 										type='button' data-testid='editor-toggle'
 										onClick={() => {
@@ -1718,9 +1683,29 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								</div>
 							) : null}
 						</section>
-					) : null}
-
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+					) : (
+					<TabPanel className='flex flex-col gap-space-xl'>
+					{activeTab === 'dashboard' ? (
+					<>
+						<div className='grid gap-3 sm:grid-cols-4'>
+							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
+								<p className='text-xs text-[var(--text-muted)]'>Contestants</p>
+								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.contestants.length}</p>
+							</div>
+							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
+								<p className='text-xs text-[var(--text-muted)]'>Judges</p>
+								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.judges.length}</p>
+							</div>
+							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
+								<p className='text-xs text-[var(--text-muted)]'>Submitted</p>
+								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
+							</div>
+							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
+								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
+								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
+							</div>
+						</div>
+					<section className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
 						<p className='mt-1 text-sm text-[var(--text-secondary)]'>
 							{useDirectFinalRating
@@ -1775,9 +1760,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
 						)}
 					</section>
+					</>
+					) : null}
 
+					{activeTab === 'rankings' ? (
+					<>
 					<details
-						className='group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+						className='group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
 						onMouseEnter={(e) => { if (!isProgramPinned) e.currentTarget.open = true }}
 						onMouseLeave={(e) => { if (!isProgramPinned) e.currentTarget.open = false }}
 					>
@@ -1975,7 +1964,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 					{sectionAnalytics.size > 0 && (
 						<details
-							className='group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+							className='group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
 							onMouseEnter={(e) => { if (!isSectionPinned) e.currentTarget.open = true }}
 							onMouseLeave={(e) => { if (!isSectionPinned) e.currentTarget.open = false }}
 						>
@@ -2061,8 +2050,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							</div>
 						</details>
 					)}
+					</>
+					) : null}
 
-					<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+					{activeTab === 'matrix' ? (
+					<section className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 						<div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
 							<div>
 								<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
@@ -2324,8 +2316,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							</table>
 						</div>
 					</section>
+					) : null}
 
-					<section data-testid='judge-links' data-locked={judgeLinksLocked ? 'true' : 'false'} className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+					{activeTab === 'telemetry' ? (
+					<>
+					<section data-testid='judge-links' data-locked={judgeLinksLocked ? 'true' : 'false'} className='print:hidden bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
 							<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Links and Submission Status</h2>
 							{judgeLinksLocked ? (
@@ -2375,7 +2370,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					</section>
 
 					<details
-						className='print:hidden group rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8 [&_summary::-webkit-details-marker]:hidden transition-all'
+						className='print:hidden group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
 						onMouseEnter={(e) => { if (!isRubricPinned) e.currentTarget.open = true }}
 						onMouseLeave={(e) => { if (!isRubricPinned) e.currentTarget.open = false }}
 					>
@@ -2447,7 +2442,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</details>
 
-					<section className='print:hidden rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+					<section className='print:hidden bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Remarks</h2>
 						<p className='mt-1 text-xs text-[var(--text-secondary)]'>Additional remarks and comments left by judges for each contestant.</p>
 						<div className='mt-4 grid gap-4'>
@@ -2479,8 +2474,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							{event.contestants.every((contestant) => !event.submissions.some((sub) => sub.contestantDetails?.[contestant.id]?.additionalInfo || sub.contestantDetails?.[contestant.id]?.remark)) && <p className='text-sm text-[var(--text-secondary)]'>No remarks have been submitted yet.</p>}
 						</div>
 					</section>
+					</>
+					) : null}
+					</TabPanel>
+					)}
 				</div>
-			</div>
+				</main>
+			</Tabs>
 
 			{/* PRINT VIEW (TABULATION SHEET) */}
 			<style>{`
@@ -2539,45 +2539,47 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				</div>
 			</div>
 
-			<UnlockDialog
-				open={unlockRequest !== null}
-				reason={unlockRequest?.reason}
-				onCancel={() => {
-					const retries = unlockRequest?.retries ?? []
-					setUnlockRequest(null)
-					for (const retry of retries) {
-						if (retry.kind === 'program') takeBackProgramChanges(retry.assignments)
-					}
-				}}
-				onUnlocked={() => {
-					const retries = [...(unlockRequest?.retries ?? [])]
-					setUnlockRequest(null)
-					// A queue that waited for the sign-in is uploaded too, whichever prompt unlocked.
-					if (signInNeeded.current && !retries.some((retry) => retry.kind === 'queue')) retries.push({ kind: 'queue' })
-					signInNeeded.current = false
-					void (async () => {
-						let queueSynced = false
+			<div className='print:hidden'>
+				<UnlockDialog
+					open={unlockRequest !== null}
+					reason={unlockRequest?.reason}
+					onCancel={() => {
+						const retries = unlockRequest?.retries ?? []
+						setUnlockRequest(null)
 						for (const retry of retries) {
-							if (retry.kind === 'program') {
-								await saveProgramAssignments(retry.assignments)
-							} else if (retry.kind === 'judge') {
-								setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
-								await saveJudgeAssignment(retry.contestantId, retry.judgeIds)
-							} else if (retry.kind === 'editor') {
-								await saveEventEditor()
-							} else if (!queueSynced) {
-								queueSynced = true
-								await syncQueuedAdminSaves(true)
-							}
+							if (retry.kind === 'program') takeBackProgramChanges(retry.assignments)
 						}
-						// Read the event again after the writes: the links and the lock state are then the server's.
-						await refreshDashboard()
-					})()
-				}}
-			/>
+					}}
+					onUnlocked={() => {
+						const retries = [...(unlockRequest?.retries ?? [])]
+						setUnlockRequest(null)
+						// A queue that waited for the sign-in is uploaded too, whichever prompt unlocked.
+						if (signInNeeded.current && !retries.some((retry) => retry.kind === 'queue')) retries.push({ kind: 'queue' })
+						signInNeeded.current = false
+						void (async () => {
+							let queueSynced = false
+							for (const retry of retries) {
+								if (retry.kind === 'program') {
+									await saveProgramAssignments(retry.assignments)
+								} else if (retry.kind === 'judge') {
+									setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
+									await saveJudgeAssignment(retry.contestantId, retry.judgeIds)
+								} else if (retry.kind === 'editor') {
+									await saveEventEditor()
+								} else if (!queueSynced) {
+									queueSynced = true
+									await syncQueuedAdminSaves(true)
+								}
+							}
+							// Read the event again after the writes: the links and the lock state are then the server's.
+							await refreshDashboard()
+						})()
+					}}
+				/>
+			</div>
 
 			{isProgramPasswordModalOpen ? (
-				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>
+				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4 print:hidden'>
 					<div role='dialog' aria-modal='true' data-testid='password-dialog' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
 						<h3 className='text-lg font-semibold text-[var(--text-primary)]'>Authentication Required</h3>
 						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants.</p>
@@ -2622,6 +2624,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					</div>
 				</div>
 			) : null}
-		</>
+		</div>
 	)
 }
