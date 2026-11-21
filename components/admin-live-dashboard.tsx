@@ -1835,6 +1835,18 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}, [queuedAdminSaves.length])
 
+	// B41: a program change that was not saved (refused, or its unlock cancelled) is taken back:
+	// dropping the local override shows what the server holds again.
+	const takeBackProgramChanges = useCallback((assignments: Array<{ contestantId: string }>) => {
+		setManualAssignments((previous) => {
+			const next = { ...previous }
+			for (const assignment of assignments) {
+				delete next[assignment.contestantId]
+			}
+			return next
+		})
+	}, [])
+
 	const saveProgramAssignments = useCallback(
 		async (assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }>) => {
 			if (assignments.length === 0) {
@@ -1877,12 +1889,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					void syncQueuedAdminSaves(false)
 				} else {
 					setRefreshError(error instanceof Error ? error.message : 'Unable to update program tag assignments.')
+					takeBackProgramChanges(assignments)
 				}
 			} finally {
 				setIsSavingProgramAssignments(false)
 			}
 		},
-		[contestantsById, event.id, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
+		[contestantsById, event.id, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves, takeBackProgramChanges],
 	)
 
 	const setProgramForAllContestants = useCallback(
@@ -3830,7 +3843,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			<UnlockDialog
 				open={unlockRequest !== null}
 				reason={unlockRequest?.reason}
-				onCancel={() => setUnlockRequest(null)}
+				onCancel={() => {
+					const retry = unlockRequest?.retry
+					setUnlockRequest(null)
+					if (retry?.kind === 'program') takeBackProgramChanges(retry.assignments)
+				}}
 				onUnlocked={() => {
 					const retry = unlockRequest?.retry
 					setUnlockRequest(null)
