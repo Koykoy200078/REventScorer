@@ -1,0 +1,524 @@
+// Program, participant, section and sub-criterion analytics of the admin console. Moved verbatim from
+// components/admin-live-dashboard.tsx (Stage 5 Task 7 step 1).
+
+import { roundAnalytics } from '@/lib/admin/format'
+import { isSubCriterionApplicableToContestant, resolveMemberLabelForContestant, splitMemberCriterionName } from '@/lib/admin/members'
+import { extractDynamicTeamName, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
+import type { EventCompiledResults, EventContestant, EventCriterion, EventScorer } from '@/lib/types'
+
+export interface ProgramTopTeam {
+	program: ProgramLabel
+	teamName: string
+	contestantName: string
+	rank: number
+	score: number
+	totalScore: number
+	judgeCount: number
+}
+
+export interface ProgramTopParticipant {
+	program: ProgramLabel
+	teamName: string
+	contestantId: string
+	contestantName: string
+	participantLabel: string
+	participantAverageScore: number
+	participantMaxScore: number
+	participantRating: number
+	section: string
+	rank: number
+}
+
+export interface SectionRankingEntry {
+	contestantId: string
+	contestantName: string
+	program: ProgramLabel | null
+	score: number
+	totalScore: number
+	rank: number
+	judgeCount: number
+}
+
+export interface ProgramSubCriterionRankingEntry {
+	program: ProgramLabel
+	teamName: string
+	contestantId: string
+	contestantName: string
+	participantLabel: string
+	subCriterionName: string
+	averageScore: number
+	maxScore: number
+	rating: number
+	rank: number
+}
+
+export interface ProgramSubCriterionRankingGroup {
+	program: ProgramLabel
+	subCriterionKey: string
+	subCriterionName: string
+	entries: ProgramSubCriterionRankingEntry[]
+}
+
+export function rankingScore(result: EventCompiledResults['rankings'][number], _useWeighted: boolean): number {
+	if (typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)) {
+		return result.finalRating
+	}
+
+	return _useWeighted ? (result.weightedScore ?? result.averageScore) : result.averageScore
+}
+
+export function criterionMaxScore(criterion: EventCriterion): number {
+	const directMaxScore = Number(criterion.maxScore)
+
+	if (Number.isFinite(directMaxScore) && directMaxScore > 0) {
+		return directMaxScore
+	}
+
+	return criterion.subCriteria.reduce((sum, subCriterion) => {
+		const subCriterionMaxScore = Number(subCriterion.maxScore)
+		return sum + (Number.isFinite(subCriterionMaxScore) ? subCriterionMaxScore : 0)
+	}, 0)
+}
+
+export function teamsByProgram(rankings: EventCompiledResults['rankings'], contestantsById: Map<string, EventContestant>, manualAssignments: Record<string, ProgramLabel | null>, useWeighted: boolean): Record<ProgramLabel, ProgramTopTeam[]> {
+	const grouped: Record<ProgramLabel, ProgramTopTeam[]> = {
+		BSINT: [],
+		BSCS: [],
+	}
+
+	for (const result of rankings) {
+		const manual = manualAssignments[result.contestantId]
+		const contestant = contestantsById.get(result.contestantId)
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
+
+		if (!detectedProgram) {
+			continue
+		}
+
+		const score = rankingScore(result, useWeighted)
+		if (!Number.isFinite(score) || score <= 0) {
+			continue
+		}
+
+		grouped[detectedProgram].push({
+			program: detectedProgram,
+			teamName: extractDynamicTeamName(result.contestantName),
+			contestantName: result.contestantName,
+			rank: result.rank,
+			score,
+			totalScore: result.totalScore,
+			judgeCount: result.judgeCount,
+		})
+	}
+
+	grouped.BSINT.sort((a, b) => b.score - a.score)
+	grouped.BSCS.sort((a, b) => b.score - a.score)
+
+	return grouped
+}
+
+export function participantAnalyticsScore(participant: NonNullable<EventCompiledResults['rankings'][number]['participantScores']>[number]): number {
+	if (typeof participant.rating === 'number' && Number.isFinite(participant.rating)) {
+		return participant.rating
+	}
+
+	if (!Number.isFinite(participant.maxScore) || participant.maxScore <= 0) {
+		return 0
+	}
+
+	return (participant.averageScore / participant.maxScore) * 100
+}
+
+export function participantRankingsByProgram(rankings: EventCompiledResults['rankings'], contestantsById: Map<string, EventContestant>, manualAssignments: Record<string, ProgramLabel | null>): Record<ProgramLabel, ProgramTopParticipant[]> {
+	const grouped: Record<ProgramLabel, ProgramTopParticipant[]> = {
+		BSINT: [],
+		BSCS: [],
+	}
+
+	for (const result of rankings) {
+		const manual = manualAssignments[result.contestantId]
+		const contestant = contestantsById.get(result.contestantId)
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
+
+		if (!detectedProgram || !Array.isArray(result.participantScores) || result.participantScores.length === 0) {
+			continue
+		}
+
+		for (const participant of result.participantScores) {
+			const participantRating = participantAnalyticsScore(participant)
+			if (!Number.isFinite(participantRating) || participantRating <= 0 || participant.averageScore <= 0) {
+				continue
+			}
+
+			let section = 'N/A'
+			if (contestant?.section) {
+				const raw = contestant.section.trim()
+				section = !/section/i.test(raw) && raw.length <= 3 ? `Section ${raw.toUpperCase()}` : raw
+			} else {
+				const strandStr = (result.directDetails?.strand || '').trim()
+				if (strandStr) {
+					const clean = strandStr.replace(/\b(BSCS|BSINT)\b/gi, '').trim()
+					if (clean) {
+						section = !/section/i.test(clean) && clean.length <= 3 ? `Section ${clean.toUpperCase()}` : clean
+					}
+				}
+				if (section === 'N/A') {
+					const nameMatch = result.contestantName.match(/\b(?:section\s+|-)?([A-Z])\b/i)
+					if (nameMatch) {
+						section = `Section ${nameMatch[1].toUpperCase()}`
+					}
+				}
+			}
+
+			grouped[detectedProgram].push({
+				program: detectedProgram,
+				teamName: extractDynamicTeamName(result.contestantName),
+				contestantId: result.contestantId,
+				contestantName: result.contestantName,
+				participantLabel: participant.participantLabel,
+				participantAverageScore: participant.averageScore,
+				participantMaxScore: participant.maxScore,
+				participantRating,
+				section,
+				rank: 0,
+			})
+		}
+	}
+
+	for (const program of ['BSINT', 'BSCS'] as const) {
+		grouped[program].sort((left, right) => {
+			if (left.section !== right.section) {
+				return left.section.localeCompare(right.section)
+			}
+			
+			if (right.participantRating !== left.participantRating) {
+				return right.participantRating - left.participantRating
+			}
+
+			if (right.participantAverageScore !== left.participantAverageScore) {
+				return right.participantAverageScore - left.participantAverageScore
+			}
+
+			if (left.contestantName !== right.contestantName) {
+				return left.contestantName.localeCompare(right.contestantName)
+			}
+
+			return left.participantLabel.localeCompare(right.participantLabel)
+		})
+
+		let currentRank = 0
+		let lastScore: number | null = null
+		let currentSection = ''
+
+		grouped[program] = grouped[program].map((entry, index) => {
+			if (entry.section !== currentSection) {
+				currentSection = entry.section
+				currentRank = 0
+				lastScore = null
+			}
+			
+			if (lastScore === null || Math.abs(entry.participantRating - lastScore) > 0.0001) {
+				currentRank++
+				lastScore = entry.participantRating
+			}
+			return { ...entry, rank: currentRank }
+		})
+	}
+
+	return grouped
+}
+
+export function rankingsBySection(
+	rankings: EventCompiledResults['rankings'],
+	contestantsById: Map<string, EventContestant>,
+	manualAssignments: Record<string, ProgramLabel | null>,
+	useWeighted: boolean,
+): Map<string, SectionRankingEntry[]> {
+	const bySection = new Map<string, SectionRankingEntry[]>()
+
+	for (const result of rankings) {
+		const contestant = contestantsById.get(result.contestantId)
+		const manual = manualAssignments[result.contestantId]
+		const detectedProgram = resolveProgramLabel(result.contestantName, contestant, manual)
+
+		// Resolve section
+		let section = ''
+		if (contestant?.section) {
+			const raw = contestant.section.trim()
+			section = !/section/i.test(raw) && raw.length <= 3 ? `Section ${raw.toUpperCase()}` : raw
+		} else {
+			const strandStr = (result.directDetails?.strand || '').trim()
+			if (strandStr) {
+				const clean = strandStr.replace(/\b(BSCS|BSINT)\b/gi, '').trim()
+				if (clean) {
+					section = !/section/i.test(clean) && clean.length <= 3 ? `Section ${clean.toUpperCase()}` : clean
+				}
+			}
+			if (!section) {
+				const nameMatch = result.contestantName.match(/\b(?:section\s+|-)?([A-Z])\b/i)
+				if (nameMatch) {
+					section = `Section ${nameMatch[1].toUpperCase()}`
+				}
+			}
+		}
+
+		if (!section) {
+			continue
+		}
+
+		const score = rankingScore(result, useWeighted)
+		if (!Number.isFinite(score) || score <= 0) {
+			continue
+		}
+
+		if (!bySection.has(section)) {
+			bySection.set(section, [])
+		}
+
+		bySection.get(section)!.push({
+			contestantId: result.contestantId,
+			contestantName: result.contestantName,
+			program: detectedProgram,
+			score,
+			totalScore: result.totalScore,
+			rank: 0,
+			judgeCount: result.judgeCount,
+		})
+	}
+
+	// Sort each section's entries by score descending and assign ranks
+	for (const [, entries] of bySection) {
+		entries.sort((a, b) => b.score - a.score)
+		let currentRank = 0
+		let lastScore: number | null = null
+		for (let i = 0; i < entries.length; i++) {
+			if (lastScore === null || Math.abs(entries[i].score - lastScore) > 0.0001) {
+				currentRank = i + 1
+				lastScore = entries[i].score
+			}
+			entries[i].rank = currentRank
+		}
+	}
+
+	// Sort sections alphabetically
+	return new Map([...bySection.entries()].sort(([a], [b]) => a.localeCompare(b)))
+}
+
+export function hasPositiveScoreForContestant(submission: EventScorer['submissions'][number], contestantId: string): boolean {
+	const contestantScores = submission.scores[contestantId]
+
+	if (!contestantScores || typeof contestantScores !== 'object') {
+		return false
+	}
+
+	for (const rawScore of Object.values(contestantScores)) {
+		const numericScore = Number(rawScore)
+		if (Number.isFinite(numericScore) && numericScore > 0) {
+			return true
+		}
+	}
+
+	return false
+}
+
+export function savedContestantIdsForAnalytics(event: EventScorer, submission: EventScorer['submissions'][number]): Set<string> {
+	const validContestantIds = new Set(event.contestants.map((contestant) => contestant.id))
+
+	if (Array.isArray(submission.savedContestantIds) && submission.savedContestantIds.length > 0) {
+		return new Set(submission.savedContestantIds.filter((contestantId) => validContestantIds.has(contestantId)))
+	}
+
+	const inferredSavedContestantIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission, contestant.id)).map((contestant) => contestant.id)
+
+	return new Set(inferredSavedContestantIds)
+}
+
+export function subCriteriaRankingsByProgram(event: EventScorer, manualAssignments: Record<string, ProgramLabel | null>): Record<ProgramLabel, ProgramSubCriterionRankingGroup[]> {
+	type SubCriterionAccumulator = {
+		program: ProgramLabel
+		teamName: string
+		contestantId: string
+		contestantName: string
+		participantLabel: string
+		subCriterionName: string
+		totalScore: number
+		maxScore: number
+		judgeCount: number
+	}
+
+	const grouped: Record<ProgramLabel, Map<string, Map<string, SubCriterionAccumulator>>> = {
+		BSINT: new Map(),
+		BSCS: new Map(),
+	}
+
+	const subCriterionNamesByKey = new Map<string, string>()
+	const subCriterionOrder = new Map<string, number>()
+	let nextOrder = 0
+
+	const criteriaForSubCriteriaRanking = event.criteria.filter((criterion) => Array.isArray(criterion.subCriteria) && criterion.subCriteria.length > 0)
+
+	if (criteriaForSubCriteriaRanking.length === 0) {
+		return {
+			BSINT: [],
+			BSCS: [],
+		}
+	}
+
+	for (const criterion of criteriaForSubCriteriaRanking) {
+		for (const subCriterion of criterion.subCriteria) {
+			const { displayName } = splitMemberCriterionName(subCriterion.name)
+			const subCriterionKey = `${criterion.id}::${displayName}`
+
+			if (!subCriterionOrder.has(subCriterionKey)) {
+				subCriterionOrder.set(subCriterionKey, nextOrder)
+				nextOrder += 1
+			}
+
+			if (!subCriterionNamesByKey.has(subCriterionKey)) {
+				subCriterionNamesByKey.set(subCriterionKey, displayName)
+			}
+		}
+	}
+
+	for (const submission of event.submissions) {
+		const savedContestantIds = savedContestantIdsForAnalytics(event, submission)
+
+		if (savedContestantIds.size === 0) {
+			continue
+		}
+
+		for (const contestant of event.contestants) {
+			if (!savedContestantIds.has(contestant.id)) {
+				continue
+			}
+
+			const manual = manualAssignments[contestant.id]
+			const program = resolveProgramLabel(contestant.name, contestant, manual)
+
+			if (!program) {
+				continue
+			}
+
+			for (const criterion of criteriaForSubCriteriaRanking) {
+				for (const subCriterion of criterion.subCriteria) {
+					if (!isSubCriterionApplicableToContestant(subCriterion.name, contestant, criterion)) {
+						continue
+					}
+
+					const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
+					const participantLabel = resolveMemberLabelForContestant(memberLabel, contestant)
+					const subCriterionKey = `${criterion.id}::${displayName}`
+					const entryKey = `${contestant.id}::${participantLabel}`
+
+					const rawMaxScore = Number(subCriterion.maxScore)
+					const maxScore = Number.isFinite(rawMaxScore) && rawMaxScore > 0 ? rawMaxScore : 0
+					const rawScore = Number(submission.scores[contestant.id]?.[subCriterion.id] ?? 0)
+					const clampedScore = Math.max(0, Math.min(rawScore, maxScore))
+
+					let criterionGroupedByProgram = grouped[program].get(subCriterionKey)
+					if (!criterionGroupedByProgram) {
+						criterionGroupedByProgram = new Map<string, SubCriterionAccumulator>()
+						grouped[program].set(subCriterionKey, criterionGroupedByProgram)
+					}
+
+					const existing = criterionGroupedByProgram.get(entryKey)
+					if (existing) {
+						existing.totalScore += clampedScore
+						existing.judgeCount += 1
+						existing.maxScore = Math.max(existing.maxScore, maxScore)
+					} else {
+						criterionGroupedByProgram.set(entryKey, {
+							program,
+							teamName: extractDynamicTeamName(contestant.name),
+							contestantId: contestant.id,
+							contestantName: contestant.name,
+							participantLabel,
+							subCriterionName: displayName,
+							totalScore: clampedScore,
+							maxScore,
+							judgeCount: 1,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	const programGroups: Record<ProgramLabel, ProgramSubCriterionRankingGroup[]> = {
+		BSINT: [],
+		BSCS: [],
+	}
+
+	for (const program of ['BSINT', 'BSCS'] as const) {
+		const groups = Array.from(grouped[program].entries())
+			.map(([subCriterionKey, entriesByContestant]) => {
+				const rankedEntries = Array.from(entriesByContestant.values())
+					.map((entry) => {
+						const averageScore = entry.judgeCount > 0 ? roundAnalytics(entry.totalScore / entry.judgeCount) : 0
+						const rating = entry.maxScore > 0 ? roundAnalytics((averageScore / entry.maxScore) * 100) : 0
+
+						return {
+							program: entry.program,
+							teamName: entry.teamName,
+							contestantId: entry.contestantId,
+							contestantName: entry.contestantName,
+							participantLabel: entry.participantLabel,
+							subCriterionName: entry.subCriterionName,
+							averageScore,
+							maxScore: entry.maxScore,
+							rating,
+							rank: 0,
+						}
+					})
+					.filter((entry) => entry.averageScore > 0 && entry.rating > 0)
+					.sort((left, right) => {
+						if (right.rating !== left.rating) {
+							return right.rating - left.rating
+						}
+
+						if (right.averageScore !== left.averageScore) {
+							return right.averageScore - left.averageScore
+						}
+
+						if (left.contestantName !== right.contestantName) {
+							return left.contestantName.localeCompare(right.contestantName)
+						}
+
+						return left.participantLabel.localeCompare(right.participantLabel)
+					})
+
+				let currentRank = 0
+				let lastRating: number | null = null
+
+				const entriesWithRank = rankedEntries.map((entry, index) => {
+					if (lastRating === null || Math.abs(entry.rating - lastRating) > 0.0001) {
+						currentRank = index + 1
+						lastRating = entry.rating
+					}
+
+					return {
+						...entry,
+						rank: currentRank,
+					}
+				})
+
+				return {
+					program,
+					subCriterionKey,
+					subCriterionName: subCriterionNamesByKey.get(subCriterionKey) ?? subCriterionKey,
+					entries: entriesWithRank,
+				}
+			})
+			.filter((group) => group.entries.length > 0)
+
+		groups.sort((left, right) => {
+			const leftOrder = subCriterionOrder.get(left.subCriterionKey) ?? Number.MAX_SAFE_INTEGER
+			const rightOrder = subCriterionOrder.get(right.subCriterionKey) ?? Number.MAX_SAFE_INTEGER
+			return leftOrder - rightOrder
+		})
+
+		programGroups[program] = groups
+	}
+
+	return programGroups
+}
