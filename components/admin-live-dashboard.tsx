@@ -11,6 +11,7 @@ import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
 import { assignedJudgeIdsForContestant, buildJudgeAssignmentDrafts, sameJudgeAssignments } from '@/lib/admin/judges'
 import { isIndividualPresentationCriterion, mergedIndividualSubCriteriaForContestant } from '@/lib/admin/members'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
+import type { AdminTab } from '@/lib/admin/tabs'
 import { ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS, AdminSaveError, type AdminSaveRequestBody, isJudgeAssignmentQueuedAction, isProgramAssignmentQueuedAction, isRecord, listQueuedAdminSaveActionsForEvent, type QueuedAdminSaveAction, queuedAdminSaveActionId, type QueuedAdminSaveKind, queuedAdminSaveKindLabel, removeQueuedAdminSaveAction, shouldQueueAdminSave, upsertQueuedAdminSaveAction } from '@/lib/admin/queue'
 import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import { shouldKeepQueued } from '@/lib/save-retry'
@@ -28,6 +29,10 @@ interface AdminLiveDashboardProps {
 	wsAuthToken?: string
 	/** S5: the page was rendered without the update password, so the judges carry no link or email. */
 	initialJudgeLinksLocked?: boolean
+	/** The editor flag as the URL has it, whether or not the browser is unlocked (R45; used from Task 7 step 4). */
+	openEditor?: boolean
+	/** The tab of ?tab= (R40; used from Task 7 step 4). */
+	initialTab?: AdminTab
 }
 
 interface AdminEventResponse {

@@ -2,6 +2,7 @@ import { cookies, headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 
 import { AdminLiveDashboard } from '@/components/admin-live-dashboard'
+import { isEditorRequested, parseAdminTabParam } from '@/lib/admin/tabs'
 import { redactJudgeSecrets } from '@/lib/judge-redaction'
 import { compileEventResults } from '@/lib/scoring'
 import { getEventById } from '@/lib/storage'
@@ -10,10 +11,12 @@ import { buildAdminWsToken } from '@/lib/ws-auth'
 
 export const dynamic = 'force-dynamic'
 
-export default async function AdminEventPage({ params, searchParams }: { params: Promise<{ eventId: string }>; searchParams?: Promise<{ update?: string; editor?: string }> }) {
+export default async function AdminEventPage({ params, searchParams }: { params: Promise<{ eventId: string }>; searchParams?: Promise<{ update?: string | string[]; editor?: string | string[]; tab?: string | string[] }> }) {
 	const { eventId } = await params
 	const resolvedSearchParams = searchParams ? await searchParams : undefined
-	const openEditor = resolvedSearchParams?.update === '1' || resolvedSearchParams?.update === 'true' || resolvedSearchParams?.editor === '1' || resolvedSearchParams?.editor === 'true'
+	// The editor flag (R45) and the tab (R40) come from the URL, so the first render matches the server.
+	const openEditor = isEditorRequested(resolvedSearchParams)
+	const initialTab = parseAdminTabParam(resolvedSearchParams?.tab)
 	const cookieStore = await cookies()
 	const authCookie = cookieStore.get(UPDATE_AUTH_COOKIE_NAME)?.value
 	const unlocked = verifyUpdateAuthCookieValue(authCookie)
@@ -34,5 +37,5 @@ export default async function AdminEventPage({ params, searchParams }: { params:
 	const baseUrl = host ? `${protocol}://${host}` : ''
 	const wsAuthToken = buildAdminWsToken(event.id)
 
-	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} initialOpenEditor={allowEventEditor} allowEventEditor={allowEventEditor} wsAuthToken={wsAuthToken ?? undefined} initialJudgeLinksLocked={!unlocked} />
+	return <AdminLiveDashboard initialEvent={event} initialCompiled={compiled} baseUrl={baseUrl} initialOpenEditor={allowEventEditor} allowEventEditor={allowEventEditor} openEditor={openEditor} initialTab={initialTab} wsAuthToken={wsAuthToken ?? undefined} initialJudgeLinksLocked={!unlocked} />
 }
