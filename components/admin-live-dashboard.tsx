@@ -1423,7 +1423,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	// Phase 3 Task 13 (S5, S6): whether this browser has the update password, the write waiting for
 	// it (retried once after the unlock), and whether the queue waits for a sign-in.
 	const [judgeLinksLocked, setJudgeLinksLocked] = useState(initialJudgeLinksLocked)
-	const [unlockRequest, setUnlockRequest] = useState<{ reason: string; retry?: UnlockRetry } | null>(null)
+	const [unlockRequest, setUnlockRequest] = useState<{ reason: string; retries: UnlockRetry[] } | null>(null)
+	// A second refusal while the prompt is open adds its write; it never replaces the first.
+	const askToUnlock = useCallback((reason: string, retry?: UnlockRetry) => {
+		setUnlockRequest((current) => (current ? { reason: current.reason, retries: retry ? [...current.retries, retry] : current.retries } : { reason, retries: retry ? [retry] : [] }))
+	}, [])
 	const signInNeeded = useRef(false)
 	const adminAutoSyncInFlight = useRef(false)
 
@@ -1784,10 +1788,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			signInNeeded.current = needsSignIn
 			if (needsSignIn) {
 				setAdminQueueNotice('Sign-in needed: unlock to upload queued changes.')
-				setUnlockRequest({ reason: 'Uploading the queued changes needs the update password.', retry: { kind: 'queue' } })
+				askToUnlock('Uploading the queued changes needs the update password.', { kind: 'queue' })
 			}
 		},
-		[event.id, patchAdminEvent, refreshQueuedAdminSaves],
+		[askToUnlock, event.id, patchAdminEvent, refreshQueuedAdminSaves],
 	)
 
 	useEffect(() => {
@@ -1865,7 +1869,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setAdminQueueNotice(null)
 			} catch (error) {
 				if (error instanceof AdminSaveError && error.status === 401) {
-					setUnlockRequest({ reason: 'Changing a program needs the update password.', retry: { kind: 'program', assignments } })
+					askToUnlock('Changing a program needs the update password.', { kind: 'program', assignments })
 				} else if (shouldQueueAdminSave(error)) {
 					for (const assignment of assignments) {
 						const contestantName = contestantsById.get(assignment.contestantId)?.name ?? assignment.contestantId
@@ -1895,7 +1899,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setIsSavingProgramAssignments(false)
 			}
 		},
-		[contestantsById, event.id, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves, takeBackProgramChanges],
+		[askToUnlock, contestantsById, event.id, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves, takeBackProgramChanges],
 	)
 
 	const setProgramForAllContestants = useCallback(
@@ -2011,7 +2015,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setAdminQueueNotice(null)
 			} catch (error) {
 				if (error instanceof AdminSaveError && error.status === 401) {
-					setUnlockRequest({ reason: 'Changing who judges an entry needs the update password.', retry: { kind: 'judge', contestantId, judgeIds: [...judgeIds] } })
+					askToUnlock('Changing who judges an entry needs the update password.', { kind: 'judge', contestantId, judgeIds: [...judgeIds] })
 				} else if (shouldQueueAdminSave(error)) {
 					const contestantName = contestantsById.get(contestantId)?.name ?? contestantId
 
@@ -2039,7 +2043,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setSavingJudgeAssignmentForContestantId(null)
 			}
 		},
-		[contestantsById, event, judgeAssignmentDrafts, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
+		[askToUnlock, contestantsById, event, judgeAssignmentDrafts, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
 	)
 
 	const loadEventEditorFromCurrentEvent = useCallback(() => {
@@ -2072,7 +2076,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setShowEventEditor(false)
 		} catch (error) {
 			if (error instanceof AdminSaveError && error.status === 401) {
-				setUnlockRequest({ reason: 'Saving the event needs the update password.', retry: { kind: 'editor' } })
+				askToUnlock('Saving the event needs the update password.', { kind: 'editor' })
 			} else if (shouldQueueAdminSave(error)) {
 				upsertQueuedAdminSaveAction({
 					id: queuedAdminSaveActionId(event.id, 'event-editor'),
@@ -2096,7 +2100,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		} finally {
 			setIsSavingEventEditor(false)
 		}
-	}, [event, eventEditorDraft, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves])
+	}, [askToUnlock, event, eventEditorDraft, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves])
 
 	useEffect(() => {
 		const eventId = event.id
@@ -3633,7 +3637,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								<button
 									type='button'
 									data-testid='unlock-judge-links'
-									onClick={() => setUnlockRequest({ reason: 'Judge links are shown only with the update password.' })}
+									onClick={() => askToUnlock('Judge links are shown only with the update password.')}
 									className='rounded-full border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700'
 								>
 									Unlock judge links
@@ -3844,27 +3848,36 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				open={unlockRequest !== null}
 				reason={unlockRequest?.reason}
 				onCancel={() => {
-					const retry = unlockRequest?.retry
+					const retries = unlockRequest?.retries ?? []
 					setUnlockRequest(null)
-					if (retry?.kind === 'program') takeBackProgramChanges(retry.assignments)
+					for (const retry of retries) {
+						if (retry.kind === 'program') takeBackProgramChanges(retry.assignments)
+					}
 				}}
 				onUnlocked={() => {
-					const retry = unlockRequest?.retry
+					const retries = [...(unlockRequest?.retries ?? [])]
 					setUnlockRequest(null)
+					// A queue that waited for the sign-in is uploaded too, whichever prompt unlocked.
+					if (signInNeeded.current && !retries.some((retry) => retry.kind === 'queue')) retries.push({ kind: 'queue' })
 					signInNeeded.current = false
-					// A retried write answers with the whole event, links included; otherwise read it again.
-					if (retry?.kind === 'program') {
-						void saveProgramAssignments(retry.assignments)
-					} else if (retry?.kind === 'judge') {
-						setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
-						void saveJudgeAssignment(retry.contestantId, retry.judgeIds)
-					} else if (retry?.kind === 'editor') {
-						void saveEventEditor()
-					} else if (retry?.kind === 'queue') {
-						void syncQueuedAdminSaves(true)
-					} else {
-						void refreshDashboard()
-					}
+					void (async () => {
+						let queueSynced = false
+						for (const retry of retries) {
+							if (retry.kind === 'program') {
+								await saveProgramAssignments(retry.assignments)
+							} else if (retry.kind === 'judge') {
+								setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
+								await saveJudgeAssignment(retry.contestantId, retry.judgeIds)
+							} else if (retry.kind === 'editor') {
+								await saveEventEditor()
+							} else if (!queueSynced) {
+								queueSynced = true
+								await syncQueuedAdminSaves(true)
+							}
+						}
+						// Read the event again after the writes: the links and the lock state are then the server's.
+						await refreshDashboard()
+					})()
 				}}
 			/>
 
