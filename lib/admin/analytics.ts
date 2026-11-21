@@ -10,10 +10,22 @@ export interface ProgramTopTeam {
 	program: ProgramLabel
 	teamName: string
 	contestantName: string
+	// The overall rank in the event.
 	rank: number
+	// The competition rank within the program (1, 1, 3), Stage 5 Task 7 ruling R54.
+	programRank: number
 	score: number
 	totalScore: number
 	judgeCount: number
+}
+
+// Competition ranks (1, 1, 3) over entries already sorted best first: equal scores (within 0.0001) share a rank.
+function competitionRanks<T>(sorted: T[], score: (entry: T) => number): number[] {
+	const ranks: number[] = []
+	sorted.forEach((entry, index) => {
+		ranks.push(index > 0 && Math.abs(score(entry) - score(sorted[index - 1])) <= 0.0001 ? ranks[index - 1] : index + 1)
+	})
+	return ranks
 }
 
 export interface ProgramTopParticipant {
@@ -105,14 +117,18 @@ export function teamsByProgram(rankings: EventCompiledResults['rankings'], conte
 			teamName: extractDynamicTeamName(result.contestantName),
 			contestantName: result.contestantName,
 			rank: result.rank,
+			programRank: 0,
 			score,
 			totalScore: result.totalScore,
 			judgeCount: result.judgeCount,
 		})
 	}
 
-	grouped.BSINT.sort((a, b) => b.score - a.score)
-	grouped.BSCS.sort((a, b) => b.score - a.score)
+	for (const program of ['BSINT', 'BSCS'] as const) {
+		grouped[program].sort((a, b) => b.score - a.score)
+		const ranks = competitionRanks(grouped[program], (team) => team.score)
+		grouped[program] = grouped[program].map((team, index) => ({ ...team, programRank: ranks[index] }))
+	}
 
 	return grouped
 }
@@ -185,12 +201,9 @@ export function participantRankingsByProgram(rankings: EventCompiledResults['ran
 		}
 	}
 
+	// One ranking per program with competition ranks; the section is a label only (owner, 2026-11-21).
 	for (const program of ['BSINT', 'BSCS'] as const) {
 		grouped[program].sort((left, right) => {
-			if (left.section !== right.section) {
-				return left.section.localeCompare(right.section)
-			}
-			
 			if (right.participantRating !== left.participantRating) {
 				return right.participantRating - left.participantRating
 			}
@@ -206,23 +219,8 @@ export function participantRankingsByProgram(rankings: EventCompiledResults['ran
 			return left.participantLabel.localeCompare(right.participantLabel)
 		})
 
-		let currentRank = 0
-		let lastScore: number | null = null
-		let currentSection = ''
-
-		grouped[program] = grouped[program].map((entry, index) => {
-			if (entry.section !== currentSection) {
-				currentSection = entry.section
-				currentRank = 0
-				lastScore = null
-			}
-			
-			if (lastScore === null || Math.abs(entry.participantRating - lastScore) > 0.0001) {
-				currentRank++
-				lastScore = entry.participantRating
-			}
-			return { ...entry, rank: currentRank }
-		})
+		const ranks = competitionRanks(grouped[program], (entry) => entry.participantRating)
+		grouped[program] = grouped[program].map((entry, index) => ({ ...entry, rank: ranks[index] }))
 	}
 
 	return grouped
