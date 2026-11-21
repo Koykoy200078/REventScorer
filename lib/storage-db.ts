@@ -2413,16 +2413,16 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 	}
 }
 
-// B47: an event's rows in the tables with more than one cascading parent are deleted here,
-// child-first, before the event row itself. On MySQL 9.7.4 `DELETE FROM es_events` alone left
-// one of the event's presentation slots (parents: event and contestant) and one submission
-// (parents: event and judge) behind although every foreign key is ON DELETE CASCADE, so the
-// editor's delete-and-insert hit a duplicate slot key and Delete left orphan rows. The
-// single-parent tables (contestants and participants, judges, criteria and sub-criteria) still
-// go with the event row by cascade.
+// B47: every row of an event is deleted here, deepest table first, and the event row last. On
+// MySQL 9.7.4 `DELETE FROM es_events` with ON DELETE CASCADE left rows behind: one of the event's
+// presentation slots and one submission (tables with two cascading parents), and the sub-criteria
+// of every criterion but the first (a cascade two levels down). So no row of an event is left to a
+// cascade: the editor's delete-and-insert then never meets an old id, and Delete leaves nothing.
 async function deleteEventRows(connection: PoolConnection, eventId: string): Promise<void> {
 	const eventSubmissions = `SELECT id FROM ${TABLE_SUBMISSIONS} WHERE event_id = ?`
 	const eventSlots = `SELECT id FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`
+	const eventContestants = `SELECT id FROM ${TABLE_CONTESTANTS} WHERE event_id = ?`
+	const eventCriteria = `SELECT id FROM ${TABLE_CRITERIA} WHERE event_id = ?`
 	const statements = [
 		`DELETE FROM ${TABLE_SUBMISSION_SCORES} WHERE submission_id IN (${eventSubmissions})`,
 		`DELETE FROM ${TABLE_SUBMISSION_SAVED_CONTESTANTS} WHERE submission_id IN (${eventSubmissions})`,
@@ -2430,6 +2430,11 @@ async function deleteEventRows(connection: PoolConnection, eventId: string): Pro
 		`DELETE FROM ${TABLE_SUBMISSIONS} WHERE event_id = ?`,
 		`DELETE FROM ${TABLE_PRESENTATION_SLOT_JUDGES} WHERE slot_id IN (${eventSlots})`,
 		`DELETE FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`,
+		`DELETE FROM ${TABLE_CONTESTANT_PARTICIPANTS} WHERE contestant_id IN (${eventContestants})`,
+		`DELETE FROM ${TABLE_SUBCRITERIA} WHERE criterion_id IN (${eventCriteria})`,
+		`DELETE FROM ${TABLE_CONTESTANTS} WHERE event_id = ?`,
+		`DELETE FROM ${TABLE_JUDGES} WHERE event_id = ?`,
+		`DELETE FROM ${TABLE_CRITERIA} WHERE event_id = ?`,
 		`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`,
 	]
 	for (const statement of statements) {
@@ -2438,6 +2443,8 @@ async function deleteEventRows(connection: PoolConnection, eventId: string): Pro
 }
 
 async function replacePresentationSlotsForEvent(connection: PoolConnection, eventId: string, slots: EventPresentationSlot[]): Promise<void> {
+	// B47: the slot judges go explicitly, not by cascade.
+	await connection.execute(`DELETE FROM ${TABLE_PRESENTATION_SLOT_JUDGES} WHERE slot_id IN (SELECT id FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?)`, [eventId])
 	await connection.execute(`DELETE FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`, [eventId])
 
 	for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
