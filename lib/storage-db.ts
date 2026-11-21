@@ -2388,6 +2388,30 @@ async function insertEventGraph(connection: PoolConnection, event: EventScorer):
 	}
 }
 
+// B47: an event's rows in the tables with more than one cascading parent are deleted here,
+// child-first, before the event row itself. On MySQL 9.7.4 `DELETE FROM es_events` alone left
+// one of the event's presentation slots (parents: event and contestant) and one submission
+// (parents: event and judge) behind although every foreign key is ON DELETE CASCADE, so the
+// editor's delete-and-insert hit a duplicate slot key and Delete left orphan rows. The
+// single-parent tables (contestants and participants, judges, criteria and sub-criteria) still
+// go with the event row by cascade.
+async function deleteEventRows(connection: PoolConnection, eventId: string): Promise<void> {
+	const eventSubmissions = `SELECT id FROM ${TABLE_SUBMISSIONS} WHERE event_id = ?`
+	const eventSlots = `SELECT id FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`
+	const statements = [
+		`DELETE FROM ${TABLE_SUBMISSION_SCORES} WHERE submission_id IN (${eventSubmissions})`,
+		`DELETE FROM ${TABLE_SUBMISSION_SAVED_CONTESTANTS} WHERE submission_id IN (${eventSubmissions})`,
+		`DELETE FROM ${TABLE_SUBMISSION_CONTESTANT_DETAILS} WHERE submission_id IN (${eventSubmissions})`,
+		`DELETE FROM ${TABLE_SUBMISSIONS} WHERE event_id = ?`,
+		`DELETE FROM ${TABLE_PRESENTATION_SLOT_JUDGES} WHERE slot_id IN (${eventSlots})`,
+		`DELETE FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`,
+		`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`,
+	]
+	for (const statement of statements) {
+		await connection.execute(statement, [eventId])
+	}
+}
+
 async function replacePresentationSlotsForEvent(connection: PoolConnection, eventId: string, slots: EventPresentationSlot[]): Promise<void> {
 	await connection.execute(`DELETE FROM ${TABLE_PRESENTATION_SLOTS} WHERE event_id = ?`, [eventId])
 
@@ -2795,7 +2819,17 @@ export async function deleteEventById(eventId: string): Promise<void> {
 		throw new Error('Event not found.')
 	}
 
-	await pool.execute(`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`, [normalizedEventId])
+	const connection = await pool.getConnection()
+	try {
+		await connection.beginTransaction()
+		await deleteEventRows(connection, normalizedEventId)
+		await connection.commit()
+	} catch (error) {
+		await connection.rollback()
+		throw error
+	} finally {
+		connection.release()
+	}
 }
 
 export async function updateContestantJudgeAssignments(eventId: string, contestantId: string, rawJudgeIds: unknown): Promise<EventScorer> {
@@ -2923,7 +2957,7 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 
 		const normalizedEvent = normalizeEventEditorInput(existingEvent, rawInput)
 
-		await connection.execute(`DELETE FROM ${TABLE_EVENTS} WHERE id = ?`, [eventId])
+		await deleteEventRows(connection, eventId)
 		await insertEventGraph(connection, normalizedEvent)
 
 		// Restore previous submissions mapped to new UUIDs
