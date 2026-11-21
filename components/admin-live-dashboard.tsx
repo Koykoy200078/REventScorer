@@ -2222,14 +2222,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							</div>
 
 							<div className='flex flex-wrap items-center gap-2 print:hidden'>
-								<span className={connectionBadgeClass(connectionState)}>{connectionLabel(connectionState)}</span>
-								{lastSignalAt ? <span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-secondary)]'>Last update {formatDate(lastSignalAt)}</span> : null}
-								{queuedAdminSaves.length > 0 ? <span className='rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-800'>Pending saves {queuedAdminSaves.length}</span> : null}
+								<span data-testid='connection-state' data-state={connectionState} className={connectionBadgeClass(connectionState)}>{connectionLabel(connectionState)}</span>
+								{lastSignalAt ? <span data-testid='last-signal' className='rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-secondary)]'>Last update {formatDate(lastSignalAt)}</span> : null}
+								{queuedAdminSaves.length > 0 ? <span data-testid='pending-count' className='rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs text-amber-800'>Pending saves {queuedAdminSaves.length}</span> : null}
 								{isAutoSyncingAdminSaves ? <span className='rounded-full border border-cyan-300 bg-cyan-50 px-3 py-1 text-xs text-cyan-800'>Auto-uploading pending saves...</span> : null}
-								<button type='button' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+								<button type='button' data-testid='print-results' onClick={() => window.print()} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
 									Print Results
 								</button>
-								<button type='button' onClick={() => exportAsExcel(event, compiled)} className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'>
+								<button type='button' data-testid='export-excel' onClick={() => exportAsExcel(event, compiled)} className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'>
 									Export as Excel
 								</button>
 								{/* <button type='button' onClick={refreshDashboard} disabled={isRefreshing} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-70'>
@@ -2261,10 +2261,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</div>
 					</header>
 
-					{refreshError ? <section className='rounded-2xl border border-rose-400/40 bg-rose-300/15 px-4 py-3 text-sm text-rose-100 dark:text-rose-200'>{refreshError}</section> : null}
-					{adminQueueNotice ? <section className='rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800'>{adminQueueNotice}</section> : null}
+					{refreshError ? <section data-testid='admin-error' className='rounded-2xl border border-rose-400/40 bg-rose-300/15 px-4 py-3 text-sm text-rose-100 dark:text-rose-200'>{refreshError}</section> : null}
+					{adminQueueNotice ? <section data-testid='admin-queue-notice' className='rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800'>{adminQueueNotice}</section> : null}
 					{queuedAdminSaves.length > 0 ? (
-						<section className='rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-4'>
+						<section data-testid='pending-queue' className='rounded-2xl border border-amber-300 bg-amber-50/80 px-4 py-4'>
 							<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 								<div>
 									<h2 className='text-sm font-semibold uppercase tracking-wide text-amber-900'>Pending Queue</h2>
@@ -2281,7 +2281,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 											const isActive = pendingQueueFilter === option.id
 
 											return (
-												<button key={option.id} type='button' onClick={() => setPendingQueueFilter(option.id)} className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${isActive ? 'border-amber-700 bg-amber-900 text-white' : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'}`}>
+												<button key={option.id} type='button' data-testid='pending-filter' data-filter={option.id} onClick={() => setPendingQueueFilter(option.id)} className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${isActive ? 'border-amber-700 bg-amber-900 text-white' : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'}`}>
 													{option.label}
 												</button>
 											)
@@ -2289,7 +2289,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									</div>
 								</div>
 								<button
-									type='button'
+									type='button' data-testid='sync-queue'
 									onClick={() => {
 										void syncQueuedAdminSaves(true)
 									}}
@@ -2302,7 +2302,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							<div className='mt-3 space-y-2'>
 								{filteredPendingQueueRows.length > 0 ? (
 									filteredPendingQueueRows.map((row) => (
-										<article key={row.id} className='rounded-xl border border-amber-200 bg-white/90 px-3 py-2'>
+										<article key={row.id} data-testid='pending-row' data-kind={row.kind} className='rounded-xl border border-amber-200 bg-white/90 px-3 py-2'>
 											<div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
 												<p className='text-[11px] font-semibold uppercase tracking-wide text-amber-900'>{row.kindLabel}</p>
 												<p className='text-[11px] text-amber-800'>Queued {formatDate(row.queuedAt)}</p>
@@ -2320,7 +2320,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : null}
 
 					{allowEventEditor ? (
-						<section className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
+						<section data-testid='event-editor' className='rounded-[28px] border border-[var(--border-soft)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)] sm:p-8'>
 							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
 								<div>
 									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
@@ -2329,7 +2329,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								</div>
 								<div className='flex flex-wrap items-center gap-2'>
 									<button
-										type='button'
+										type='button' data-testid='editor-toggle'
 										onClick={() => {
 											setShowEventEditor((current) => !current)
 											if (!showEventEditor) {
@@ -2345,8 +2345,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								</div>
 							</div>
 
-							{eventEditorError ? <p className='mt-4 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{eventEditorError}</p> : null}
-							{eventEditorNotice ? <p className='mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{eventEditorNotice}</p> : null}
+							{eventEditorError ? <p data-testid='editor-error' className='mt-4 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{eventEditorError}</p> : null}
+							{eventEditorNotice ? <p data-testid='editor-notice' className='mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{eventEditorNotice}</p> : null}
 
 							{showEventEditor ? (
 								<div className='mt-4 space-y-6'>
@@ -2935,7 +2935,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 									<div className='flex flex-wrap items-center gap-2'>
 										<button
-											type='button'
+											type='button' data-testid='editor-save'
 											onClick={() => {
 												void saveEventEditor()
 											}}
@@ -3234,7 +3234,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								</div>
 								<div className='flex items-center gap-4'>
 									<button
-										type='button'
+										type='button' data-testid='export-sections'
 										onClick={(e) => {
 											e.preventDefault()
 											e.stopPropagation()
@@ -3348,7 +3348,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												<div className='flex items-center gap-3 text-[10px] font-normal text-[var(--text-secondary)]'>
 													<label className='flex items-center gap-1 cursor-pointer'>
 														<input
-															type='checkbox'
+															type='checkbox' data-testid='program-all' data-program='BSINT'
 															checked={allContestantsBSINT}
 															disabled={isSavingProgramAssignments}
 															onChange={(e) => {
@@ -3361,7 +3361,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													</label>
 													<label className='flex items-center gap-1 cursor-pointer'>
 														<input
-															type='checkbox'
+															type='checkbox' data-testid='program-all' data-program='BSCS'
 															checked={allContestantsBSCS}
 															disabled={isSavingProgramAssignments}
 															onChange={(e) => {
@@ -3430,7 +3430,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 										return (
 											<Fragment key={result.contestantId}>
-												<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
+												<tr data-testid='ranking-row' data-contestant-id={result.contestantId} data-rank={result.rank} className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
 													<td className='border-b border-[var(--border-soft)] px-3 py-3 font-medium'>#{result.rank}</td>
 													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
 														<div className='flex items-center gap-2'>
@@ -3442,7 +3442,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														<div className='flex items-center gap-3'>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
 																<input
-																	type='checkbox'
+																	type='checkbox' data-testid='program-toggle' data-contestant-id={result.contestantId} data-program='BSINT'
 																	checked={currentProgram === 'BSINT'}
 																	disabled={isSavingProgramAssignments}
 																	onChange={() => toggleContestantProgram(result.contestantId, 'BSINT')}
@@ -3452,7 +3452,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															</label>
 															<label className='flex items-center gap-1 text-xs cursor-pointer'>
 																<input
-																	type='checkbox'
+																	type='checkbox' data-testid='program-toggle' data-contestant-id={result.contestantId} data-program='BSCS'
 																	checked={currentProgram === 'BSCS'}
 																	disabled={isSavingProgramAssignments}
 																	onChange={() => toggleContestantProgram(result.contestantId, 'BSCS')}
@@ -3468,29 +3468,29 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.groupRating ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.individualAverageScore ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.individualRating ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
+															<td data-col='weighted' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
 														</>
 													) : useDirectFinalRating ? (
 														<>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.aveGpa ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.noat ?? 0)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.totalInterview ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{formatScore(result.finalRating ?? result.averageScore)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
+															<td data-col='final' className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{formatScore(result.finalRating ?? result.averageScore)}</td>
+															<td data-col='total' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.strand || '-'}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.remark || '-'}</td>
 															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.additionalInfo || '-'}</td>
 														</>
 													) : (
 														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
+															<td data-col='average' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
+															<td data-col='total' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
 														</>
 													)}
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
+													<td data-col='judges' className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
 												</tr>
 												{hasParticipantScores ? (
-													<tr className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
+													<tr data-testid='ranking-detail' data-contestant-id={result.contestantId} className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
 														<td className='border-b border-[var(--border-soft)] px-3 py-2 text-xs text-[var(--text-secondary)]' colSpan={compiledTableColumnCount}>
 															<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
 																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Participant Scores:</span>
@@ -3512,7 +3512,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		{assignedJudgeStatus.length > 0 ? (
 																			assignedJudgeStatus.map((judgeStatus) => (
 																				<span
-																					key={`${result.contestantId}-${judgeStatus.id}-status`}
+																					key={`${result.contestantId}-${judgeStatus.id}-status`} data-testid='assigned-judge' data-judge-id={judgeStatus.id} data-scored={judgeStatus.hasScoredContestant ? 'true' : 'false'}
 																					className={judgeStatus.hasScoredContestant ? 'rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800' : 'rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'}>
 																					{judgeStatus.name}
 																					{judgeStatus.hasScoredContestant ? '' : ' (Not scored)'}
@@ -3522,24 +3522,24 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																			<span className='rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'>No assigned judge</span>
 																		)}
 																	</div>
-																	<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId((current) => (current === result.contestantId ? null : result.contestantId))} className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800'>
+																	<button type='button' data-testid='edit-judge' data-contestant-id={result.contestantId} onClick={() => setEditingJudgeAssignmentForContestantId((current) => (current === result.contestantId ? null : result.contestantId))} className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800'>
 																		Edit Judge
 																	</button>
 
 																	{isEditingJudgeAssignment ? (
-																		<div className='absolute left-0 top-full z-20 mt-2 w-max max-w-[min(92vw,560px)] rounded-2xl border border-cyan-300 bg-white p-3 shadow-xl'>
+																		<div data-testid='judge-swap' className='absolute left-0 top-full z-20 mt-2 w-max max-w-[min(92vw,560px)] rounded-2xl border border-cyan-300 bg-white p-3 shadow-xl'>
 																			<p className='text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>Swap Judges</p>
 																			<div className='mt-2 flex flex-wrap items-center gap-2'>
 																				{event.judges.map((judge) => (
 																					<label key={`${result.contestantId}-${judge.id}`} className='flex items-center gap-1 rounded-full border border-cyan-300 bg-white px-2 py-1 text-[11px] text-cyan-900'>
-																						<input type='checkbox' checked={assignmentDraftJudgeIds.includes(judge.id)} onChange={() => toggleJudgeAssignment(result.contestantId, judge.id)} className='rounded border-cyan-400 text-cyan-700 focus:ring-cyan-500' />
+																						<input type='checkbox' data-testid='judge-swap-option' data-judge-id={judge.id} checked={assignmentDraftJudgeIds.includes(judge.id)} onChange={() => toggleJudgeAssignment(result.contestantId, judge.id)} className='rounded border-cyan-400 text-cyan-700 focus:ring-cyan-500' />
 																						<span>{judge.name}</span>
 																					</label>
 																				))}
 																			</div>
 																			<div className='mt-3 flex flex-wrap items-center gap-2'>
 																				<button
-																					type='button'
+																					type='button' data-testid='judge-swap-save'
 																					onClick={() => saveJudgeAssignment(result.contestantId)}
 																					disabled={!hasAssignmentChanges || isSavingAssignment}
 																					className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
@@ -3711,7 +3711,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					}
 				}
 			`}</style>
-			<div className='hidden w-full bg-white p-12 text-black print:block min-h-screen'>
+			<div data-testid='print-sheet' className='hidden w-full bg-white p-12 text-black print:block min-h-screen'>
 				<div className='text-center font-serif leading-tight'>
 					<h1 className='text-xl font-bold uppercase'>{event.title}</h1>
 					<p>Date: {formatDate(event.createdAt)}</p>
@@ -3735,15 +3735,15 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					</thead>
 					<tbody>
 						{compiled.rankings.map((result) => (
-							<tr key={result.contestantId}>
-								<td className='border border-black p-2 text-left font-semibold uppercase'>{result.contestantName}</td>
+							<tr key={result.contestantId} data-testid='print-row' data-contestant-id={result.contestantId}>
+								<td data-col='name' className='border border-black p-2 text-left font-semibold uppercase'>{result.contestantName}</td>
 								{event.judges.map((j) => (
-									<td key={j.id} className='border border-black p-2'>
+									<td key={j.id} data-col='judge' data-judge-id={j.id} className='border border-black p-2'>
 										{result.perJudgeTotals[j.id] !== undefined ? formatScore(result.perJudgeTotals[j.id]) : ''}
 									</td>
 								))}
-								<td className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
-								<td className='border border-black p-2 font-bold'>{result.rank}</td>
+								<td data-col='final' className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
+								<td data-col='rank' className='border border-black p-2 font-bold'>{result.rank}</td>
 							</tr>
 						))}
 					</tbody>
@@ -3762,14 +3762,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 			{isProgramPasswordModalOpen ? (
 				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>
-					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
+					<div role='dialog' aria-modal='true' data-testid='password-dialog' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
 						<h3 className='text-lg font-semibold text-[var(--text-primary)]'>Authentication Required</h3>
 						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants.</p>
 						<form className='mt-4 space-y-3' onSubmit={(e) => void handleProgramPasswordSubmit(e)}>
 							<div>
 								<label className='text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]'>Password</label>
 								<input
-									type='password'
+									type='password' data-testid='password-input'
 									value={programPassword}
 									onChange={(e) => {
 										setProgramPassword(e.target.value)
@@ -3780,10 +3780,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									required
 								/>
 							</div>
-							{programPasswordError ? <p className='text-sm text-rose-600'>{programPasswordError}</p> : null}
+							{programPasswordError ? <p data-testid='password-error' className='text-sm text-rose-600'>{programPasswordError}</p> : null}
 							<div className='flex flex-wrap justify-end gap-2 pt-2'>
 								<button
-									type='button'
+									type='button' data-testid='password-cancel'
 									onClick={() => {
 										setIsProgramPasswordModalOpen(false)
 										setProgramPassword('')
@@ -3795,7 +3795,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									Cancel
 								</button>
 								<button
-									type='submit'
+									type='submit' data-testid='password-submit'
 									disabled={isVerifyingProgramPassword}
 									className='rounded-full bg-emerald-600 px-6 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60'
 								>
