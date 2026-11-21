@@ -4,6 +4,7 @@ import { saveAs } from 'file-saver'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
+import { DashboardTab } from '@/components/admin/dashboard-tab'
 import type { ConnectionState } from '@/components/admin/connection'
 import { EventBand } from '@/components/admin/event-band'
 import { Button } from '@/components/ui/button'
@@ -14,9 +15,11 @@ import { createEditorId } from '@/lib/admin/editor-id'
 import { criterionMaxScore, participantAnalyticsScore, participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
 import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEventEditorPayloadForSubmit, synchronizeEventEditorDraft, uniqueTrimmedNames } from '@/lib/admin/editor-snapshot'
 import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
-import { adminFormulaSentence } from '@/lib/admin/formula'
+import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
+import { adminKpis, programCohorts } from '@/lib/admin/kpis'
 import { assignedJudgeIdsForContestant, buildJudgeAssignmentDrafts, sameJudgeAssignments } from '@/lib/admin/judges'
 import { isIndividualPresentationCriterion, mergedIndividualSubCriteriaForContestant } from '@/lib/admin/members'
+import { podiumPlaces } from '@/lib/admin/podium'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
 import { type AdminTab, parseAdminTabParam, searchForTab } from '@/lib/admin/tabs'
 import { ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS, AdminSaveError, type AdminSaveRequestBody, isJudgeAssignmentQueuedAction, isProgramAssignmentQueuedAction, isRecord, listQueuedAdminSaveActionsForEvent, type QueuedAdminSaveAction, queuedAdminSaveActionId, type QueuedAdminSaveKind, queuedAdminSaveKindLabel, removeQueuedAdminSaveAction, shouldQueueAdminSave, upsertQueuedAdminSaveAction } from '@/lib/admin/queue'
@@ -956,12 +959,16 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}, [event.id, refreshDashboard, wsAuthToken])
 
+	// The program each entry shows (a manual choice, the stored tag, else its name), as the matrix resolves it.
+	const programOf = (contestantId: string) => {
+		const contestant = contestantsById.get(contestantId)
+		return resolveProgramLabel(contestant?.name ?? '', contestant, manualAssignments[contestantId])
+	}
+	const scoring = scoringKind(compiled)
+	const judgesWithSaves = new Set(compiled.judgeBreakdown.filter((judge) => Object.keys(judge.totalsByContestant).length > 0).map((judge) => judge.judgeId))
+
 	// Every entry, in rank order, whatever the matrix filters (R52).
 	const exportCsv = () => {
-		const programOf = (contestantId: string) => {
-			const contestant = contestantsById.get(contestantId)
-			return resolveProgramLabel(contestant?.name ?? '', contestant, manualAssignments[contestantId])
-		}
 		const statusOf = (contestantId: string) => entryStatus(contestantId, assignedJudgeIdsForContestant(event, contestantId), compiled.judgeBreakdown)
 		saveAs(new Blob([toCsv(scoreMatrixRows(event, compiled, programOf, statusOf))], { type: 'text/csv;charset=utf-8' }), `${event.title} - Score Matrix.csv`)
 	}
@@ -1686,25 +1693,23 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : (
 					<TabPanel className='flex flex-col gap-space-xl'>
 					{activeTab === 'dashboard' ? (
+						<DashboardTab
+							kpis={adminKpis(event, compiled, programOf, (contestantId) => assignedJudgeIdsForContestant(event, contestantId))}
+							judges={event.judges.map((judge) => ({ id: judge.id, name: judge.name, saved: judgesWithSaves.has(judge.id) }))}
+							kind={scoring}
+							groupMaxScore={compiled.groupMaxScore}
+							individualMaxScore={compiled.individualMaxScore}
+							places={podiumPlaces(compiled.rankings, scoring === 'weighted')}
+							programOf={programOf}
+							isIndividual={(contestantId) => contestantsById.get(contestantId)?.entryType === 'individual'}
+							cohorts={programCohorts(event, compiled, programOf)}
+							topTeams={analyticsByProgram}
+							onShowRankings={() => showTab('rankings')}
+						/>
+					) : null}
+
+					{activeTab === 'rankings' ? (
 					<>
-						<div className='grid gap-3 sm:grid-cols-4'>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Contestants</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.contestants.length}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Judges</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{event.judges.length}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>Submitted</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{compiled.submittedJudgeCount}</p>
-							</div>
-							<div className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-								<p className='text-xs text-[var(--text-muted)]'>{useWeightedScores ? 'Raw Score Scale' : useDirectFinalRating ? 'Final Rating Scale' : 'Score Scale'}</p>
-								<p className='text-xl font-semibold text-[var(--text-primary)]'>{formatScore(compiled.maxPossibleScore)}</p>
-							</div>
-						</div>
 					<section className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
 						<p className='mt-1 text-sm text-[var(--text-secondary)]'>
@@ -1760,11 +1765,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
 						)}
 					</section>
-					</>
-					) : null}
-
-					{activeTab === 'rankings' ? (
-					<>
 					<details
 						className='group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
 						onMouseEnter={(e) => { if (!isProgramPinned) e.currentTarget.open = true }}

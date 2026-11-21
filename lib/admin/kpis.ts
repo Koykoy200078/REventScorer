@@ -1,5 +1,6 @@
 // The Live Scoring Dashboard's KPI cards (spec 2.1, Stage 5 Task 7 step 2).
 
+import { rankingScore } from '@/lib/admin/analytics'
 import { scoringKind } from '@/lib/admin/formula'
 import type { ProgramLabel } from '@/lib/admin/program'
 import { entryStatus } from '@/lib/admin/status'
@@ -57,4 +58,30 @@ export function adminKpis(
 		percentComplete: entries > 0 ? (counts.complete * 100) / entries : 0,
 		scale: scoringKind(compiled) === 'standard' ? { value: compiled.maxPossibleScore, unit: 'raw' } : { value: 100, unit: 'rating' },
 	}
+}
+
+export interface ProgramCohort {
+	entries: number
+	scored: number
+	/** The mean final figure of the program's scored entries (judge count > 0); null when none is scored. */
+	average: number | null
+}
+
+/** Per program: its entries (every entry with that program) and the mean final figure of the scored ones (spec 2.1). */
+export function programCohorts(
+	event: Pick<EventScorer, 'contestants'>,
+	compiled: Pick<EventCompiledResults, 'hasWeightedScores' | 'rankings'>,
+	programOf: (contestantId: string) => ProgramLabel | null,
+): Record<ProgramLabel, ProgramCohort> {
+	const weighted = scoringKind(compiled) === 'weighted'
+	const cohorts: Record<ProgramLabel, ProgramCohort> = { BSINT: { entries: 0, scored: 0, average: null }, BSCS: { entries: 0, scored: 0, average: null } }
+	for (const contestant of event.contestants) {
+		const program = programOf(contestant.id)
+		if (program) cohorts[program].entries += 1
+	}
+	for (const program of ['BSINT', 'BSCS'] as const) {
+		const scores = compiled.rankings.filter((result) => result.judgeCount > 0 && programOf(result.contestantId) === program).map((result) => rankingScore(result, weighted))
+		cohorts[program] = { ...cohorts[program], scored: scores.length, average: scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null }
+	}
+	return cohorts
 }
