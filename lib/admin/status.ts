@@ -37,3 +37,19 @@ export function entryStatusLabel(status: EntryStatus): string {
 			return 'No judge assigned'
 	}
 }
+
+/**
+ * A judge's progress (R53): the entries whose assigned judges include them, and how many of those they saved. A save
+ * of an entry the judge is not assigned to is not counted.
+ */
+export function judgeProgress(
+	judgeId: string,
+	contestantIds: string[],
+	assignedOf: (contestantId: string) => string[],
+	judgeBreakdown: Array<Pick<JudgeBreakdown, 'judgeId' | 'totalsByContestant'>>,
+): { saved: number; assigned: number } {
+	const totals = judgeBreakdown.find((judge) => judge.judgeId === judgeId)?.totalsByContestant ?? {}
+	const assigned = contestantIds.filter((contestantId) => assignedOf(contestantId).includes(judgeId))
+	const saved = assigned.filter((contestantId) => Object.prototype.hasOwnProperty.call(totals, contestantId)).length
+	return { saved, assigned: assigned.length }
+}

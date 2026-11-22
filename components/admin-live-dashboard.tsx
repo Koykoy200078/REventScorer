@@ -7,6 +7,7 @@ import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
 import { BreakdownDialog } from '@/components/admin/breakdown-dialog'
 import { DashboardTab } from '@/components/admin/dashboard-tab'
 import { INITIAL_MATRIX_VIEW, type MatrixFilterPatch, type MatrixRow, MatrixTab, type MatrixView } from '@/components/admin/matrix-tab'
+import { TelemetryTab } from '@/components/admin/telemetry-tab'
 import type { ConnectionState } from '@/components/admin/connection'
 import { EventBand } from '@/components/admin/event-band'
 import { Button } from '@/components/ui/button'
@@ -15,19 +16,19 @@ import UnlockDialog from '@/components/unlock-dialog'
 import { scoreMatrixRows, toCsv } from '@/lib/admin/csv'
 import { breakdownRows } from '@/lib/admin/breakdown'
 import { createEditorId } from '@/lib/admin/editor-id'
-import { criterionMaxScore, participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
+import { participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
 import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEventEditorPayloadForSubmit, synchronizeEventEditorDraft, uniqueTrimmedNames } from '@/lib/admin/editor-snapshot'
 import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
 import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
 import { adminKpis, programCohorts } from '@/lib/admin/kpis'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
-import { isIndividualPresentationCriterion, mergedIndividualSubCriteriaForContestant } from '@/lib/admin/members'
+import { observationsLog, remarkItems } from '@/lib/admin/observations-log'
 import { podiumPlaces } from '@/lib/admin/podium'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
 import { type AdminTab, parseAdminTabParam, searchForTab } from '@/lib/admin/tabs'
 import { ADMIN_SAVE_AUTO_SYNC_INTERVAL_MS, AdminSaveError, type AdminSaveRequestBody, isJudgeAssignmentQueuedAction, isProgramAssignmentQueuedAction, isRecord, listQueuedAdminSaveActionsForEvent, type QueuedAdminSaveAction, queuedAdminSaveActionId, type QueuedAdminSaveKind, queuedAdminSaveKindLabel, removeQueuedAdminSaveAction, shouldQueueAdminSave, upsertQueuedAdminSaveAction } from '@/lib/admin/queue'
-import { entryStatus } from '@/lib/admin/status'
-import { formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
+import { entryStatus, judgeProgress } from '@/lib/admin/status'
+import { normalizeRubricLegend } from '@/lib/rubric-legend'
 import { shouldKeepQueued } from '@/lib/save-retry'
 import type { AdminEventEditorInput, AdminScoreRealtimeUpdate, EventCompiledResults, EventScorer } from '@/lib/types'
 import { exportAsExcel, exportSectionAnalyticsAsExcel } from './export-excel'
@@ -95,7 +96,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [showAllSectionAnalytics, setShowAllSectionAnalytics] = useState<Record<string, boolean>>({})
 	const [isProgramPinned, setIsProgramPinned] = useState(false)
 	const [isSectionPinned, setIsSectionPinned] = useState(false)
-	const [isRubricPinned, setIsRubricPinned] = useState(false)
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
@@ -133,7 +133,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
 	const analyticsPreviewLimit = 3
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
-	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedRubricLegend), [normalizedRubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
 	const judgesById = useMemo(() => new Map(event.judges.map((judge) => [judge.id, judge])), [event.judges])
 	const resolvedProgramByContestantId = useMemo(() => {
@@ -1006,6 +1005,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	})
 	const breakdownResult = breakdownId ? (compiled.rankings.find((result) => result.contestantId === breakdownId) ?? null) : null
+
+	const rankOf = (contestantId: string) => compiled.rankings.find((result) => result.contestantId === contestantId)?.rank
+	// "{title} - Observations Log.txt": every remark the judges saved, newest submission first.
+	const exportObservations = () => {
+		saveAs(new Blob([observationsLog(event.title, remarkItems(event, rankOf, scoring === 'direct'))], { type: 'text/plain;charset=utf-8' }), `${event.title} - Observations Log.txt`)
+	}
 
 	// Every entry, in rank order, whatever the matrix filters (R52).
 	const exportCsv = () => {
@@ -2124,162 +2129,31 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : null}
 
 					{activeTab === 'telemetry' ? (
-					<>
-					<section data-testid='judge-links' data-locked={judgeLinksLocked ? 'true' : 'false'} className='print:hidden bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
-						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-							<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Links and Submission Status</h2>
-							{judgeLinksLocked ? (
-								<button
-									type='button'
-									data-testid='unlock-judge-links'
-									onClick={() => askToUnlock('Judge links are shown only with the update password.')}
-									className='rounded-full border border-emerald-600 bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700'
-								>
-									Unlock judge links
-								</button>
-							) : null}
-						</div>
-						<div className='mt-4 space-y-3'>
-							{event.judges.map((judge) => {
+						<TelemetryTab
+							judges={event.judges.map((judge) => {
 								const judgeResult = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
-								const judgePath = `/judge/${judge.token}`
-								const fullJudgeUrl = baseUrl ? `${baseUrl}${judgePath}` : judgePath
-								const copyValue = baseUrl || typeof window === 'undefined' ? fullJudgeUrl : `${window.location.origin}${judgePath}`
-
-								return (
-									<article key={judge.id} data-testid='judge-link-row' data-judge-id={judge.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-											<div>
-												<p className='text-sm font-semibold text-[var(--text-primary)]'>{judge.name}</p>
-												{judgeLinksLocked || !judge.token ? (
-													<p className='text-sm text-[var(--text-secondary)]'>Link hidden until unlocked</p>
-												) : (
-													<a href={fullJudgeUrl} className='block break-all text-sm text-[var(--text-secondary)] underline'>
-														{fullJudgeUrl}
-													</a>
-												)}
-											</div>
-											<div className='flex flex-wrap items-center gap-2'>
-												{judgeLinksLocked || !judge.token ? null : (
-												<button type='button' onClick={() => copyLink(copyValue)} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-													{copiedLink === copyValue ? 'Copied' : 'Copy Link'}
-												</button>
-												)}
-												<div className='text-sm text-[var(--text-secondary)]'>{judgeResult?.submitted ? <span>Submitted {judgeResult.submittedAt ? formatDate(judgeResult.submittedAt) : ''}</span> : <span>Not submitted yet</span>}</div>
-											</div>
-										</div>
-									</article>
-								)
+								return {
+									id: judge.id,
+									name: judge.name,
+									token: judge.token || undefined,
+									saved: judgesWithSaves.has(judge.id),
+									submittedAt: judgeResult?.submitted ? judgeResult.submittedAt : undefined,
+									progress: judgeProgress(judge.id, event.contestants.map((contestant) => contestant.id), (contestantId) => assignedJudgeIdsForContestant(event, contestantId), compiled.judgeBreakdown),
+								}
 							})}
-						</div>
-					</section>
-
-					<details
-						className='print:hidden group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
-						onMouseEnter={(e) => { if (!isRubricPinned) e.currentTarget.open = true }}
-						onMouseLeave={(e) => { if (!isRubricPinned) e.currentTarget.open = false }}
-					>
-						<summary 
-							className='flex cursor-pointer items-center justify-between outline-none'
-							onClick={(e) => {
-								e.preventDefault()
-								const details = e.currentTarget.parentElement as HTMLDetailsElement
-								const nextPinned = !isRubricPinned
-								setIsRubricPinned(nextPinned)
-								details.open = nextPinned
-							}}
-						>
-							<div>
-								<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Rubric Breakdown</h2>
-								{!isDirectRatingEvent ? <p className='mt-1 text-xs text-[var(--text-secondary)]'>Legend: {rubricLegendText}</p> : null}
-							</div>
-							<div className='ml-4 shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
-								<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-							</div>
-						</summary>
-						<div className='mt-4 grid gap-4 pt-4 border-t border-[var(--border-soft)]'>
-							{event.criteria.map((criterion) => {
-								const showPerContestantParticipants = isIndividualPresentationCriterion(criterion)
-								const criterionScopeLabel = showPerContestantParticipants ? 'Per Contestant (Individual)' : 'Group Criteria Only'
-
-								return (
-									<article key={criterion.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<div className='flex flex-wrap items-center justify-between gap-2'>
-											<p className='text-sm font-semibold text-[var(--text-primary)]'>
-												{criterion.name} (Max: {formatScore(criterionMaxScore(criterion))})
-											</p>
-											<span className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-secondary)]'>Scope: {criterionScopeLabel}</span>
-										</div>
-
-										{showPerContestantParticipants ? (
-											<div className='mt-2 space-y-3'>
-												{event.contestants.map((contestant) => {
-													const mergedSubCriteria = mergedIndividualSubCriteriaForContestant(criterion, contestant)
-
-													return (
-														<div key={`${criterion.id}-${contestant.id}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3'>
-															<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{contestant.name}</p>
-															<div className='mt-2 space-y-2'>
-																{mergedSubCriteria.map((item) => (
-																	<div key={`${contestant.id}-${item.id}`} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm sm:grid-cols-2'>
-																		<span className='text-[var(--text-primary)]'>{item.name}</span>
-																		<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(item.maxScore)}</span>
-																	</div>
-																))}
-															</div>
-														</div>
-													)
-												})}
-											</div>
-										) : (
-											<div className='mt-2 space-y-2'>
-												{criterion.subCriteria.map((subCriterion) => (
-													<div key={subCriterion.id} className='grid gap-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm sm:grid-cols-2'>
-														<span className='text-[var(--text-primary)]'>{subCriterion.name}</span>
-														<span className='text-[var(--text-secondary)]'>Max Score: {formatScore(subCriterion.maxScore)}</span>
-													</div>
-												))}
-											</div>
-										)}
-									</article>
-								)
-							})}
-						</div>
-					</details>
-
-					<section className='print:hidden bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Judge Remarks</h2>
-						<p className='mt-1 text-xs text-[var(--text-secondary)]'>Additional remarks and comments left by judges for each contestant.</p>
-						<div className='mt-4 grid gap-4'>
-							{event.contestants.map((contestant) => {
-								const remarksForContestant = event.submissions
-									.map((submission) => {
-										const details = submission.contestantDetails?.[contestant.id]
-										const judgeName = event.judges.find((j) => j.id === submission.judgeId)?.name || 'Unknown Judge'
-										if (!details?.additionalInfo && !details?.remark) return null
-										return { judgeName, remark: details.remark, additionalInfo: details.additionalInfo }
-									})
-									.filter((item): item is NonNullable<typeof item> => item !== null)
-
-								if (remarksForContestant.length === 0) return null
-
-								return (
-									<article key={contestant.id} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<p className='text-sm font-semibold text-[var(--text-primary)]'>{contestant.name}</p>
-										<div className='mt-2 space-y-2'>
-											{remarksForContestant.map((item, idx) => (
-												<div key={idx} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm'>
-													<span className='font-semibold text-[var(--text-primary)]'>{item.judgeName}:</span> <span className='text-[var(--text-secondary)]'>{[item.remark, item.additionalInfo].filter(Boolean).join(' - ')}</span>
-												</div>
-											))}
-										</div>
-									</article>
-								)
-							})}
-							{event.contestants.every((contestant) => !event.submissions.some((sub) => sub.contestantDetails?.[contestant.id]?.additionalInfo || sub.contestantDetails?.[contestant.id]?.remark)) && <p className='text-sm text-[var(--text-secondary)]'>No remarks have been submitted yet.</p>}
-						</div>
-					</section>
-					</>
+							locked={judgeLinksLocked}
+							baseUrl={baseUrl}
+							copiedLink={copiedLink}
+							onCopy={(value) => void copyLink(value)}
+							onUnlock={() => askToUnlock('Judge links are shown only with the update password.')}
+							isDirect={scoring === 'direct'}
+							legend={normalizedRubricLegend}
+							criteria={event.criteria}
+							contestants={event.contestants}
+							remarks={remarkItems(event, rankOf, scoring === 'direct')}
+							programOf={programOf}
+							onExportObservations={exportObservations}
+						/>
 					) : null}
 					</TabPanel>
 					)}
