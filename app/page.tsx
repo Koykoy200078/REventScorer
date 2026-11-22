@@ -81,7 +81,8 @@ export default async function HomePage() {
 														<circle cx='12' cy='18.5' r='1.7' />
 													</svg>
 												</button>
-												<div className={cx(MENU, 'pointer-events-none absolute right-0 top-full z-20 mt-2 flex w-56 max-w-[calc(100vw-2rem)] flex-col gap-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100')}>
+												{/* z-[60]: the Update and Delete dialogs render inside this menu, so their backdrop must paint above the fixed header (z-50). */}
+												<div className={cx(MENU, 'pointer-events-none absolute right-0 top-full z-[60] mt-2 flex w-56 max-w-[calc(100vw-2rem)] flex-col gap-1 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100')}>
 													{!event.isDirectRating && (
 														<UpdateDataButton eventId={event.id} className={cx(MENU_ITEM, 'inline-flex w-full items-center justify-start')} />
 													)}
