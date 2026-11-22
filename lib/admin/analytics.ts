@@ -8,6 +8,7 @@ import type { EventCompiledResults, EventContestant, EventCriterion, EventScorer
 
 export interface ProgramTopTeam {
 	program: ProgramLabel
+	contestantId: string
 	teamName: string
 	contestantName: string
 	// The overall rank in the event.
@@ -114,6 +115,7 @@ export function teamsByProgram(rankings: EventCompiledResults['rankings'], conte
 
 		grouped[detectedProgram].push({
 			program: detectedProgram,
+			contestantId: result.contestantId,
 			teamName: extractDynamicTeamName(result.contestantName),
 			contestantName: result.contestantName,
 			rank: result.rank,

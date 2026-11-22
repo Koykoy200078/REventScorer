@@ -1,12 +1,13 @@
 'use client'
 
 import { saveAs } from 'file-saver'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
 import { BreakdownDialog } from '@/components/admin/breakdown-dialog'
 import { DashboardTab } from '@/components/admin/dashboard-tab'
 import { INITIAL_MATRIX_VIEW, type MatrixFilterPatch, type MatrixRow, MatrixTab, type MatrixView } from '@/components/admin/matrix-tab'
+import { RankingsTab } from '@/components/admin/rankings-tab'
 import { TelemetryTab } from '@/components/admin/telemetry-tab'
 import type { ConnectionState } from '@/components/admin/connection'
 import { EventBand } from '@/components/admin/event-band'
@@ -18,7 +19,7 @@ import { breakdownRows } from '@/lib/admin/breakdown'
 import { createEditorId } from '@/lib/admin/editor-id'
 import { participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
 import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEventEditorPayloadForSubmit, synchronizeEventEditorDraft, uniqueTrimmedNames } from '@/lib/admin/editor-snapshot'
-import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
+import { formatDate, formatScore } from '@/lib/admin/format'
 import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
 import { adminKpis, programCohorts } from '@/lib/admin/kpis'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
@@ -90,12 +91,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>({})
 	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
-	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showAllParticipantAnalytics, setShowAllParticipantAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showAllSubCriteriaAnalytics, setShowAllSubCriteriaAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
-	const [showAllSectionAnalytics, setShowAllSectionAnalytics] = useState<Record<string, boolean>>({})
-	const [isProgramPinned, setIsProgramPinned] = useState(false)
-	const [isSectionPinned, setIsSectionPinned] = useState(false)
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
@@ -131,7 +126,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
 	const isDirectRatingEvent = Boolean(event.directRatingConfig)
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
-	const analyticsPreviewLimit = 3
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
 	const judgesById = useMemo(() => new Map(event.judges.map((judge) => [judge.id, judge])), [event.judges])
@@ -149,7 +143,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	}, [compiled.rankings, contestantsById, manualAssignments])
 	const allContestantsBSINT = useMemo(() => compiled.rankings.length > 0 && compiled.rankings.every((result) => resolvedProgramByContestantId.get(result.contestantId) === 'BSINT'), [compiled.rankings, resolvedProgramByContestantId])
 	const allContestantsBSCS = useMemo(() => compiled.rankings.length > 0 && compiled.rankings.every((result) => resolvedProgramByContestantId.get(result.contestantId) === 'BSCS'), [compiled.rankings, resolvedProgramByContestantId])
-	const winners = useMemo(() => compiled.rankings.slice(0, 3), [compiled.rankings])
 	const analyticsByProgram = useMemo(() => teamsByProgram(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
 	const participantAnalyticsByProgram = useMemo(() => participantRankingsByProgram(compiled.rankings, contestantsById, manualAssignments), [compiled.rankings, contestantsById, manualAssignments])
 	const sectionAnalytics = useMemo(() => rankingsBySection(compiled.rankings, contestantsById, manualAssignments, useWeightedScores), [compiled.rankings, contestantsById, manualAssignments, useWeightedScores])
@@ -1754,348 +1747,17 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : null}
 
 					{activeTab === 'rankings' ? (
-					<>
-					<section className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
-						<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Winners</h2>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>
-							{useDirectFinalRating
-								? 'Final Rating = normalized average (AVE/GPA, NOAT, Interview). Aligned strand bonus is applied to Interview points only.'
-								: useWeightedScores
-									? 'Final Oral Defense is shown separately by Group and Individual scoring. Final Score = (Group Rating x 60%) + (Individual Rating x 40%).'
-									: 'Final Score is computed as Total Score / Total Judges.'}
-						</p>
-
-						{winners.length > 0 ? (
-							<div className='mt-4 grid gap-3 sm:grid-cols-3'>
-								{winners.map((winner) => {
-									const winnerContestant = contestantsById.get(winner.contestantId)
-									const isIndividual = winnerContestant?.entryType === 'individual'
-
-									return (
-										<article key={winner.contestantId} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-											<p className='text-xs uppercase tracking-wide text-[var(--text-muted)]'>Rank #{winner.rank}</p>
-											<div className='mt-1 flex items-center gap-2'>
-												<p className='text-lg font-semibold text-[var(--text-primary)]'>{winner.contestantName}</p>
-												{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
-											</div>
-											{useWeightedScores ? (
-												<>
-													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
-														Final Score: <span className='font-semibold'>{formatScore(winner.weightedScore ?? winner.averageScore)}</span>
-													</p>
-													<p className='text-xs text-[var(--text-muted)]'>
-														Group Avg: {formatScore(winner.groupAverageScore ?? 0)} · Individual Avg: {formatScore(winner.individualAverageScore ?? 0)}
-													</p>
-												</>
-											) : useDirectFinalRating ? (
-												<>
-													<p className='mt-2 text-sm text-[var(--text-secondary)]'>
-														Final Rating: <span className='font-semibold'>{formatScore(winner.finalRating ?? winner.averageScore)}</span>
-													</p>
-													<p className='text-xs text-[var(--text-muted)]'>
-														Base: {formatScore(winner.baseFinalRating ?? 0)} · Interview Bonus Applied: +{formatScore(winner.bonusPoints ?? 0)}
-													</p>
-												</>
-											) : (
-												<p className='mt-2 text-sm text-[var(--text-secondary)]'>
-													Average: <span className='font-semibold'>{formatScore(winner.averageScore)}</span>
-												</p>
-											)}
-											<p className='text-xs text-[var(--text-muted)]'>Judges counted: {winner.judgeCount}</p>
-										</article>
-									)
-								})}
-							</div>
-						) : (
-							<p className='mt-3 text-sm text-[var(--text-secondary)]'>No contestant data available.</p>
-						)}
-					</section>
-					<details
-						className='group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
-						onMouseEnter={(e) => { if (!isProgramPinned) e.currentTarget.open = true }}
-						onMouseLeave={(e) => { if (!isProgramPinned) e.currentTarget.open = false }}
-					>
-						<summary 
-							className='flex cursor-pointer items-center justify-between outline-none'
-							onClick={(e) => {
-								e.preventDefault()
-								const details = e.currentTarget.parentElement as HTMLDetailsElement
-								const nextPinned = !isProgramPinned
-								setIsProgramPinned(nextPinned)
-								details.open = nextPinned
-							}}
-						>
-							<div>
-								<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Program Analytics</h2>
-								<p className='mt-1 text-sm text-[var(--text-secondary)]'>Top teams and per-contestant participant rankings separated for BSINT and BSCS.</p>
-							</div>
-							<div className='ml-4 shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
-								<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-							</div>
-						</summary>
-
-						<div className='mt-4 grid gap-6 sm:grid-cols-2 pt-4 border-t border-[var(--border-soft)]'>
-							{(['BSINT', 'BSCS'] as ProgramLabel[]).map((program) => {
-								const teams = analyticsByProgram[program]
-								const participants = participantAnalyticsByProgram[program]
-								const subCriteriaGroups = subCriteriaAnalyticsByProgram[program]
-								const showAllTeams = showAllTeamAnalytics[program]
-								const showAllParticipants = showAllParticipantAnalytics[program]
-								const showAllSubCriteria = showAllSubCriteriaAnalytics[program]
-								const visibleTeams = showAllTeams ? teams : teams.slice(0, analyticsPreviewLimit)
-								const visibleParticipants = showAllParticipants ? participants : participants.slice(0, analyticsPreviewLimit)
-								const hasSubCriteriaOverflow = subCriteriaGroups.some((group) => group.entries.length > analyticsPreviewLimit)
-
-								return (
-									<article key={program} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] overflow-hidden'>
-										<div className='p-4 border-b border-[var(--border-soft)] bg-[var(--surface)]'>
-											<h3 className='text-lg font-bold uppercase tracking-wide text-[var(--text-primary)]'>{program} Rankings</h3>
-										</div>
-
-										<div className='p-4'>
-											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Team Rankings</p>
-												{teams.length > analyticsPreviewLimit ? (
-													<button type='button' onClick={() => setShowAllTeamAnalytics((previous) => ({ ...previous, [program]: !showAllTeams }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-														{showAllTeams ? 'Show Top 3' : 'View All'}
-													</button>
-												) : null}
-											</div>
-											{teams.length > 0 ? (
-												<div className='mt-2 overflow-x-auto'>
-													<table className='min-w-full text-sm text-left'>
-														<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
-															<tr>
-																<th className='px-4 py-2 font-semibold'>Rank</th>
-																<th className='px-4 py-2 font-semibold'>Team</th>
-																<th className='px-4 py-2 font-semibold text-right'>Score</th>
-															</tr>
-														</thead>
-														<tbody className='divide-y divide-[var(--border-soft)]'>
-															{visibleTeams.map((team, idx) => (
-																<tr key={team.contestantName} className={idx === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																	<td className='px-4 py-3'>
-																		{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{idx + 1} <span className='text-[var(--text-muted)] text-xs ml-1'>(Overall #{team.rank})</span>
-																	</td>
-																	<td className='px-4 py-3'>
-																		<div className='text-[var(--text-primary)]'>{team.teamName}</div>
-																		<div className='text-[10px] text-[var(--text-muted)]'>{team.contestantName}</div>
-																	</td>
-																	<td className='px-4 py-3 text-right text-[var(--text-primary)]'>{formatScore(team.score)}</td>
-																</tr>
-															))}
-														</tbody>
-													</table>
-												</div>
-											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface)] p-3 text-center text-sm text-[var(--text-secondary)]'>No {program} teams found in Compiled Scores.</div>
-											)}
-										</div>
-
-										<div className='border-t border-[var(--border-soft)] bg-[var(--surface)] p-4'>
-											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Per-Contestant Criteria Participant Rankings</p>
-												{participants.length > analyticsPreviewLimit ? (
-													<button type='button' onClick={() => setShowAllParticipantAnalytics((previous) => ({ ...previous, [program]: !showAllParticipants }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-														{showAllParticipants ? 'Show Top 3' : 'View All'}
-													</button>
-												) : null}
-											</div>
-											{participants.length > 0 ? (
-												<div className='mt-2 overflow-x-auto'>
-													<table className='min-w-full text-sm text-left'>
-														<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
-															<tr>
-																<th className='px-4 py-2 font-semibold'>Rank</th>
-																<th className='px-4 py-2 font-semibold'>Participant</th>
-																<th className='px-4 py-2 font-semibold'>Team</th>
-																<th className='px-4 py-2 font-semibold'>Section</th>
-																<th className='px-4 py-2 font-semibold text-right'>Individual Score</th>
-															</tr>
-														</thead>
-														<tbody className='divide-y divide-[var(--border-soft)]'>
-															{visibleParticipants.map((participant, participantIndex) => (
-																<tr key={`${participant.contestantId}-${participant.participantLabel}-${participantIndex}`} className={participantIndex === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																	<td className='px-4 py-3'>
-																		{participant.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{participant.rank}
-																	</td>
-																	<td className='px-4 py-3'>
-																		<div className='text-[var(--text-primary)]'>{participant.participantLabel}</div>
-																		<div className='text-[10px] text-[var(--text-muted)]'>{participant.contestantName}</div>
-																	</td>
-																	<td className='px-4 py-3 text-[var(--text-primary)]'>{participant.teamName}</td>
-																	<td className='px-4 py-3'>
-																		<span className='inline-flex items-center rounded-md bg-[var(--surface-muted)] px-2 py-1 text-xs font-medium text-[var(--text-secondary)] ring-1 ring-inset ring-[var(--border-soft)]'>
-																			{participant.section}
-																		</span>
-																	</td>
-																	<td className='px-4 py-3 text-right text-[var(--text-primary)]'>
-																		{formatScore(participant.participantAverageScore)} / {formatScore(participant.participantMaxScore)} ({formatPercent(participant.participantRating)})
-																	</td>
-																</tr>
-															))}
-														</tbody>
-													</table>
-												</div>
-											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3 text-center text-sm text-[var(--text-secondary)]'>No participant subcriteria scores found for {program}.</div>
-											)}
-										</div>
-
-										<div className='border-t border-[var(--border-soft)] bg-[var(--surface)] p-4'>
-											<div className='flex items-center justify-between gap-2'>
-												<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Subcriteria Rankings (Per Subcriteria)</p>
-												{hasSubCriteriaOverflow ? (
-													<button type='button' onClick={() => setShowAllSubCriteriaAnalytics((previous) => ({ ...previous, [program]: !showAllSubCriteria }))} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
-														{showAllSubCriteria ? 'Show Top 3' : 'View All'}
-													</button>
-												) : null}
-											</div>
-											{subCriteriaGroups.length > 0 ? (
-												<div className='mt-3 space-y-3'>
-													{subCriteriaGroups.map((group) => {
-														const visibleEntries = showAllSubCriteria ? group.entries : group.entries.slice(0, analyticsPreviewLimit)
-
-														return (
-															<div key={`${program}-${group.subCriterionKey}`} className='rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3'>
-																<p className='text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>{group.subCriterionName}</p>
-																<div className='mt-2 overflow-x-auto'>
-																	<table className='min-w-full text-sm text-left'>
-																		<thead className='bg-[var(--surface)] text-[var(--text-secondary)]'>
-																			<tr>
-																				<th className='px-3 py-2 font-semibold'>Rank</th>
-																				<th className='px-3 py-2 font-semibold'>Participant</th>
-																				<th className='px-3 py-2 font-semibold'>Team</th>
-																				<th className='px-3 py-2 font-semibold text-right'>Subcriteria Score</th>
-																			</tr>
-																		</thead>
-																		<tbody className='divide-y divide-[var(--border-soft)]'>
-																			{visibleEntries.map((entry, entryIndex) => {
-																				const entryContestant = contestantsById.get(entry.contestantId)
-																				const teamLabel = entryContestant?.entryType === 'individual' ? 'N/A' : entry.teamName
-
-																				return (
-																					<tr key={`${group.subCriterionKey}-${entry.contestantId}-${entry.participantLabel}-${entryIndex}`} className={entryIndex === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																						<td className='px-3 py-2'>
-																							{entry.rank === 1 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{entry.rank}
-																						</td>
-																						<td className='px-3 py-2'>
-																							<div className='text-[var(--text-primary)]'>{entry.participantLabel}</div>
-																							<div className='text-[10px] text-[var(--text-muted)]'>{entry.contestantName}</div>
-																						</td>
-																						<td className='px-3 py-2 text-[var(--text-primary)]'>{teamLabel}</td>
-																						<td className='px-3 py-2 text-right text-[var(--text-primary)]'>
-																							{formatScore(entry.averageScore)} / {formatScore(entry.maxScore)} ({formatPercent(entry.rating)})
-																						</td>
-																					</tr>
-																				)
-																			})}
-																		</tbody>
-																	</table>
-																</div>
-															</div>
-														)
-													})}
-												</div>
-											) : (
-												<div className='mt-2 rounded-lg border border-[var(--border-soft)] bg-[var(--surface-muted)] p-3 text-center text-sm text-[var(--text-secondary)]'>No subcriteria ranking data found for {program}.</div>
-											)}
-										</div>
-									</article>
-								)
-							})}
-						</div>
-					</details>
-
-					{sectionAnalytics.size > 0 && (
-						<details
-							className='group bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs [&_summary::-webkit-details-marker]:hidden transition-all'
-							onMouseEnter={(e) => { if (!isSectionPinned) e.currentTarget.open = true }}
-							onMouseLeave={(e) => { if (!isSectionPinned) e.currentTarget.open = false }}
-						>
-							<summary 
-								className='flex cursor-pointer items-center justify-between outline-none'
-								onClick={(e) => {
-									e.preventDefault()
-									const details = e.currentTarget.parentElement as HTMLDetailsElement
-									const nextPinned = !isSectionPinned
-									setIsSectionPinned(nextPinned)
-									details.open = nextPinned
-								}}
-							>
-								<div>
-									<h2 className='text-xl font-semibold text-[var(--text-primary)] transition-colors group-hover:text-emerald-600'>Section Analytics</h2>
-									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Contestant rankings separated by their respective sections across all programs.</p>
-								</div>
-								<div className='flex items-center gap-4'>
-									<button
-										type='button' data-testid='export-sections'
-										onClick={(e) => {
-											e.preventDefault()
-											e.stopPropagation()
-											exportSectionAnalyticsAsExcel(event, sectionAnalytics)
-										}}
-										className='rounded-full border border-green-600 bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100'
-									>
-										Export Sections
-									</button>
-									<div className='shrink-0 transition-transform duration-200 group-open:rotate-180 text-[var(--text-secondary)] group-hover:text-emerald-600'>
-										<svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-									</div>
-								</div>
-							</summary>
-
-							<div className='mt-4 grid gap-6 sm:grid-cols-2 lg:grid-cols-3 pt-4 border-t border-[var(--border-soft)]'>
-								{Array.from(sectionAnalytics.entries()).map(([sectionKey, entries]) => {
-									const showAll = showAllSectionAnalytics[sectionKey] || false
-									const visibleEntries = showAll ? entries : entries.slice(0, analyticsPreviewLimit)
-
-									return (
-										<article key={sectionKey} className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] overflow-hidden'>
-											<div className='p-4 border-b border-[var(--border-soft)] bg-[var(--surface)] flex items-center justify-between'>
-												<h3 className='text-lg font-bold tracking-wide text-[var(--text-primary)]'>{sectionKey}</h3>
-												{entries.length > analyticsPreviewLimit && (
-													<button
-														type='button'
-														onClick={() => setShowAllSectionAnalytics((prev) => ({ ...prev, [sectionKey]: !showAll }))}
-														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'
-													>
-														{showAll ? 'Show Top 3' : 'View All'}
-													</button>
-												)}
-											</div>
-											<div className='p-4 overflow-x-auto'>
-												<table className='min-w-full text-sm text-left'>
-													<thead className='bg-[var(--surface-muted)] text-[var(--text-secondary)]'>
-														<tr>
-															<th className='px-3 py-2 font-semibold'>Rank</th>
-															<th className='px-3 py-2 font-semibold'>Contestant</th>
-															<th className='px-3 py-2 font-semibold text-right'>Score</th>
-														</tr>
-													</thead>
-													<tbody className='divide-y divide-[var(--border-soft)]'>
-														{visibleEntries.map((entry, idx) => (
-															<tr key={entry.contestantId} className={idx === 0 ? 'bg-[var(--surface)] font-medium' : ''}>
-																<td className='px-3 py-3'>
-																	{idx === 0 && <span className='mr-1 inline-flex items-center justify-center rounded-full bg-amber-100 text-amber-700 w-5 h-5 text-xs'>★</span>}#{entry.rank}
-																</td>
-																<td className='px-3 py-3'>
-																	<div className='text-[var(--text-primary)]'>{entry.contestantName}</div>
-																	{entry.program && <div className='mt-0.5 inline-block rounded-md bg-[var(--surface-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] border border-[var(--border-soft)]'>{entry.program}</div>}
-																</td>
-																<td className='px-3 py-3 text-right text-[var(--text-primary)]'>{formatScore(entry.score)}</td>
-															</tr>
-														))}
-													</tbody>
-												</table>
-											</div>
-										</article>
-									)
-								})}
-							</div>
-						</details>
-					)}
-					</>
+						<RankingsTab
+							kind={scoring}
+							places={podiumPlaces(compiled.rankings, scoring === 'weighted')}
+							isIndividual={(contestantId) => contestantsById.get(contestantId)?.entryType === 'individual'}
+							teams={analyticsByProgram}
+							participants={participantAnalyticsByProgram}
+							subCriteria={subCriteriaAnalyticsByProgram}
+							sections={sectionAnalytics}
+							individualEntryIds={new Set(event.contestants.filter((contestant) => contestant.entryType === 'individual').map((contestant) => contestant.id))}
+							onExportSections={() => exportSectionAnalyticsAsExcel(event, sectionAnalytics)}
+						/>
 					) : null}
 
 					{activeTab === 'matrix' ? (
