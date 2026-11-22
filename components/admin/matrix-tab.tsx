@@ -136,8 +136,35 @@ export function MatrixTab({
 	onSaveSwap: (contestantId: string) => void
 	onBreakdown: (contestantId: string) => void
 }) {
-	// A judge who has scored the open entry is removed only after a yes (owner, 2026-11-21).
-	const [pendingRemoval, setPendingRemoval] = useState<{ contestantId: string; judgeId: string } | null>(null)
+	// A judge who has scored the open entry is removed only after a yes (owner, 2026-11-21): asked when they are unticked,
+	// and again at Save for a judge who has scored since the untick (a live refresh keeps the draft). `atSave` questions
+	// continue the save after a yes; "Keep judge" ticks the judge again.
+	const [pendingRemoval, setPendingRemoval] = useState<{ contestantId: string; judgeId: string; atSave: boolean } | null>(null)
+	const [confirmedRemovals, setConfirmedRemovals] = useState<{ contestantId: string; judgeIds: string[] } | null>(null)
+	const confirmedFor = (contestantId: string) => (confirmedRemovals?.contestantId === contestantId ? confirmedRemovals.judgeIds : [])
+	const unconfirmedScoredRemoval = (row: MatrixRow, confirmed: string[]) => {
+		const draft = swapDraft ?? row.judges.map((judge) => judge.id)
+		return row.judges.find((judge) => judge.scored && !draft.includes(judge.id) && !confirmed.includes(judge.id))
+	}
+	const answerRemoval = (remove: boolean) => {
+		if (!pendingRemoval) return
+		const { contestantId, judgeId, atSave } = pendingRemoval
+		setPendingRemoval(null)
+		if (!remove) {
+			if (atSave) onToggleSwapJudge(contestantId, judgeId)
+			return
+		}
+		const confirmed = [...confirmedFor(contestantId), judgeId]
+		setConfirmedRemovals({ contestantId, judgeIds: confirmed })
+		if (!atSave) {
+			onToggleSwapJudge(contestantId, judgeId)
+			return
+		}
+		const row = rows.find((item) => item.result.contestantId === contestantId)
+		const next = row ? unconfirmedScoredRemoval(row, confirmed) : undefined
+		if (next) setPendingRemoval({ contestantId, judgeId: next.id, atSave: true })
+		else onSaveSwap(contestantId)
+	}
 
 	const keep = new Set(view.keep)
 	const filtered = filterEntries(
@@ -296,22 +323,25 @@ export function MatrixTab({
 								swapDraft={swapOpenId === row.result.contestantId ? swapDraft : null}
 								swapSaving={swapSavingId === row.result.contestantId}
 								pendingRemovalJudgeId={pendingRemoval?.contestantId === row.result.contestantId ? pendingRemoval.judgeId : null}
-								onAskRemoval={(judgeId) => setPendingRemoval({ contestantId: row.result.contestantId, judgeId })}
-								onAnswerRemoval={(remove) => {
-									if (remove && pendingRemoval) onToggleSwapJudge(pendingRemoval.contestantId, pendingRemoval.judgeId)
-									setPendingRemoval(null)
-								}}
+								onAskRemoval={(judgeId) => setPendingRemoval({ contestantId: row.result.contestantId, judgeId, atSave: false })}
+								onAnswerRemoval={answerRemoval}
 								onOpenSwap={() => {
 									setPendingRemoval(null)
+									setConfirmedRemovals(null)
 									if (swapOpenId === row.result.contestantId) onCancelSwap(row.result.contestantId)
 									else onOpenSwap(row.result.contestantId)
 								}}
 								onCancelSwap={() => {
 									setPendingRemoval(null)
+									setConfirmedRemovals(null)
 									onCancelSwap(row.result.contestantId)
 								}}
 								onToggleSwapJudge={(judgeId) => onToggleSwapJudge(row.result.contestantId, judgeId)}
-								onSaveSwap={() => onSaveSwap(row.result.contestantId)}
+								onSaveSwap={() => {
+									const next = unconfirmedScoredRemoval(row, confirmedFor(row.result.contestantId))
+									if (next) setPendingRemoval({ contestantId: row.result.contestantId, judgeId: next.id, atSave: true })
+									else onSaveSwap(row.result.contestantId)
+								}}
 								onBreakdown={() => onBreakdown(row.result.contestantId)}
 							/>
 						))

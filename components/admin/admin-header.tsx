@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import type { MouseEvent } from 'react'
 
 import { connectionLabel, connectionTone, type ConnectionState } from '@/components/admin/connection'
 import AppHeader from '@/components/ui/app-header'
@@ -37,12 +38,15 @@ export function AdminHeader({
 	onPrint,
 	onExportExcel,
 	onExportCsv,
+	onLeavePage,
 }: {
 	title: string
 	connectionState: ConnectionState
 	onPrint: () => void
 	onExportExcel: () => void
 	onExportCsv: () => void
+	/** Called on an Admin Hub click before Next navigates; it may preventDefault() (the editor's unsaved edits). */
+	onLeavePage?: (event: MouseEvent<HTMLAnchorElement>) => void
 }) {
 	const tone = connectionTone(connectionState)
 	const label = connectionLabel(connectionState)
@@ -53,7 +57,6 @@ export function AdminHeader({
 			className='print:hidden'
 			brand='EventScorer'
 			breadcrumbParent='Admin Console'
-			breadcrumbHref='/'
 			title={title}
 			status={
 				<div className='hidden xl:flex items-center gap-space-sm px-space-md py-space-xs rounded-full bg-slate-100 border border-slate-200/80'>
@@ -72,7 +75,7 @@ export function AdminHeader({
 					<Button variant='admin-outline' icon='file_download' labelFrom='xl' aria-label='Export CSV' data-testid='export-csv' onClick={onExportCsv}>
 						Export CSV
 					</Button>
-					<Link href='/' aria-label='Admin Hub' className={buttonClassName('admin-primary')}>
+					<Link href='/' aria-label='Admin Hub' className={buttonClassName('admin-primary')} onClick={onLeavePage}>
 						<Icon name='arrow_back' className='text-[16px]' />
 						<span className='sr-only md:not-sr-only'>Admin Hub</span>
 					</Link>

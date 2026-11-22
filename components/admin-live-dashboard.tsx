@@ -1,6 +1,7 @@
 'use client'
 
 import { saveAs } from 'file-saver'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
@@ -86,7 +87,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	// ?update=1 in a locked browser offers "Unlock to edit" (owner); after the unlock the editor is allowed.
 	const [editorAllowed, setEditorAllowed] = useState(allowEventEditor)
 	// The tab a click asked for while the editor held unsaved edits: the question is open (owner, 2026-11-22).
-	const [pendingLeave, setPendingLeave] = useState<AdminTab | null>(null)
+	const [pendingLeave, setPendingLeave] = useState<AdminTab | 'hub' | null>(null)
+	const router = useRouter()
 	// Any tab, or Back, leaves the editor view; the URL follows without a navigation.
 	const showTab = useCallback((value: string) => {
 		const tab = parseAdminTabParam(value)
@@ -823,6 +825,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				})
 
 				refreshQueuedAdminSaves()
+				setEditorBaseline(preparedEditor)
 				setEventEditorError(null)
 				setEventEditorNotice('Published event changes were saved locally and queued for auto-upload. They will sync automatically when internet/service is available.')
 				setAdminQueueNotice('Published event changes are queued for auto-upload.')
@@ -1009,17 +1012,36 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const judgesWithSaves = new Set(compiled.judgeBreakdown.filter((judge) => Object.keys(judge.totalsByContestant).length > 0).map((judge) => judge.judgeId))
 
 	// Leaving the editor view with unsaved edits asks first (owner, 2026-11-22); without edits it leaves at once.
-	const editorHasUnsavedEdits = showEventEditor && JSON.stringify(eventEditorDraft) !== JSON.stringify(editorBaseline)
+	// A save in flight is not "unsaved" either: it completes whatever the person does next (finding 3).
+	const editorHasUnsavedEdits = showEventEditor && !isSavingEventEditor && JSON.stringify(eventEditorDraft) !== JSON.stringify(editorBaseline)
 	const requestTab = (value: string) => {
 		if (editorView && editorHasUnsavedEdits) setPendingLeave(parseAdminTabParam(value))
 		else showTab(value)
 	}
 	const leaveEditor = () => {
-		const tab = pendingLeave ?? activeTab
+		const target = pendingLeave ?? activeTab
 		setPendingLeave(null)
 		loadEventEditorFromCurrentEvent()
-		showTab(tab)
+		if (target === 'hub') router.push('/')
+		else showTab(target)
 	}
+	// Admin Hub leaves the page by a Next navigation (no beforeunload): it asks the same question (finding 2).
+	const guardLeavePage = (clickEvent: React.MouseEvent<HTMLAnchorElement>) => {
+		if (!(editorView && editorHasUnsavedEdits)) return
+		clickEvent.preventDefault()
+		setPendingLeave('hub')
+	}
+
+	const editorLeaveGuard = editorView && editorHasUnsavedEdits
+	useEffect(() => {
+		if (!editorLeaveGuard) return
+		const onBeforeUnload = (beforeUnload: BeforeUnloadEvent) => {
+			beforeUnload.preventDefault()
+			beforeUnload.returnValue = ''
+		}
+		window.addEventListener('beforeunload', onBeforeUnload)
+		return () => window.removeEventListener('beforeunload', onBeforeUnload)
+	}, [editorLeaveGuard])
 
 	// One matrix row per ranking: its filter fields, status (R47) and assigned judges' chips (R50).
 	const splitValues = (value: string | undefined) => (value ?? '').split(' / ').map((part) => part.trim()).filter(Boolean)
@@ -1068,7 +1090,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	return (
 		<div className='theme-admin min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
 			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={requestTab}>
-				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} />
+				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} onLeavePage={guardLeavePage} />
 				{/* SCREEN VIEW */}
 				<main className='w-full pt-28 print:hidden'>
 					<EventBand
