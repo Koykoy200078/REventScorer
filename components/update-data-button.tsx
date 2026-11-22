@@ -3,6 +3,9 @@
 import { useRouter } from 'next/navigation'
 import { useId, useState } from 'react'
 import type { FormEvent } from 'react'
+import { buttonClassName } from '@/components/ui/button'
+import { DIALOG_PANEL, DIALOG_TEXT, DIALOG_TITLE, ERROR_TEXT, EYEBROW, FIELD, OVERLAY } from '@/components/ui/form-styles'
+import { cx } from '@/lib/ui/cx'
 
 type UpdateDataButtonProps = {
 	eventId: string | number
@@ -74,17 +77,17 @@ export default function UpdateDataButton({ eventId, className }: UpdateDataButto
 				Update
 			</button>
 			{isOpen ? (
-				<div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4'>
-					<div role='dialog' aria-modal='true' aria-labelledby={titleId} aria-describedby={descriptionId} className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
-						<h3 id={titleId} className='text-lg font-semibold text-slate-900'>
+				<div className={cx(OVERLAY, 'fixed inset-0 z-50 flex items-center justify-center')}>
+					<div role='dialog' aria-modal='true' aria-labelledby={titleId} aria-describedby={descriptionId} className={cx(DIALOG_PANEL, 'w-full max-w-md')}>
+						<h3 id={titleId} className={DIALOG_TITLE}>
 							Confirm Update
 						</h3>
-						<p id={descriptionId} className='mt-1 text-sm text-slate-600'>
+						<p id={descriptionId} className={cx(DIALOG_TEXT, 'mt-1')}>
 							Enter the update password to edit all event data.
 						</p>
 						<form className='mt-4 space-y-3' onSubmit={handleSubmit}>
 							<div>
-								<label htmlFor={`${titleId}-password`} className='text-xs font-medium uppercase tracking-wide text-slate-500'>
+								<label htmlFor={`${titleId}-password`} className={EYEBROW}>
 									Password
 								</label>
 								<input
@@ -97,17 +100,17 @@ export default function UpdateDataButton({ eventId, className }: UpdateDataButto
 											setError('')
 										}
 									}}
-									className='mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200'
+									className={cx(FIELD, 'mt-2 w-full px-3 py-2')}
 									autoFocus
 									required
 								/>
 							</div>
-							{error ? <p className='text-sm text-rose-600'>{error}</p> : null}
+							{error ? <p className={ERROR_TEXT}>{error}</p> : null}
 							<div className='flex flex-wrap justify-end gap-2 pt-2'>
-								<button type='button' onClick={closeModal} className='rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50'>
+								<button type='button' onClick={closeModal} className={buttonClassName('admin-tonal')}>
 									Cancel
 								</button>
-								<button type='submit' disabled={isSubmitting} className='rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70'>
+								<button type='submit' disabled={isSubmitting} className={buttonClassName('admin-confirm')}>
 									{isSubmitting ? 'Checking...' : 'Confirm'}
 								</button>
 							</div>

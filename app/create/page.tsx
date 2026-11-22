@@ -1,17 +1,27 @@
 import Link from 'next/link'
 
 import { CreateScorerForm } from '@/components/create-scorer-form'
+import AppHeader from '@/components/ui/app-header'
+import { buttonClassName } from '@/components/ui/button'
+import Icon from '@/components/ui/icon'
 
 export const dynamic = 'force-dynamic'
 
 export default function CreateScorerPage() {
 	return (
-		<div className='min-h-screen bg-transparent pb-10'>
-			<div className='mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8'>
-				<Link href='/' className='inline-flex items-center rounded-full border border-emerald-700/30 bg-emerald-50 px-4 py-2 text-sm text-emerald-900 transition hover:bg-emerald-100'>
-					Back to Dashboard
-				</Link>
-			</div>
+		<div className='theme-admin min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased pt-16 pb-10'>
+			<AppHeader
+				variant='admin'
+				brand='EventScorer'
+				breadcrumbParent='Admin Dashboard'
+				title='Create Scorer Event'
+				actions={
+					<Link href='/' className={buttonClassName('admin-primary')}>
+						<Icon name='arrow_back' className='text-[16px]' />
+						<span className='sr-only md:not-sr-only'>Back to Dashboard</span>
+					</Link>
+				}
+			/>
 			<CreateScorerForm />
 		</div>
 	)

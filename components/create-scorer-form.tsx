@@ -7,6 +7,9 @@ import UnlockDialog from '@/components/unlock-dialog'
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
+import { buttonClassName } from '@/components/ui/button'
+import { BODY, BOX, BOX_SKY, CELL_LABEL, CHECKBOX, CHIP_EMERALD, ENTRY_TYPE_GROUP, ENTRY_TYPE_INDIVIDUAL, ERROR_BOX, EYEBROW, FIELD, FIELD_STATIC, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, NOTE_BOX, OPTION_CHIP, PANEL, PANEL_SKY, TABLE_CAPTION, TABLE_DIVIDE, TABLE_HEAD, TABLE_ROW, TABLE_SHELL, VALUE, WELL } from '@/components/ui/form-styles'
+import { cx } from '@/lib/ui/cx'
 
 type ContestantDraft = {
 	id: string
@@ -619,72 +622,72 @@ export function CreateScorerForm() {
 
 	return (
 		<div className='mx-auto w-full max-w-6xl px-4 py-8 sm:px-8'>
-			<div className='rounded-3xl border border-emerald-200 bg-white/90 p-6 shadow-xl shadow-emerald-900/10 backdrop-blur sm:p-8'>
+			<div className={PANEL}>
 				<div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
 					<div>
-						<h1 className='text-3xl font-semibold tracking-tight text-emerald-950'>Create Scorer Event</h1>
-						<p className='mt-2 max-w-3xl text-sm text-emerald-800/80'>Build a fully dynamic rubric with parent criteria, subcriteria, judges, and contestant entries.</p>
+						<h1 className={H1}>Create Scorer Event</h1>
+						<p className={cx(LEDE, 'mt-2 max-w-3xl')}>Build a fully dynamic rubric with parent criteria, subcriteria, judges, and contestant entries.</p>
 					</div>
 
-					<button type='button' onClick={loadPaperTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+					<button type='button' onClick={loadPaperTemplate} className={buttonClassName('admin-outline')}>
 						Use Paper Presentation Template
 					</button>
-					<button type='button' onClick={loadFinalOralTemplate} className='rounded-full border border-emerald-700/30 bg-emerald-50 px-5 py-2 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100'>
+					<button type='button' onClick={loadFinalOralTemplate} className={buttonClassName('admin-outline')}>
 						Use Final Oral Defense Template
 					</button>
 				</div>
 
 				<form onSubmit={onSubmit} className='mt-8 space-y-8'>
-					<section className='grid gap-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 sm:grid-cols-2 sm:p-5'>
-						<label className='text-sm font-medium text-emerald-950'>
+					<section className={cx(WELL, 'grid gap-4 sm:grid-cols-2')}>
+						<label className={LABEL}>
 							Event Title
-							<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder='Example: Science Fair Finals' className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+							<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder='Example: Science Fair Finals' className={cx(FIELD, 'mt-2 w-full px-3 py-2')} />
 						</label>
-						<label className='text-sm font-medium text-emerald-950'>
+						<label className={LABEL}>
 							Created By (Admin)
-							<input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} placeholder='Example: Event Committee' className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+							<input value={createdBy} onChange={(event) => setCreatedBy(event.target.value)} placeholder='Example: Event Committee' className={cx(FIELD, 'mt-2 w-full px-3 py-2')} />
 						</label>
-						<label className='text-sm font-medium text-emerald-950'>
+						<label className={LABEL}>
 							Scoring Event Type
-							<select value={eventScoringType} onChange={(event) => setEventScoringType(event.target.value as EventScoringType)} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+							<select value={eventScoringType} onChange={(event) => setEventScoringType(event.target.value as EventScoringType)} className={cx(FIELD, 'mt-2 w-full px-3 py-2')}>
 								<option value='standard'>Standard Scoring</option>
 								<option value='final-oral-defense'>Final Oral Defense</option>
 							</select>
-							<p className='mt-1 text-xs text-emerald-900/70'>This controls how final results are computed and shown for judges/admin.</p>
+							<p className={cx(HELP, 'mt-1')}>This controls how final results are computed and shown for judges/admin.</p>
 						</label>
-						<label className='text-sm font-medium text-emerald-950 sm:col-span-2'>
+						<label className={cx(LABEL, 'sm:col-span-2')}>
 							Description
-							<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder='Optional context for judges' className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+							<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} placeholder='Optional context for judges' className={cx(FIELD, 'mt-2 w-full px-3 py-2')} />
 						</label>
 					</section>
 
-					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+					<section className={PANEL}>
 						<div className='mb-4 flex items-center justify-between'>
-							<h2 className='text-lg font-semibold text-emerald-950'>Contestants / Entries</h2>
+							<h2 className={H2}>Contestants / Entries</h2>
 							<div className='flex items-center gap-2'>
-								<button type='button' onClick={() => addContestant('group')} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+								<button type='button' onClick={() => addContestant('group')} className={buttonClassName('admin-outline')}>
 									Add Team/Group
 								</button>
-								<button type='button' onClick={() => addContestant('individual')} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+								<button type='button' onClick={() => addContestant('individual')} className={buttonClassName('admin-outline')}>
 									Add Individual
 								</button>
 							</div>
 						</div>
-						<p className='mb-3 text-xs text-emerald-900/70'>Set each entry as a whole team/group or an individual presenter.</p>
-						<label className='mb-3 flex items-center gap-2 text-xs font-medium text-emerald-900'>
-							<input type='checkbox' checked={bulkContestantEnabled} onChange={(event) => setBulkContestantEnabled(event.target.checked)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+						<p className={cx(HELP, 'mb-3')}>Set each entry as a whole team/group or an individual presenter.</p>
+						<label className={cx(LABEL_SM, 'mb-3 flex items-center gap-2')}>
+							<input type='checkbox' checked={bulkContestantEnabled} onChange={(event) => setBulkContestantEnabled(event.target.checked)} className={CHECKBOX} />
 							Enable Bulk Add Team/Group Entries
 						</label>
 						{bulkContestantEnabled ? (
-							<div className='mb-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3'>
-								<p className='text-xs font-medium text-emerald-900'>Bulk Add Entries (one per line)</p>
-								<textarea value={bulkContestantText} onChange={(event) => setBulkContestantText(event.target.value)} rows={4} placeholder={`A\nB\nC`} className='mt-2 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+							<div className={cx(WELL, 'mb-4')}>
+								<p className={LABEL_SM}>Bulk Add Entries (one per line)</p>
+								<textarea value={bulkContestantText} onChange={(event) => setBulkContestantText(event.target.value)} rows={4} placeholder={`A\nB\nC`} className={cx(FIELD, 'mt-2 w-full px-3 py-2')} />
 								<div className='mt-2 flex flex-wrap items-center gap-2'>
-									<select value={bulkContestantEntryType} onChange={(event) => setBulkContestantEntryType(event.target.value as ContestantEntryType)} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+									<select value={bulkContestantEntryType} onChange={(event) => setBulkContestantEntryType(event.target.value as ContestantEntryType)} className={cx(FIELD, 'px-3 py-2')}>
 										<option value='individual'>Add as Individual entries</option>
 										<option value='group'>Add as Team/Group entries</option>
 									</select>
-									<select value={bulkContestantProgramTag ?? ''} onChange={(event) => setBulkContestantProgramTag(event.target.value === '' ? null : (event.target.value as EventProgramTag))} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+									<select value={bulkContestantProgramTag ?? ''} onChange={(event) => setBulkContestantProgramTag(event.target.value === '' ? null : (event.target.value as EventProgramTag))} className={cx(FIELD, 'px-3 py-2')}>
 										<option value=''>No Program Tag</option>
 										<option value='BSINT'>BSINT</option>
 										<option value='BSCS'>BSCS</option>
@@ -694,9 +697,9 @@ export function CreateScorerForm() {
 										onChange={(event) => setBulkContestantSection(event.target.value)}
 										placeholder='Section (e.g. A, B)'
 										list='section-options'
-										className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2 w-32'
+										className={cx(FIELD, 'w-32 px-3 py-2')}
 									/>
-									<button type='button' onClick={addContestantsFromNewLines} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+									<button type='button' onClick={addContestantsFromNewLines} className={buttonClassName('admin-outline')}>
 										Add Entries from New Lines
 									</button>
 								</div>
@@ -704,23 +707,23 @@ export function CreateScorerForm() {
 						) : null}
 						<div className='space-y-3'>
 							{contestants.map((contestant, index) => (
-								<div key={contestant.id} className='rounded-2xl border border-emerald-100 bg-emerald-50/40 p-3'>
+								<div key={contestant.id} className={WELL}>
 									<div className='mb-2 flex items-center justify-between'>
-										<p className='text-xs text-emerald-900/80'>Entry {index + 1}</p>
-										<span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${contestant.entryType === 'individual' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800'}`}>{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}</span>
+										<p className={HELP}>Entry {index + 1}</p>
+										<span className={contestant.entryType === 'individual' ? ENTRY_TYPE_INDIVIDUAL : ENTRY_TYPE_GROUP}>{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}</span>
 									</div>
 									<div className='grid gap-2 sm:grid-cols-[1fr_170px_150px_120px_auto]'>
 										<input
 											value={contestant.name}
 											onChange={(event) => updateContestant(index, { name: event.target.value })}
 											placeholder={contestant.entryType === 'individual' ? `Individual ${index + 1} name` : `Team/Group ${index + 1} name`}
-											className='w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+											className={cx(FIELD, 'w-full px-3 py-2')}
 										/>
-										<select value={contestant.entryType} onChange={(event) => updateContestantEntryType(index, event.target.value as ContestantEntryType)} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+										<select value={contestant.entryType} onChange={(event) => updateContestantEntryType(index, event.target.value as ContestantEntryType)} className={cx(FIELD, 'px-3 py-2')}>
 											<option value='group'>Team/Group</option>
 											<option value='individual'>Individual</option>
 										</select>
-										<select value={contestant.programTag ?? ''} onChange={(event) => updateContestantProgramTag(index, event.target.value === '' ? null : (event.target.value as EventProgramTag))} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+										<select value={contestant.programTag ?? ''} onChange={(event) => updateContestantProgramTag(index, event.target.value === '' ? null : (event.target.value as EventProgramTag))} className={cx(FIELD, 'px-3 py-2')}>
 											<option value=''>No Program Tag</option>
 											<option value='BSINT'>BSINT</option>
 											<option value='BSCS'>BSCS</option>
@@ -730,35 +733,35 @@ export function CreateScorerForm() {
 											onChange={(event) => updateContestant(index, { section: event.target.value })}
 											placeholder='Section'
 											list='section-options'
-											className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+											className={cx(FIELD, 'px-3 py-2')}
 										/>
 										{contestants.length > 1 ? (
-											<button type='button' onClick={() => removeContestant(index)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+											<button type='button' onClick={() => removeContestant(index)} className={buttonClassName('admin-remove', 'sm')}>
 												Remove
 											</button>
 										) : null}
 									</div>
 
 									{contestant.entryType === 'group' ? (
-										<div className='mt-3 rounded-xl border border-emerald-200 bg-white p-3'>
+										<div className={cx(BOX, 'mt-3')}>
 											<div className='mb-2 flex items-center justify-between'>
-												<p className='text-xs font-medium text-emerald-900'>Individual Participant Names</p>
-												<button type='button' onClick={() => addParticipantName(index)} className='rounded-full border border-emerald-700/30 px-3 py-1 text-xs text-emerald-900 transition hover:bg-emerald-50'>
+												<p className={LABEL_SM}>Individual Participant Names</p>
+												<button type='button' onClick={() => addParticipantName(index)} className={buttonClassName('admin-outline', 'xs')}>
 													Add Participant
 												</button>
 											</div>
 
 											<div className='space-y-2'>
-												{contestant.participants.length === 0 ? <p className='text-xs text-emerald-900/70'>No participant added yet.</p> : null}
+												{contestant.participants.length === 0 ? <p className={HELP}>No participant added yet.</p> : null}
 												{contestant.participants.map((participant, participantIndex) => (
 													<div key={`${contestant.id}-participant-${participantIndex}`} className='flex gap-2'>
 														<input
 															value={participant}
 															onChange={(event) => updateParticipantName(index, participantIndex, event.target.value)}
 															placeholder={`Participant ${participantIndex + 1} name`}
-															className='w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+															className={cx(FIELD, 'w-full px-3 py-2')}
 														/>
-														<button type='button' onClick={() => removeParticipantName(index, participantIndex)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+														<button type='button' onClick={() => removeParticipantName(index, participantIndex)} className={buttonClassName('admin-remove', 'sm')}>
 															Remove
 														</button>
 													</div>
@@ -776,20 +779,20 @@ export function CreateScorerForm() {
 						</datalist>
 					</section>
 
-					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+					<section className={PANEL}>
 						<div className='mb-4 flex items-center justify-between'>
-							<h2 className='text-lg font-semibold text-emerald-950'>Judges</h2>
-							<button type='button' onClick={addJudge} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+							<h2 className={H2}>Judges</h2>
+							<button type='button' onClick={addJudge} className={buttonClassName('admin-outline')}>
 								Add Judge
 							</button>
 						</div>
 						<div className='space-y-3'>
 							{judges.map((judge, index) => (
 								<div key={judge.id} className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
-									<input value={judge.name} onChange={(event) => updateJudge(judge.id, { name: event.target.value })} placeholder={`Judge ${index + 1} name`} className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
-									<input value={judge.email} onChange={(event) => updateJudge(judge.id, { email: event.target.value })} placeholder='Email (optional)' className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2' />
+									<input value={judge.name} onChange={(event) => updateJudge(judge.id, { name: event.target.value })} placeholder={`Judge ${index + 1} name`} className={cx(FIELD, 'px-3 py-2')} />
+									<input value={judge.email} onChange={(event) => updateJudge(judge.id, { email: event.target.value })} placeholder='Email (optional)' className={cx(FIELD, 'px-3 py-2')} />
 									{judges.length > 1 ? (
-										<button type='button' onClick={() => removeJudge(judge.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50 sm:self-center'>
+										<button type='button' onClick={() => removeJudge(judge.id)} className={cx(buttonClassName('admin-remove', 'sm'), 'sm:self-center')}>
 											Remove
 										</button>
 									) : null}
@@ -798,10 +801,10 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
-					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+					<section className={PANEL}>
 						<div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-							<h2 className='text-lg font-semibold text-emerald-950'>Presentation Schedule</h2>
-							<span className='text-xs text-emerald-900/70'>Assign judges per slot. Unassigned slots are hidden from judges.</span>
+							<h2 className={H2}>Presentation Schedule</h2>
+							<span className={HELP}>Assign judges per slot. Unassigned slots are hidden from judges.</span>
 						</div>
 
 						<div className='space-y-4'>
@@ -810,32 +813,32 @@ export function CreateScorerForm() {
 								const contestantName = contestant?.name.trim() || `Entry ${index + 1}`
 								const contestantLabel = contestant?.entryType === 'individual' ? 'Individual' : 'Group'
 								return (
-									<div key={slot.id} className='rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4'>
+									<div key={slot.id} className={WELL}>
 										<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
 											<div>
-												<p className='text-sm font-semibold text-emerald-950'>Slot {index + 1}</p>
-												<p className='text-xs text-emerald-900/80'>
+												<p className={H3}>Slot {index + 1}</p>
+												<p className={HELP}>
 													{contestantLabel}: {contestantName}
 												</p>
 											</div>
-											<label className='text-xs font-medium text-emerald-900'>
+											<label className={LABEL_SM}>
 												Slot label
 												<input
 													value={slot.label}
 													onChange={(event) => updatePresentationSlotLabel(index, event.target.value)}
 													placeholder='Example: 9:00 AM - Room A'
-													className='mt-1 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+													className={cx(FIELD, 'mt-1 w-full px-3 py-2')}
 												/>
 											</label>
 										</div>
 
 										<div className='mt-3 flex flex-wrap gap-2'>
 											{judges.length === 0 ? (
-												<p className='text-xs text-emerald-900/70'>Add judges to assign this slot.</p>
+												<p className={HELP}>Add judges to assign this slot.</p>
 											) : (
 												judges.map((judge, judgeIndex) => (
-													<label key={judge.id} className='flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs text-emerald-900'>
-														<input type='checkbox' checked={slot.judgeIds.includes(judge.id)} onChange={() => togglePresentationSlotJudge(index, judge.id)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+													<label key={judge.id} className={cx(OPTION_CHIP, 'flex items-center gap-2')}>
+														<input type='checkbox' checked={slot.judgeIds.includes(judge.id)} onChange={() => togglePresentationSlotJudge(index, judge.id)} className={CHECKBOX} />
 														<span>{judge.name || `Judge ${judgeIndex + 1}`}</span>
 													</label>
 												))
@@ -847,24 +850,24 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
-					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+					<section className={PANEL}>
 						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-							<h2 className='text-lg font-semibold text-emerald-950'>Rubric Criteria</h2>
+							<h2 className={H2}>Rubric Criteria</h2>
 							<div className='flex items-center gap-3'>
-								<span className='rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-900'>Event Max Score: {totalEventMaxScore.toFixed(2)}</span>
-								<button type='button' onClick={addCriterion} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+								<span className={CHIP_EMERALD}>Event Max Score: {totalEventMaxScore.toFixed(2)}</span>
+								<button type='button' onClick={addCriterion} className={buttonClassName('admin-outline')}>
 									Add Parent Criterion
 								</button>
 							</div>
 						</div>
-						<p className='mb-4 text-xs text-emerald-900/80'>Choose each criterion scope: Per Contestant (Individual) for member-based questions, or Group Criteria Only for one team-level set of questions.</p>
+						<p className={cx(HELP, 'mb-4')}>Choose each criterion scope: Per Contestant (Individual) for member-based questions, or Group Criteria Only for one team-level set of questions.</p>
 
 						<div className='space-y-5'>
 							{criteria.map((criterion, criterionIndex) => {
 								const parentMaxScore = criterionMaxScore(criterion)
 
 								return (
-									<div key={criterion.id} className='rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4'>
+									<div key={criterion.id} className={WELL}>
 										<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_180px_auto]'>
 											<input
 												value={criterion.name}
@@ -874,9 +877,9 @@ export function CreateScorerForm() {
 													})
 												}
 												placeholder={`Parent criterion ${criterionIndex + 1}`}
-												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+												className={cx(FIELD, 'px-3 py-2')}
 											/>
-											<div className='flex items-center rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-900'>Parent Max: {parentMaxScore.toFixed(2)}</div>
+											<div className={cx(FIELD_STATIC, 'flex items-center')}>Parent Max: {parentMaxScore.toFixed(2)}</div>
 											<select
 												value={criterion.appliesTo}
 												onChange={(event) =>
@@ -884,32 +887,32 @@ export function CreateScorerForm() {
 														appliesTo: event.target.value as 'group' | 'individual',
 													})
 												}
-												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'>
+												className={cx(FIELD, 'px-3 py-2')}>
 												<option value='group'>Apply To: Group Criteria Only</option>
 												<option value='individual'>Apply To: Per Contestant (Individual)</option>
 											</select>
 											{criteria.length > 1 ? (
-												<button type='button' onClick={() => removeCriterion(criterion.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+												<button type='button' onClick={() => removeCriterion(criterion.id)} className={buttonClassName('admin-remove', 'sm')}>
 													Remove Parent
 												</button>
 											) : null}
 										</div>
 										{criterion.appliesTo === 'individual' ? (
-											<p className='mb-3 text-xs text-emerald-900/80'>This criterion will be expanded per member and scored per contestant member, even when the event uses Standard Scoring.</p>
+											<p className={cx(HELP, 'mb-3')}>This criterion will be expanded per member and scored per contestant member, even when the event uses Standard Scoring.</p>
 										) : (
-											<p className='mb-3 text-xs text-emerald-900/80'>This criterion will stay as group-only questions (one set for the whole team/entry).</p>
+											<p className={cx(HELP, 'mb-3')}>This criterion will stay as group-only questions (one set for the whole team/entry).</p>
 										)}
 
 										<div className='mb-3 flex items-center justify-between'>
-											<span className='text-xs text-emerald-900/80'>Subcriteria total max score: {parentMaxScore.toFixed(2)}</span>
-											<button type='button' onClick={() => addSubCriterion(criterion.id)} className='rounded-full border border-emerald-700/30 px-3 py-1 text-xs text-emerald-900 transition hover:bg-emerald-100'>
+											<span className={HELP}>Subcriteria total max score: {parentMaxScore.toFixed(2)}</span>
+											<button type='button' onClick={() => addSubCriterion(criterion.id)} className={buttonClassName('admin-outline', 'xs')}>
 												Add Subcriterion
 											</button>
 										</div>
 
 										<div className='space-y-2'>
 											{criterion.subCriteria.map((subCriterion, subCriterionIndex) => (
-												<div key={subCriterion.id} className='grid gap-2 rounded-xl border border-emerald-100 bg-white p-3 sm:grid-cols-[1fr_160px_auto]'>
+												<div key={subCriterion.id} className={cx(BOX, 'grid gap-2 sm:grid-cols-[1fr_160px_auto]')}>
 													<input
 														value={subCriterion.name}
 														onChange={(event) =>
@@ -918,7 +921,7 @@ export function CreateScorerForm() {
 															})
 														}
 														placeholder={`Subcriterion ${subCriterionIndex + 1}`}
-														className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+														className={cx(FIELD, 'px-3 py-2')}
 													/>
 													<input
 														value={subCriterion.maxScore}
@@ -931,10 +934,10 @@ export function CreateScorerForm() {
 														min={0}
 														step='0.01'
 														placeholder='Subcriterion max score'
-														className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+														className={cx(FIELD, 'px-3 py-2')}
 													/>
 													{criterion.subCriteria.length > 1 ? (
-														<button type='button' onClick={() => removeSubCriterion(criterion.id, subCriterion.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+														<button type='button' onClick={() => removeSubCriterion(criterion.id, subCriterion.id)} className={buttonClassName('admin-remove', 'sm')}>
 															Remove
 														</button>
 													) : null}
@@ -947,14 +950,14 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
-					<section className='rounded-2xl border border-emerald-100 bg-white p-4 sm:p-5'>
+					<section className={PANEL}>
 						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
 							<div>
-								<h2 className='text-lg font-semibold text-emerald-950'>Rubric Legend</h2>
-								<p className='mt-1 text-xs text-emerald-900/80'>Customize the score meanings shown to judges and in the admin dashboard.</p>
+								<h2 className={H2}>Rubric Legend</h2>
+								<p className={cx(HELP, 'mt-1')}>Customize the score meanings shown to judges and in the admin dashboard.</p>
 							</div>
-							<label className='flex items-center gap-2 text-sm font-medium text-emerald-900'>
-								<input type='checkbox' checked={showRubricLegend} onChange={(event) => setShowRubricLegend(event.target.checked)} className='rounded border-emerald-400 text-emerald-700 focus:ring-emerald-500' />
+							<label className={cx(LABEL, 'flex items-center gap-2')}>
+								<input type='checkbox' checked={showRubricLegend} onChange={(event) => setShowRubricLegend(event.target.checked)} className={CHECKBOX} />
 								Enable Rubric Legend
 							</label>
 						</div>
@@ -962,19 +965,19 @@ export function CreateScorerForm() {
 						{showRubricLegend ? (
 							<>
 								<div className='mb-3 flex items-center gap-2'>
-									<button type='button' onClick={resetRubricLegend} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+									<button type='button' onClick={resetRubricLegend} className={buttonClassName('admin-outline')}>
 										Reset Default Legend
 									</button>
-									<button type='button' onClick={addRubricLegendItem} className='rounded-full border border-emerald-700/30 px-4 py-1.5 text-sm text-emerald-900 transition hover:bg-emerald-50'>
+									<button type='button' onClick={addRubricLegendItem} className={buttonClassName('admin-outline')}>
 										Add Legend Item
 									</button>
 								</div>
 
-								<p className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900'>Current Legend: {rubricLegendText}</p>
+								<p className={NOTE_BOX}>Current Legend: {rubricLegendText}</p>
 
 								<div className='mt-3 space-y-2'>
 									{rubricLegend.map((legendItem, legendIndex) => (
-										<div key={legendItem.id} className='grid gap-2 rounded-xl border border-emerald-100 bg-white p-3 sm:grid-cols-[140px_1fr_auto]'>
+										<div key={legendItem.id} className={cx(BOX, 'grid gap-2 sm:grid-cols-[140px_1fr_auto]')}>
 											<input
 												value={legendItem.score}
 												onChange={(event) =>
@@ -986,7 +989,7 @@ export function CreateScorerForm() {
 												min={0}
 												step='0.01'
 												placeholder={`Score ${legendIndex + 1}`}
-												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 outline-none ring-emerald-500 transition focus:ring-2'
+												className={cx(FIELD, 'px-3 py-2')}
 											/>
 											<input
 												value={legendItem.label}
@@ -996,10 +999,10 @@ export function CreateScorerForm() {
 													})
 												}
 												placeholder={`Meaning for score ${legendIndex + 1}`}
-												className='rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-950 placeholder:text-emerald-700/70 outline-none ring-emerald-500 transition focus:ring-2'
+												className={cx(FIELD, 'px-3 py-2')}
 											/>
 											{rubricLegend.length > 1 ? (
-												<button type='button' onClick={() => removeRubricLegendItem(legendItem.id)} className='rounded-xl border border-rose-300 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-50'>
+												<button type='button' onClick={() => removeRubricLegendItem(legendItem.id)} className={buttonClassName('admin-remove', 'sm')}>
 													Remove
 												</button>
 											) : null}
@@ -1009,22 +1012,22 @@ export function CreateScorerForm() {
 
 								<div className='mt-3 flex flex-wrap gap-2'>
 									{normalizedRubricLegend.map((legendItem) => (
-										<span key={`${legendItem.score}-${legendItem.label}`} className='rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900'>
+										<span key={`${legendItem.score}-${legendItem.label}`} className={CHIP_EMERALD}>
 											{formatLegendScore(legendItem.score)} - {legendItem.label}
 										</span>
 									))}
 								</div>
 							</>
 						) : (
-							<p className='text-xs text-emerald-900/60'>Rubric Legend is disabled. Enable it to customize score meanings for judges.</p>
+							<p className={HELP}>Rubric Legend is disabled. Enable it to customize score meanings for judges.</p>
 						)}
 					</section>
 
-					<section className='rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
+					<section className={PANEL_SKY}>
 						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
 							<div>
-								<h2 className='text-lg font-semibold text-cyan-950'>Preview Before Publish</h2>
-								<p className='mt-1 text-xs text-cyan-900/80'>Use preview mode to verify your full event setup, then switch back to edit anytime before publishing.</p>
+								<h2 className={H2}>Preview Before Publish</h2>
+								<p className={cx(HELP, 'mt-1')}>Use preview mode to verify your full event setup, then switch back to edit anytime before publishing.</p>
 							</div>
 							<button
 								type='button'
@@ -1032,7 +1035,7 @@ export function CreateScorerForm() {
 									setShowPreview((current) => !current)
 									setError(null)
 								}}
-								className='rounded-full border border-cyan-400 bg-white px-4 py-2 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100'>
+								className={buttonClassName('admin-outline')}>
 								{showPreview ? 'Hide Preview' : 'Preview Draft'}
 							</button>
 						</div>
@@ -1040,90 +1043,90 @@ export function CreateScorerForm() {
 						{showPreview ? (
 							<div className='mt-4 space-y-4'>
 								<div className='grid gap-3 sm:grid-cols-3'>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Event Title</p>
-										<p className='mt-1 text-sm font-semibold text-cyan-950'>{title.trim() || 'Untitled Event'}</p>
+									<div className={BOX_SKY}>
+										<p className={EYEBROW}>Event Title</p>
+										<p className={cx(VALUE, 'mt-1')}>{title.trim() || 'Untitled Event'}</p>
 									</div>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Created By</p>
-										<p className='mt-1 text-sm font-semibold text-cyan-950'>{createdBy.trim() || 'Not provided'}</p>
+									<div className={BOX_SKY}>
+										<p className={EYEBROW}>Created By</p>
+										<p className={cx(VALUE, 'mt-1')}>{createdBy.trim() || 'Not provided'}</p>
 									</div>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Scoring Type</p>
-										<p className='mt-1 text-sm font-semibold text-cyan-950'>{eventScoringType === 'final-oral-defense' ? 'Final Oral Defense' : 'Standard Scoring'}</p>
+									<div className={BOX_SKY}>
+										<p className={EYEBROW}>Scoring Type</p>
+										<p className={cx(VALUE, 'mt-1')}>{eventScoringType === 'final-oral-defense' ? 'Final Oral Defense' : 'Standard Scoring'}</p>
 									</div>
 								</div>
 
-								<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-									<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Description</p>
-									<p className='mt-1 text-sm text-cyan-950'>{description.trim() || 'No description provided.'}</p>
+								<div className={BOX_SKY}>
+									<p className={EYEBROW}>Description</p>
+									<p className={cx(BODY, 'mt-1')}>{description.trim() || 'No description provided.'}</p>
 								</div>
 
 								{showRubricLegend && (
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Rubric Legend</p>
-										<p className='mt-1 text-sm text-cyan-950'>{rubricLegendText}</p>
+									<div className={BOX_SKY}>
+										<p className={EYEBROW}>Rubric Legend</p>
+										<p className={cx(BODY, 'mt-1')}>{rubricLegendText}</p>
 									</div>
 								)}
 
 								<div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs text-cyan-800/80'>Entries</p>
-										<p className='text-lg font-semibold text-cyan-950'>{contestants.length}</p>
+									<div className={BOX_SKY}>
+										<p className={HELP}>Entries</p>
+										<p className={H2}>{contestants.length}</p>
 									</div>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs text-cyan-800/80'>Judges</p>
-										<p className='text-lg font-semibold text-cyan-950'>{judges.length}</p>
+									<div className={BOX_SKY}>
+										<p className={HELP}>Judges</p>
+										<p className={H2}>{judges.length}</p>
 									</div>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs text-cyan-800/80'>Criteria / Subcriteria</p>
-										<p className='text-lg font-semibold text-cyan-950'>
+									<div className={BOX_SKY}>
+										<p className={HELP}>Criteria / Subcriteria</p>
+										<p className={H2}>
 											{criteria.length} / {totalSubCriteria}
 										</p>
 									</div>
-									<div className='rounded-xl border border-cyan-200 bg-white p-3'>
-										<p className='text-xs text-cyan-800/80'>Event Max Score</p>
-										<p className='text-lg font-semibold text-cyan-950'>{totalEventMaxScore.toFixed(2)}</p>
+									<div className={BOX_SKY}>
+										<p className={HELP}>Event Max Score</p>
+										<p className={H2}>{totalEventMaxScore.toFixed(2)}</p>
 									</div>
 								</div>
 
 								<div className='space-y-4'>
-									<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
-										<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
-											<p className='text-sm font-semibold text-cyan-950'>Entries Matrix</p>
+									<div className={cx(TABLE_SHELL, 'overflow-hidden')}>
+										<div className={TABLE_CAPTION}>
+											<p className={H3}>Entries Matrix</p>
 										</div>
-										<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:gap-2'>
+										<div className={cx(TABLE_HEAD, 'hidden sm:grid sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:gap-2')}>
 											<span>#</span>
 											<span>Entry</span>
 											<span>Type</span>
 											<span>Program</span>
 											<span>Participants</span>
 										</div>
-										<div className='divide-y divide-cyan-100'>
+										<div className={TABLE_DIVIDE}>
 											{contestants.map((contestant, index) => {
 												const cleanParticipants = contestant.participants.map((participant) => participant.trim()).filter((participant) => participant.length > 0)
 												const participantDisplay = contestant.entryType === 'group' && cleanParticipants.length > 0 ? cleanParticipants.join(', ') : '-'
 
 												return (
-													<div key={contestant.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:items-center'>
+													<div key={contestant.id} className={cx(TABLE_ROW, 'grid gap-2 sm:grid-cols-[56px_minmax(180px,1fr)_130px_120px_minmax(220px,1.3fr)] sm:items-center')}>
 														<p>
-															<span className='font-medium sm:hidden'># </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}># </span>
 															{index + 1}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Entry: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Entry: </span>
 															{contestant.name.trim() || `Entry ${index + 1}`}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Type: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Type: </span>
 															{contestant.entryType === 'individual' ? 'Individual' : 'Team/Group'}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Program: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Program: </span>
 															{contestant.programTag || '-'}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Participants: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Participants: </span>
 															{participantDisplay}
 														</p>
 													</div>
@@ -1133,28 +1136,28 @@ export function CreateScorerForm() {
 									</div>
 
 									<div className='grid gap-4 xl:grid-cols-2'>
-										<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
-											<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
-												<p className='text-sm font-semibold text-cyan-950'>Judges Matrix</p>
+										<div className={cx(TABLE_SHELL, 'overflow-hidden')}>
+											<div className={TABLE_CAPTION}>
+												<p className={H3}>Judges Matrix</p>
 											</div>
-											<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:gap-2'>
+											<div className={cx(TABLE_HEAD, 'hidden sm:grid sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:gap-2')}>
 												<span>#</span>
 												<span>Judge</span>
 												<span>Email</span>
 											</div>
-											<div className='divide-y divide-cyan-100'>
+											<div className={TABLE_DIVIDE}>
 												{judges.map((judge, index) => (
-													<div key={judge.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:items-center'>
+													<div key={judge.id} className={cx(TABLE_ROW, 'grid gap-2 sm:grid-cols-[56px_minmax(160px,1fr)_minmax(190px,1fr)] sm:items-center')}>
 														<p>
-															<span className='font-medium sm:hidden'># </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}># </span>
 															{index + 1}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Judge: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Judge: </span>
 															{judge.name.trim() || `Judge ${index + 1}`}
 														</p>
 														<p>
-															<span className='font-medium sm:hidden'>Email: </span>
+															<span className={cx(CELL_LABEL, 'sm:hidden')}>Email: </span>
 															{judge.email.trim() || '-'}
 														</p>
 													</div>
@@ -1162,33 +1165,33 @@ export function CreateScorerForm() {
 											</div>
 										</div>
 
-										<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
-											<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
-												<p className='text-sm font-semibold text-cyan-950'>Slot Assignment Matrix</p>
+										<div className={cx(TABLE_SHELL, 'overflow-hidden')}>
+											<div className={TABLE_CAPTION}>
+												<p className={H3}>Slot Assignment Matrix</p>
 											</div>
-											<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:gap-2'>
+											<div className={cx(TABLE_HEAD, 'hidden sm:grid sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:gap-2')}>
 												<span>Slot</span>
 												<span>Entry</span>
 												<span>Assigned Judges</span>
 											</div>
-											<div className='divide-y divide-cyan-100'>
+											<div className={TABLE_DIVIDE}>
 												{presentationSlots.map((slot, index) => {
 													const assignedJudgeNames = slot.judgeIds.map((judgeId) => judgeNameById.get(judgeId) ?? '').filter((judgeName) => judgeName.length > 0)
 													const contestant = contestants[index]
 													const contestantName = contestant?.name.trim() || `Entry ${index + 1}`
 
 													return (
-														<div key={slot.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:items-center'>
+														<div key={slot.id} className={cx(TABLE_ROW, 'grid gap-2 sm:grid-cols-[minmax(130px,1fr)_minmax(170px,1fr)_minmax(220px,1.2fr)] sm:items-center')}>
 															<p>
-																<span className='font-medium sm:hidden'>Slot: </span>
+																<span className={cx(CELL_LABEL, 'sm:hidden')}>Slot: </span>
 																{slot.label || `Slot ${index + 1}`}
 															</p>
 															<p>
-																<span className='font-medium sm:hidden'>Entry: </span>
+																<span className={cx(CELL_LABEL, 'sm:hidden')}>Entry: </span>
 																{contestantName}
 															</p>
 															<p>
-																<span className='font-medium sm:hidden'>Assigned Judges: </span>
+																<span className={cx(CELL_LABEL, 'sm:hidden')}>Assigned Judges: </span>
 																{assignedJudgeNames.length > 0 ? assignedJudgeNames.join(', ') : 'No judges assigned yet.'}
 															</p>
 														</div>
@@ -1198,38 +1201,38 @@ export function CreateScorerForm() {
 										</div>
 									</div>
 
-									<div className='overflow-hidden rounded-xl border border-cyan-200 bg-white'>
-										<div className='border-b border-cyan-200 bg-cyan-50/70 px-3 py-2'>
-											<p className='text-sm font-semibold text-cyan-950'>Criteria Matrix</p>
+									<div className={cx(TABLE_SHELL, 'overflow-hidden')}>
+										<div className={TABLE_CAPTION}>
+											<p className={H3}>Criteria Matrix</p>
 										</div>
-										<div className='hidden bg-cyan-100/70 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-cyan-900 sm:grid sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:gap-2'>
+										<div className={cx(TABLE_HEAD, 'hidden sm:grid sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:gap-2')}>
 											<span>#</span>
 											<span>Criterion</span>
 											<span>Scope</span>
 											<span>Max</span>
 											<span>Subcriteria</span>
 										</div>
-										<div className='divide-y divide-cyan-100'>
+										<div className={TABLE_DIVIDE}>
 											{criteria.map((criterion, criterionIndex) => (
-												<div key={criterion.id} className='grid gap-2 px-3 py-2 text-xs text-cyan-900 sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:items-start'>
+												<div key={criterion.id} className={cx(TABLE_ROW, 'grid gap-2 sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:items-start')}>
 													<p>
-														<span className='font-medium sm:hidden'># </span>
+														<span className={cx(CELL_LABEL, 'sm:hidden')}># </span>
 														{criterionIndex + 1}
 													</p>
 													<p>
-														<span className='font-medium sm:hidden'>Criterion: </span>
+														<span className={cx(CELL_LABEL, 'sm:hidden')}>Criterion: </span>
 														{criterion.name.trim() || `Criterion ${criterionIndex + 1}`}
 													</p>
 													<p>
-														<span className='font-medium sm:hidden'>Scope: </span>
+														<span className={cx(CELL_LABEL, 'sm:hidden')}>Scope: </span>
 														{criterion.appliesTo === 'individual' ? 'Per Contestant (Individual)' : 'Group Criteria Only'}
 													</p>
 													<p>
-														<span className='font-medium sm:hidden'>Max: </span>
+														<span className={cx(CELL_LABEL, 'sm:hidden')}>Max: </span>
 														{criterionMaxScore(criterion).toFixed(2)}
 													</p>
 													<p>
-														<span className='font-medium sm:hidden'>Subcriteria: </span>
+														<span className={cx(CELL_LABEL, 'sm:hidden')}>Subcriteria: </span>
 														{criterion.subCriteria.map((subCriterion, subCriterionIndex) => `${subCriterionIndex + 1}) ${subCriterion.name.trim() || `Subcriterion ${subCriterionIndex + 1}`} [${toNumber(subCriterion.maxScore).toFixed(2)}]`).join(' | ')}
 													</p>
 												</div>
@@ -1241,10 +1244,10 @@ export function CreateScorerForm() {
 						) : null}
 					</section>
 
-					{error ? <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>{error}</div> : null}
+					{error ? <div className={ERROR_BOX}>{error}</div> : null}
 
 					<div className='flex flex-wrap items-center gap-3'>
-						<button type='submit' disabled={isSaving} className='rounded-full bg-emerald-900 px-6 py-3 text-sm font-medium text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
+						<button type='submit' disabled={isSaving} className={buttonClassName('admin-primary')}>
 							{isSaving ? 'Publishing Event...' : 'Publish Event and Generate Judge Links'}
 						</button>
 					</div>
@@ -1267,34 +1270,34 @@ export function CreateScorerForm() {
 				/>
 
 				{created ? (
-					<section data-testid='published-event' data-event-id={created.eventId} className='mt-8 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4 sm:p-5'>
-						<h2 className='text-lg font-semibold text-cyan-950'>Event Published Successfully</h2>
-						<p className='mt-1 text-sm text-cyan-900/80'>Share each judge link privately.</p>
+					<section data-testid='published-event' data-event-id={created.eventId} className={cx(PANEL_SKY, 'mt-8')}>
+						<h2 className={H2}>Event Published Successfully</h2>
+						<p className={cx(LEDE, 'mt-1')}>Share each judge link privately.</p>
 
-						<div className='mt-4 rounded-xl border border-cyan-200 bg-white p-3'>
-							<p className='text-xs uppercase tracking-wide text-cyan-800/80'>Admin Results Page</p>
-							<a href={created.adminUrl} className='mt-1 block text-sm font-medium text-cyan-900 underline'>
+						<div className={cx(BOX_SKY, 'mt-4')}>
+							<p className={EYEBROW}>Admin Results Page</p>
+							<a href={created.adminUrl} className={cx(LINK, 'mt-1 block')}>
 								{created.adminUrl}
 							</a>
 						</div>
 
 						<div className='mt-4 space-y-3'>
 							{created.judgeLinks.map((link) => (
-								<div key={link.judgeId} className='rounded-xl border border-cyan-200 bg-white p-3'>
+								<div key={link.judgeId} className={BOX_SKY}>
 									<div className='mb-2 flex items-center justify-between gap-2'>
-										<p className='text-sm font-semibold text-cyan-950'>{link.judgeName}</p>
-										<button type='button' onClick={() => copyLink(link.url)} className='rounded-full border border-cyan-300 px-3 py-1 text-xs text-cyan-900 transition hover:bg-cyan-100'>
+										<p className={H3}>{link.judgeName}</p>
+										<button type='button' onClick={() => copyLink(link.url)} className={buttonClassName('admin-outline', 'xs')}>
 											{copiedValue === link.url ? 'Copied' : 'Copy Link'}
 										</button>
 									</div>
-									<a href={link.url} className='block break-all text-sm text-cyan-900 underline'>
+									<a href={link.url} className={cx(LINK, 'block break-all')}>
 										{link.url}
 									</a>
 								</div>
 							))}
 						</div>
 
-						<p className='mt-3 text-xs text-cyan-900/80'>Generated at {dateDisplay(new Date().toISOString())}</p>
+						<p className={cx(HELP, 'mt-3')}>Generated at {dateDisplay(new Date().toISOString())}</p>
 					</section>
 				) : null}
 			</div>

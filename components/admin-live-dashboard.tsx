@@ -64,7 +64,7 @@ type PendingQueueFilter = 'all' | QueuedAdminSaveKind
 
 // Phase 3 Task 13: the write a 401 stopped, run once after the unlock.
 // The editor's remove buttons: the admin outline button at xs, in rose.
-const REMOVE_BUTTON = 'px-space-sm py-1 rounded bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 font-label-sm text-label-sm font-medium transition-colors shadow-2xs cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
+const REMOVE_BUTTON = buttonClassName('admin-remove', 'xs')
 
 type UnlockRetry =
 	| { kind: 'program'; assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }> }

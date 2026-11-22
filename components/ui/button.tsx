@@ -205,6 +205,31 @@ const BUTTON_RECIPES = {
 			icon: 'text-[15px]',
 		},
 	},
+	'admin-remove': {
+		// Not drawn in the mockups: the old screens' remove and import actions, in the S-2 (xs) and S-1 (sm)
+		// shapes with rose colours (Task 7's matrix remove button, Task 8's setup screens).
+		xs: {
+			className:
+				'px-space-sm py-1 rounded bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 font-label-sm text-label-sm font-medium transition-colors shadow-2xs',
+			icon: 'text-[15px]',
+			disabled: 'disabled:cursor-not-allowed disabled:opacity-60',
+		},
+		sm: {
+			className:
+				'flex items-center gap-space-xs px-space-md py-space-xs rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 font-label-md text-label-md transition-colors shadow-xs',
+			icon: 'text-[16px]',
+			disabled: 'disabled:cursor-not-allowed disabled:opacity-60',
+		},
+	},
+	'admin-danger': {
+		// Not drawn in the mockups: the old screens' destructive confirm (delete an event, import a
+		// database) in the P-5 modal confirm shape with rose colours.
+		sm: {
+			className:
+				'px-space-md py-space-xs rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-label-md text-label-md font-semibold transition-colors shadow-2xs',
+			icon: 'text-[16px]',
+		},
+	},
 	'admin-link': {
 		// A891: emerald text link.
 		xs: {

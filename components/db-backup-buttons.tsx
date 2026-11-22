@@ -1,6 +1,9 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { buttonClassName } from '@/components/ui/button'
+import { DIALOG_PANEL, DIALOG_TEXT, DIALOG_TITLE, ERROR_TEXT, EYEBROW, FIELD, FIELD_DANGER, LOG_BOX, OVERLAY } from '@/components/ui/form-styles'
+import { cx } from '@/lib/ui/cx'
 
 export default function DbBackupButtons() {
 	const [isModalOpen, setIsModalOpen] = useState(false)
@@ -116,26 +119,26 @@ export default function DbBackupButtons() {
 			<div className='mt-6 flex flex-wrap gap-3'>
 				<button
 					onClick={() => openModal('export')}
-					className='inline-flex items-center rounded-full border border-cyan-700/30 bg-cyan-50 px-5 py-2.5 text-sm font-medium text-cyan-900 transition hover:bg-cyan-100'
+					className={buttonClassName('admin-outline')}
 				>
 					Export Database (.sql)
 				</button>
 				<button
 					onClick={() => openModal('import')}
-					className='inline-flex items-center rounded-full border border-rose-700/30 bg-rose-50 px-5 py-2.5 text-sm font-medium text-rose-900 transition hover:bg-rose-100'
+					className={buttonClassName('admin-remove', 'sm')}
 				>
 					Import Database (.sql)
 				</button>
 			</div>
 
 			{isModalOpen ? (
-				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4'>
-					<div role='dialog' aria-modal='true' className='w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl'>
-						<h3 className='text-lg font-semibold text-slate-900'>
+				<div className={cx(OVERLAY, 'fixed inset-0 z-[100] flex items-center justify-center')}>
+					<div role='dialog' aria-modal='true' className={cx(DIALOG_PANEL, 'w-full max-w-md')}>
+						<h3 className={DIALOG_TITLE}>
 							{importLogs ? (importLogs.success ? 'Import Successful' : 'Import Failed') : (mode === 'export' ? 'Export Database' : 'Import Database')}
 						</h3>
 						{!importLogs && (
-							<p className='mt-1 text-sm text-slate-600'>
+							<p className={cx(DIALOG_TEXT, 'mt-1')}>
 								{mode === 'export'
 									? 'Enter the update password to generate a .sql backup.'
 									: 'Enter the update password and select a .sql file to restore. WARNING: This will overwrite existing data!'}
@@ -144,13 +147,13 @@ export default function DbBackupButtons() {
 						{importLogs ? (
 							<div className='mt-4 flex flex-col gap-4'>
 								{importLogs.error && (
-									<p className='text-sm font-semibold text-rose-600'>{importLogs.error}</p>
+									<p className={ERROR_TEXT}>{importLogs.error}</p>
 								)}
 								{(importLogs.stdout || importLogs.stderr) ? (
-									<div className='max-h-60 overflow-y-auto rounded bg-slate-900 p-3 text-xs text-slate-300 shadow-inner'>
+									<div className={cx(LOG_BOX, 'max-h-60 overflow-y-auto')}>
 										{importLogs.stdout && (
 											<div className='whitespace-pre-wrap break-words'>
-												<span className='font-bold text-cyan-400'>[STDOUT]</span>
+												<span className='font-bold text-sky-400'>[STDOUT]</span>
 												<br />
 												{importLogs.stdout}
 											</div>
@@ -164,14 +167,14 @@ export default function DbBackupButtons() {
 										)}
 									</div>
 								) : (
-									<p className='text-sm text-slate-600'>No logs output available.</p>
+									<p className={DIALOG_TEXT}>No logs output available.</p>
 								)}
 								<div className='flex justify-end pt-2'>
 									{importLogs.success ? (
 										<button
 											type='button'
 											onClick={() => window.location.reload()}
-											className='rounded-md bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700'
+											className={buttonClassName('admin-confirm')}
 										>
 											Close & Reload
 										</button>
@@ -179,7 +182,7 @@ export default function DbBackupButtons() {
 										<button
 											type='button'
 											onClick={() => setIsModalOpen(false)}
-											className='rounded-md bg-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-300'
+											className={buttonClassName('admin-tonal')}
 										>
 											Close
 										</button>
@@ -189,7 +192,7 @@ export default function DbBackupButtons() {
 						) : (
 						<form className='mt-4 space-y-4' onSubmit={handleAction}>
 							<div>
-								<label className='text-xs font-medium uppercase tracking-wide text-slate-500'>Password</label>
+								<label className={EYEBROW}>Password</label>
 								<input
 									type='password'
 									value={password}
@@ -197,7 +200,7 @@ export default function DbBackupButtons() {
 										setPassword(e.target.value)
 										if (passwordError) setPasswordError('')
 									}}
-									className='mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-200'
+									className={cx(FIELD, 'mt-2 w-full px-3 py-2')}
 									autoFocus
 									required
 								/>
@@ -205,7 +208,7 @@ export default function DbBackupButtons() {
 							
 							{mode === 'import' && (
 								<div>
-									<label className='text-xs font-medium uppercase tracking-wide text-slate-500'>SQL File</label>
+									<label className={EYEBROW}>SQL File</label>
 									<input
 										type='file'
 										accept='.sql'
@@ -214,28 +217,26 @@ export default function DbBackupButtons() {
 											setSelectedFile(e.target.files?.[0] || null)
 											if (passwordError) setPasswordError('')
 										}}
-										className='mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-rose-400 focus:outline-none focus:ring-1 focus:ring-rose-200'
+										className={cx(FIELD_DANGER, 'mt-2 w-full px-3 py-2')}
 										required
 									/>
 								</div>
 							)}
 
-							{passwordError ? <p className='text-sm text-rose-600'>{passwordError}</p> : null}
+							{passwordError ? <p className={ERROR_TEXT}>{passwordError}</p> : null}
 							
 							<div className='flex flex-wrap justify-end gap-2 pt-2'>
 								<button
 									type='button'
 									onClick={() => setIsModalOpen(false)}
-									className='rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50'
+									className={buttonClassName('admin-tonal')}
 								>
 									Cancel
 								</button>
 								<button
 									type='submit'
 									disabled={isProcessing}
-									className={`rounded-full px-6 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-60 ${
-										mode === 'export' ? 'bg-cyan-600 hover:bg-cyan-700' : 'bg-rose-600 hover:bg-rose-700'
-									}`}
+									className={mode === 'export' ? buttonClassName('admin-confirm') : buttonClassName('admin-danger')}
 								>
 									{isProcessing ? 'Processing...' : mode === 'export' ? 'Export' : 'Import'}
 								</button>
