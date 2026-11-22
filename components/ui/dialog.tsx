@@ -61,13 +61,15 @@ type DialogProps = Omit<ComponentPropsWithoutRef<'div'>, 'title'> & {
 	initialFocusRef?: RefObject<HTMLElement | null>
 	/** Extra classes for the overlay (A1105). className goes on the panel. */
 	overlayClassName?: string
+	/** A press on the backdrop (outside the panel) closes it too. */
+	closeOnBackdrop?: boolean
 }
 
 /**
  * The admin modal of catalogue section 14: overlay A1105 (blurred slate backdrop) and panel A1106,
  * with the header row A1107 (eyebrow A1109, title A1110, round close button A1112), the children as
  * the body, and the footer row A1147 when actions are given. Props: open, onClose, title, eyebrow,
- * actions, closeLabel, initialFocusRef, overlayClassName; other native div props and className go on
+ * actions, closeLabel, initialFocusRef, overlayClassName, closeOnBackdrop; other native div props and className go on
  * the panel, which carries role dialog, aria-modal and aria-labelledby. While open, Escape closes it,
  * Tab and Shift+Tab stay inside the panel, focus moves in on open and returns to the element that had
  * it on close. It is rendered in place, not in a portal, so it keeps the admin palette of a
@@ -83,6 +85,7 @@ export default function Dialog({
 	closeLabel = 'Close',
 	initialFocusRef,
 	overlayClassName,
+	closeOnBackdrop = false,
 	className,
 	children,
 	...rest
@@ -156,6 +159,13 @@ export default function Dialog({
 				'fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4',
 				overlayClassName,
 			)}
+			onMouseDown={
+				closeOnBackdrop
+					? (event) => {
+							if (event.target === event.currentTarget) onClose()
+						}
+					: undefined
+			}
 		>
 			<div
 				{...rest}
@@ -274,17 +284,19 @@ type DialogLedgerRowProps = Omit<ComponentPropsWithRef<'li'>, 'children'> & {
 	label: ReactNode
 	/** Right figure (A1133 second span). */
 	value: ReactNode
+	/** A value that is not a figure (for example "not scored"): slate and normal weight instead of emerald. */
+	muted?: boolean
 }
 
 /**
  * One row of the modal ledger (A1133): label on the left, emerald figure on the right. Props: label,
- * value; other native li props and className go on the row.
+ * value, muted (a value that is not a figure); other native li props and className go on the row.
  */
-export function DialogLedgerRow({ label, value, className, ...rest }: DialogLedgerRowProps) {
+export function DialogLedgerRow({ label, value, muted = false, className, ...rest }: DialogLedgerRowProps) {
 	return (
 		<li className={cx('flex justify-between items-center py-2 text-label-md font-label-md', className)} {...rest}>
 			<span className='text-slate-800 font-medium'>{label}</span>
-			<span className='font-mono text-emerald-700 font-bold'>{value}</span>
+			<span className={muted ? 'text-slate-500' : 'font-mono text-emerald-700 font-bold'}>{value}</span>
 		</li>
 	)
 }

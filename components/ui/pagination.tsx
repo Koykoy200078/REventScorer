@@ -59,6 +59,8 @@ export type PaginationProps = Omit<ComponentPropsWithRef<'div'>, 'children'> & {
 	navLabel?: string
 	/** Accessible name of each page-number button, for example (n) => `Page ${n}`; the number alone by default. */
 	pageLabel?: (page: number) => string
+	/** Test hooks: data-testid of the previous, next and page-number buttons (the page ones also get data-page). */
+	hooks?: { previous: string; next: string; page: string }
 }
 
 /**
@@ -70,7 +72,7 @@ export type PaginationProps = Omit<ComponentPropsWithRef<'div'>, 'children'> & {
  * `page`, `pageSize`, `onPageChange(page)`, the visible `previousLabel` and `nextLabel`, an
  * optional `summary` (a node or a function of the slice; use `PaginationCount` for its numbers),
  * `navLabel` for the controls (default Pagination), `pageLabel(n)` for every page-number button,
- * and any div props, which go on the bar.
+ * `hooks` for test ids on the buttons, and any div props, which go on the bar.
  */
 export function Pagination({
 	total,
@@ -82,6 +84,7 @@ export function Pagination({
 	summary,
 	navLabel = 'Pagination',
 	pageLabel,
+	hooks,
 	className,
 	...rest
 }: PaginationProps) {
@@ -94,6 +97,7 @@ export function Pagination({
 			<nav aria-label={navLabel} className={PAGES}>
 				<button
 					type='button'
+					data-testid={hooks?.previous}
 					className={cx(STEP, CLICKABLE, FOCUS_RING)}
 					aria-disabled={slice.page <= 1}
 					onClick={() => {
@@ -107,6 +111,8 @@ export function Pagination({
 						<button
 							key={number}
 							type='button'
+							data-testid={hooks?.page}
+							data-page={hooks ? number : undefined}
 							aria-current='page'
 							aria-label={pageLabel?.(number)}
 							className={cx(CURRENT, FOCUS_RING)}
@@ -117,6 +123,8 @@ export function Pagination({
 						<button
 							key={number}
 							type='button'
+							data-testid={hooks?.page}
+							data-page={hooks ? number : undefined}
 							aria-label={pageLabel?.(number)}
 							className={cx(PAGE, CLICKABLE, FOCUS_RING)}
 							onClick={() => onPageChange(number)}
@@ -127,6 +135,7 @@ export function Pagination({
 				)}
 				<button
 					type='button'
+					data-testid={hooks?.next}
 					className={cx(STEP, CLICKABLE, FOCUS_RING)}
 					aria-disabled={slice.page >= slice.pageCount}
 					onClick={() => {

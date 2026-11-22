@@ -76,10 +76,13 @@ export function Select(props: SelectProps) {
 		)
 	}
 
+	// The pill's label wraps the select, so its text would include every option's; a text label names the select
+	// exactly through aria-label (unless the caller names it).
+	const named = 'aria-label' in rest || 'aria-labelledby' in rest
 	return (
 		<label className={cx(PILL, wrapperClassName)}>
 			<span className={PILL_LABEL}>{label}</span>
-			<select className={cx(FILTER_TEXT, FOCUS_RING, DISABLED, className)} {...rest}>
+			<select aria-label={!named && typeof label === 'string' ? label : undefined} className={cx(FILTER_TEXT, FOCUS_RING, DISABLED, className)} {...rest}>
 				{children}
 			</select>
 		</label>

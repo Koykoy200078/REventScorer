@@ -37,9 +37,14 @@ export function matchesSearch(entry: Pick<MatrixEntry, 'name' | 'section' | 'par
 }
 
 // A track checkbox hides only the entries of its own program, so an entry without a program always shows. The strand and
-// remark filters match one of the entry's values exactly.
-export function filterEntries<T extends MatrixEntry>(entries: T[], filters: MatrixFilters): T[] {
+// remark filters match one of the entry's values exactly. Entries in `keep` show whatever the filters say: a row whose
+// program was just toggled stays until the next filter change (R49).
+export function filterEntries<T extends MatrixEntry>(entries: T[], filters: MatrixFilters, keep?: ReadonlySet<string>): T[] {
 	return entries.filter((entry) => {
+		if (keep?.has(entry.contestantId)) {
+			return true
+		}
+
 		if (entry.program && !filters.tracks[entry.program]) {
 			return false
 		}

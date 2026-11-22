@@ -4,20 +4,23 @@ import { saveAs } from 'file-saver'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
+import { BreakdownDialog } from '@/components/admin/breakdown-dialog'
 import { DashboardTab } from '@/components/admin/dashboard-tab'
+import { INITIAL_MATRIX_VIEW, type MatrixFilterPatch, type MatrixRow, MatrixTab, type MatrixView } from '@/components/admin/matrix-tab'
 import type { ConnectionState } from '@/components/admin/connection'
 import { EventBand } from '@/components/admin/event-band'
 import { Button } from '@/components/ui/button'
 import { TabPanel, Tabs } from '@/components/ui/tabs'
 import UnlockDialog from '@/components/unlock-dialog'
 import { scoreMatrixRows, toCsv } from '@/lib/admin/csv'
+import { breakdownRows } from '@/lib/admin/breakdown'
 import { createEditorId } from '@/lib/admin/editor-id'
-import { criterionMaxScore, participantAnalyticsScore, participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
+import { criterionMaxScore, participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
 import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEventEditorPayloadForSubmit, synchronizeEventEditorDraft, uniqueTrimmedNames } from '@/lib/admin/editor-snapshot'
 import { formatDate, formatPercent, formatScore } from '@/lib/admin/format'
 import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
 import { adminKpis, programCohorts } from '@/lib/admin/kpis'
-import { assignedJudgeIdsForContestant, buildJudgeAssignmentDrafts, sameJudgeAssignments } from '@/lib/admin/judges'
+import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import { isIndividualPresentationCriterion, mergedIndividualSubCriteriaForContestant } from '@/lib/admin/members'
 import { podiumPlaces } from '@/lib/admin/podium'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
@@ -82,7 +85,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
 	const [manualAssignments, setManualAssignments] = useState<Record<string, ProgramLabel | null>>(() => buildProgramAssignmentsFromEvent(initialEvent))
 	const [isSavingProgramAssignments, setIsSavingProgramAssignments] = useState(false)
-	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>(() => buildJudgeAssignmentDrafts(initialEvent))
+	// Only the entry whose Edit Judge is open has a draft (B52: live refreshes leave it alone).
+	const [judgeAssignmentDrafts, setJudgeAssignmentDrafts] = useState<Record<string, string[]>>({})
 	const [editingJudgeAssignmentForContestantId, setEditingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [showAllTeamAnalytics, setShowAllTeamAnalytics] = useState<Record<ProgramLabel, boolean>>({ BSINT: false, BSCS: false })
@@ -101,8 +105,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [isAutoSyncingAdminSaves, setIsAutoSyncingAdminSaves] = useState(false)
 	const [adminQueueNotice, setAdminQueueNotice] = useState<string | null>(null)
 	const [pendingQueueFilter, setPendingQueueFilter] = useState<PendingQueueFilter>('all')
-	const [strandFilter, setStrandFilter] = useState<string>('All')
-	const [remarkFilter, setRemarkFilter] = useState<string>('All')
+	// The matrix's search, filters and page (kept when another tab is shown), and the entry whose Breakdown is open.
+	const [matrixView, setMatrixView] = useState<MatrixView>(INITIAL_MATRIX_VIEW)
+	const [breakdownId, setBreakdownId] = useState<string | null>(null)
 	const [isProgramPasswordModalOpen, setIsProgramPasswordModalOpen] = useState(false)
 	const [programPassword, setProgramPassword] = useState('')
 	const [programPasswordError, setProgramPasswordError] = useState('')
@@ -127,7 +132,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const isDirectRatingEvent = Boolean(event.directRatingConfig)
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
 	const analyticsPreviewLimit = 3
-	const compiledTableColumnCount = useWeightedScores ? 9 : 6
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
 	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedRubricLegend), [normalizedRubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
@@ -175,19 +179,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			remarks: Array.from(remarks).sort(),
 		}
 	}, [compiled.rankings])
-	const filteredRankings = useMemo(() => {
-		return compiled.rankings.filter((result) => {
-			if (strandFilter !== 'All') {
-				const s = result.directDetails?.strand || ''
-				if (!s.includes(strandFilter)) return false
-			}
-			if (remarkFilter !== 'All') {
-				const r = result.directDetails?.remark || ''
-				if (!r.includes(remarkFilter)) return false
-			}
-			return true
-		})
-	}, [compiled.rankings, strandFilter, remarkFilter])
 	const eventEditorRubricTotalScore = useMemo(() => eventEditorDraft.criteria.reduce((sum, criterion) => sum + criterionTotalScoreForEditor(criterion), 0), [eventEditorDraft.criteria])
 	const pendingQueueRows = useMemo(
 		() =>
@@ -243,10 +234,6 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 		return pendingQueueRows.filter((row) => row.kind === pendingQueueFilter)
 	}, [pendingQueueFilter, pendingQueueRows])
-
-	useEffect(() => {
-		setJudgeAssignmentDrafts(buildJudgeAssignmentDrafts(event))
-	}, [event])
 
 	useEffect(() => {
 		if (showEventEditor || judgeLinksLocked) {
@@ -633,6 +620,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				return
 			}
 			setProgramForAllContestants(pendingProgramTarget)
+			keepMatrixRows(event.contestants.map((contestant) => contestant.id))
 			setIsProgramPasswordModalOpen(false)
 			setProgramPassword('')
 			setProgramPasswordError('')
@@ -645,6 +633,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		}
 	}
 
+	const changeMatrixFilter = useCallback((patch: MatrixFilterPatch) => {
+		setMatrixView((previous) => ({ ...previous, ...patch, page: 1, keep: [] }))
+	}, [])
+	const keepMatrixRows = useCallback((contestantIds: string[]) => {
+		setMatrixView((previous) => ({ ...previous, keep: Array.from(new Set([...previous.keep, ...contestantIds])) }))
+	}, [])
+
 	const toggleContestantProgram = useCallback(
 		(contestantId: string, selectedProgram: ProgramLabel) => {
 			const currentProgram = resolvedProgramByContestantId.get(contestantId) ?? null
@@ -654,11 +649,24 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				...previous,
 				[contestantId]: nextProgram,
 			}))
+			keepMatrixRows([contestantId])
 
 			void saveProgramAssignments([{ contestantId, programTag: nextProgram }])
 		},
-		[resolvedProgramByContestantId, saveProgramAssignments],
+		[keepMatrixRows, resolvedProgramByContestantId, saveProgramAssignments],
 	)
+
+	const openJudgeSwap = useCallback(
+		(contestantId: string) => {
+			setEditingJudgeAssignmentForContestantId(contestantId)
+			setJudgeAssignmentDrafts({ [contestantId]: assignedJudgeIdsForContestant(event, contestantId) })
+		},
+		[event],
+	)
+	const closeJudgeSwap = useCallback(() => {
+		setEditingJudgeAssignmentForContestantId(null)
+		setJudgeAssignmentDrafts({})
+	}, [])
 
 	const toggleJudgeAssignment = useCallback(
 		(contestantId: string, judgeId: string) => {
@@ -703,7 +711,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setEvent(responseBody.event)
 				setCompiled(responseBody.compiled)
 				setJudgeLinksLocked(false)
-				setEditingJudgeAssignmentForContestantId(null)
+				closeJudgeSwap()
 				setAdminQueueNotice(null)
 			} catch (error) {
 				if (error instanceof AdminSaveError && error.status === 401) {
@@ -726,7 +734,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					refreshQueuedAdminSaves()
 					setRefreshError(null)
 					setAdminQueueNotice(`Judge assignment for ${contestantName} was saved locally and queued for auto-upload.`)
-					setEditingJudgeAssignmentForContestantId(null)
+					closeJudgeSwap()
 					void syncQueuedAdminSaves(false)
 				} else {
 					setRefreshError(error instanceof Error ? error.message : 'Unable to update judge assignment.')
@@ -735,7 +743,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				setSavingJudgeAssignmentForContestantId(null)
 			}
 		},
-		[askToUnlock, contestantsById, event, judgeAssignmentDrafts, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
+		[askToUnlock, closeJudgeSwap, contestantsById, event, judgeAssignmentDrafts, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves],
 	)
 
 	const loadEventEditorFromCurrentEvent = useCallback(() => {
@@ -966,6 +974,38 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	}
 	const scoring = scoringKind(compiled)
 	const judgesWithSaves = new Set(compiled.judgeBreakdown.filter((judge) => Object.keys(judge.totalsByContestant).length > 0).map((judge) => judge.judgeId))
+
+	// One matrix row per ranking: its filter fields, status (R47) and assigned judges' chips (R50).
+	const splitValues = (value: string | undefined) => (value ?? '').split(' / ').map((part) => part.trim()).filter(Boolean)
+	const matrixRows: MatrixRow[] = compiled.rankings.map((result) => {
+		const contestant = contestantsById.get(result.contestantId)
+		const assigned = assignedJudgeIdsForContestant(event, result.contestantId)
+		const status = entryStatus(result.contestantId, assigned, compiled.judgeBreakdown)
+		return {
+			result,
+			status,
+			section: contestant?.section?.trim() || undefined,
+			isIndividual: contestant?.entryType === 'individual',
+			entry: {
+				contestantId: result.contestantId,
+				name: result.contestantName,
+				section: contestant?.section,
+				participants: contestant?.participants ?? [],
+				program: resolvedProgramByContestantId.get(result.contestantId) ?? null,
+				status: status.kind,
+				strands: splitValues(result.directDetails?.strand),
+				remarks: splitValues(result.directDetails?.remark),
+			},
+			judges: event.judges
+				.filter((judge) => assigned.includes(judge.id))
+				.map((judge) => {
+					const totals = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)?.totalsByContestant ?? {}
+					const scored = Object.prototype.hasOwnProperty.call(totals, result.contestantId)
+					return { id: judge.id, name: judge.name, scored, total: scored ? totals[result.contestantId] : null }
+				}),
+		}
+	})
+	const breakdownResult = breakdownId ? (compiled.rankings.find((result) => result.contestantId === breakdownId) ?? null) : null
 
 	// Every entry, in rank order, whatever the matrix filters (R52).
 	const exportCsv = () => {
@@ -2054,268 +2094,33 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					) : null}
 
 					{activeTab === 'matrix' ? (
-					<section className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
-						<div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
-							<div>
-								<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Compiled Scores</h2>
-								{useWeightedScores ? (
-									<p className='mt-1 text-xs text-[var(--text-secondary)]'>Final Oral Defense only: Final Score = (Group Rating x 60%) + (Individual Rating x 40%). Ratings are computed from the current rubric max scores.</p>
-								) : useDirectFinalRating ? (
-									<p className='mt-1 text-xs text-[var(--text-secondary)]'>Direct Rating: Final Rating = normalized average (AVE/GPA, NOAT, Interview), with aligned strand bonus applied to Interview points only.</p>
-								) : null}
-							</div>
-							{useDirectFinalRating && (
-								<div className='flex flex-wrap items-center gap-3 shrink-0'>
-									{filterOptions.strands.length > 0 && (
-										<select value={strandFilter} onChange={(e) => setStrandFilter(e.target.value)} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400'>
-											<option value='All'>All Strands</option>
-											{filterOptions.strands.map((s) => (
-												<option key={s} value={s}>
-													{s}
-												</option>
-											))}
-										</select>
-									)}
-									{filterOptions.remarks.length > 0 && (
-										<select value={remarkFilter} onChange={(e) => setRemarkFilter(e.target.value)} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400'>
-											<option value='All'>All Remarks</option>
-											{filterOptions.remarks.map((r) => (
-												<option key={r} value={r}>
-													{r}
-												</option>
-											))}
-										</select>
-									)}
-								</div>
-							)}
-						</div>
-						<div className='mt-4 overflow-x-auto rounded-2xl border border-[var(--border-soft)]'>
-							<table className='min-w-full border-collapse text-sm'>
-								<thead>
-									<tr className='bg-[var(--surface-muted)] text-left text-[var(--text-primary)]'>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Rank</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Contestant</th>
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>
-											<div className='flex flex-col gap-1'>
-												<span>Program</span>
-												<div className='flex items-center gap-3 text-[10px] font-normal text-[var(--text-secondary)]'>
-													<label className='flex items-center gap-1 cursor-pointer'>
-														<input
-															type='checkbox' data-testid='program-all' data-program='BSINT'
-															checked={allContestantsBSINT}
-															disabled={isSavingProgramAssignments}
-															onChange={(e) => {
-																setPendingProgramTarget(e.target.checked ? 'BSINT' : null)
-																setIsProgramPasswordModalOpen(true)
-															}}
-															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
-														/>
-														All BSINT
-													</label>
-													<label className='flex items-center gap-1 cursor-pointer'>
-														<input
-															type='checkbox' data-testid='program-all' data-program='BSCS'
-															checked={allContestantsBSCS}
-															disabled={isSavingProgramAssignments}
-															onChange={(e) => {
-																setPendingProgramTarget(e.target.checked ? 'BSCS' : null)
-																setIsProgramPasswordModalOpen(true)
-															}}
-															className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
-														/>
-														All BSCS
-													</label>
-												</div>
-											</div>
-										</th>
-										{useWeightedScores ? (
-											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Group Rating</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Individual Rating</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Final Score</th>
-											</>
-										) : useDirectFinalRating ? (
-											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>AVE/GPA</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>NOAT</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Interview</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Final Rating</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Strand</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Remark</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Additional Remark</th>
-											</>
-										) : (
-											<>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Average Score</th>
-												<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Total Score</th>
-											</>
-										)}
-										<th className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>Judges Counted</th>
-									</tr>
-								</thead>
-								<tbody>
-									{filteredRankings.map((result, index) => {
-										const currentProgram = resolvedProgramByContestantId.get(result.contestantId) ?? null
-										const rowContestant = contestantsById.get(result.contestantId)
-										const isIndividual = rowContestant?.entryType === 'individual'
-										const currentAssignedJudgeIds = assignedJudgeIdsForContestant(event, result.contestantId)
-										const assignmentDraftJudgeIds = judgeAssignmentDrafts[result.contestantId] ?? currentAssignedJudgeIds
-										const hasAssignmentChanges = !sameJudgeAssignments(currentAssignedJudgeIds, assignmentDraftJudgeIds)
-										const isEditingJudgeAssignment = editingJudgeAssignmentForContestantId === result.contestantId
-										const isSavingAssignment = savingJudgeAssignmentForContestantId === result.contestantId
-										const assignedJudgeStatus = event.judges
-											.filter((judge) => currentAssignedJudgeIds.includes(judge.id))
-											.map((judge) => {
-												const judgeBreakdown = compiled.judgeBreakdown.find((item) => item.judgeId === judge.id)
-												const hasScoredContestant = judgeBreakdown ? Object.prototype.hasOwnProperty.call(judgeBreakdown.totalsByContestant, result.contestantId) : false
-
-												return {
-													id: judge.id,
-													name: judge.name,
-													hasScoredContestant,
-												}
-											})
-
-										const hasParticipantScores = Array.isArray(result.participantScores) && result.participantScores.length > 0
-
-										return (
-											<Fragment key={result.contestantId}>
-												<tr data-testid='ranking-row' data-contestant-id={result.contestantId} data-rank={result.rank} className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3 font-medium'>#{result.rank}</td>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
-														<div className='flex items-center gap-2'>
-															<span>{result.contestantName}</span>
-															{isIndividual ? <span className='rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800'>Individual</span> : null}
-														</div>
-													</td>
-													<td className='border-b border-[var(--border-soft)] px-3 py-3'>
-														<div className='flex items-center gap-3'>
-															<label className='flex items-center gap-1 text-xs cursor-pointer'>
-																<input
-																	type='checkbox' data-testid='program-toggle' data-contestant-id={result.contestantId} data-program='BSINT'
-																	checked={currentProgram === 'BSINT'}
-																	disabled={isSavingProgramAssignments}
-																	onChange={() => toggleContestantProgram(result.contestantId, 'BSINT')}
-																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
-																/>
-																BSINT
-															</label>
-															<label className='flex items-center gap-1 text-xs cursor-pointer'>
-																<input
-																	type='checkbox' data-testid='program-toggle' data-contestant-id={result.contestantId} data-program='BSCS'
-																	checked={currentProgram === 'BSCS'}
-																	disabled={isSavingProgramAssignments}
-																	onChange={() => toggleContestantProgram(result.contestantId, 'BSCS')}
-																	className='rounded border-[var(--border-strong)] text-emerald-600 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
-																/>
-																BSCS
-															</label>
-														</div>
-													</td>
-													{useWeightedScores ? (
-														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.groupAverageScore ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.groupRating ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.individualAverageScore ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatPercent(result.individualRating ?? 0)}</td>
-															<td data-col='weighted' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.weightedScore ?? result.averageScore)}</td>
-														</>
-													) : useDirectFinalRating ? (
-														<>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.aveGpa ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.noat ?? 0)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.directDetails?.totalInterview ?? 0)}</td>
-															<td data-col='final' className='border-b border-[var(--border-soft)] px-3 py-3 font-semibold'>{formatScore(result.finalRating ?? result.averageScore)}</td>
-															<td data-col='total' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.strand || '-'}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.remark || '-'}</td>
-															<td className='border-b border-[var(--border-soft)] px-3 py-3 text-xs'>{result.directDetails?.additionalInfo || '-'}</td>
-														</>
-													) : (
-														<>
-															<td data-col='average' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.averageScore)}</td>
-															<td data-col='total' className='border-b border-[var(--border-soft)] px-3 py-3'>{formatScore(result.totalScore)}</td>
-														</>
-													)}
-													<td data-col='judges' className='border-b border-[var(--border-soft)] px-3 py-3'>{result.judgeCount}</td>
-												</tr>
-												{hasParticipantScores ? (
-													<tr data-testid='ranking-detail' data-contestant-id={result.contestantId} className={index % 2 === 0 ? 'bg-[var(--surface)]' : 'bg-[var(--surface-muted)]'}>
-														<td className='border-b border-[var(--border-soft)] px-3 py-2 text-xs text-[var(--text-secondary)]' colSpan={compiledTableColumnCount}>
-															<div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
-																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Participant Scores:</span>
-																<div className='flex flex-wrap items-center gap-2'>
-																	{result.participantScores?.map((participant, participantIndex) => {
-																		const participantRating = participantAnalyticsScore(participant)
-																		return (
-																			<span key={`${result.contestantId}-${participant.participantLabel}-${participantIndex}`} className='rounded-full border border-[var(--border-soft)] bg-[var(--surface)] px-2 py-1'>
-																				{participant.participantLabel}: {formatScore(participant.averageScore)} / {formatScore(participant.maxScore)} ({formatPercent(participantRating)})
-																			</span>
-																		)
-																	})}
-																</div>
-															</div>
-															<div className='mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3'>
-																<span className='font-semibold shrink-0 sm:min-w-[120px]'>Judge Assignment:</span>
-																<div className='relative inline-flex items-center gap-2'>
-																	<div className='flex flex-wrap items-center gap-1'>
-																		{assignedJudgeStatus.length > 0 ? (
-																			assignedJudgeStatus.map((judgeStatus) => (
-																				<span
-																					key={`${result.contestantId}-${judgeStatus.id}-status`} data-testid='assigned-judge' data-judge-id={judgeStatus.id} data-scored={judgeStatus.hasScoredContestant ? 'true' : 'false'}
-																					className={judgeStatus.hasScoredContestant ? 'rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800' : 'rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'}>
-																					{judgeStatus.name}
-																					{judgeStatus.hasScoredContestant ? '' : ' (Not scored)'}
-																				</span>
-																			))
-																		) : (
-																			<span className='rounded-full border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800'>No assigned judge</span>
-																		)}
-																	</div>
-																	<button type='button' data-testid='edit-judge' data-contestant-id={result.contestantId} onClick={() => setEditingJudgeAssignmentForContestantId((current) => (current === result.contestantId ? null : result.contestantId))} className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800'>
-																		Edit Judge
-																	</button>
-
-																	{isEditingJudgeAssignment ? (
-																		<div data-testid='judge-swap' className='absolute left-0 top-full z-20 mt-2 w-max max-w-[min(92vw,560px)] rounded-2xl border border-cyan-300 bg-white p-3 shadow-xl'>
-																			<p className='text-[11px] font-semibold uppercase tracking-wide text-cyan-900'>Swap Judges</p>
-																			<div className='mt-2 flex flex-wrap items-center gap-2'>
-																				{event.judges.map((judge) => (
-																					<label key={`${result.contestantId}-${judge.id}`} className='flex items-center gap-1 rounded-full border border-cyan-300 bg-white px-2 py-1 text-[11px] text-cyan-900'>
-																						<input type='checkbox' data-testid='judge-swap-option' data-judge-id={judge.id} checked={assignmentDraftJudgeIds.includes(judge.id)} onChange={() => toggleJudgeAssignment(result.contestantId, judge.id)} className='rounded border-cyan-400 text-cyan-700 focus:ring-cyan-500' />
-																						<span>{judge.name}</span>
-																					</label>
-																				))}
-																			</div>
-																			<div className='mt-3 flex flex-wrap items-center gap-2'>
-																				<button
-																					type='button' data-testid='judge-swap-save'
-																					onClick={() => saveJudgeAssignment(result.contestantId)}
-																					disabled={!hasAssignmentChanges || isSavingAssignment}
-																					className='rounded-full border border-cyan-700 bg-cyan-900 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60'>
-																					{isSavingAssignment ? 'Saving...' : 'Save Swap'}
-																				</button>
-																				<button type='button' onClick={() => setEditingJudgeAssignmentForContestantId(null)} disabled={isSavingAssignment} className='rounded-full border border-cyan-300 bg-white px-3 py-1 text-[11px] font-semibold text-cyan-800 transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60'>
-																					Cancel
-																				</button>
-																			</div>
-																		</div>
-																	) : null}
-																</div>
-															</div>
-														</td>
-													</tr>
-												) : null}
-											</Fragment>
-										)
-									})}
-								</tbody>
-							</table>
-						</div>
-					</section>
+						<MatrixTab
+							kind={scoring}
+							rows={matrixRows}
+							view={matrixView}
+							onFilterChange={changeMatrixFilter}
+							onPageChange={(page) => setMatrixView((previous) => ({ ...previous, page }))}
+							onShowAllChange={(showAll) => setMatrixView((previous) => ({ ...previous, showAll, page: 1 }))}
+							strandOptions={filterOptions.strands}
+							remarkOptions={filterOptions.remarks}
+							maxPossibleScore={compiled.maxPossibleScore}
+							everyProgram={{ BSINT: allContestantsBSINT, BSCS: allContestantsBSCS }}
+							savingPrograms={isSavingProgramAssignments}
+							onToggleProgram={toggleContestantProgram}
+							onSetEveryProgram={(program) => {
+								setPendingProgramTarget(program)
+								setIsProgramPasswordModalOpen(true)
+							}}
+							judges={event.judges.map((judge) => ({ id: judge.id, name: judge.name }))}
+							swapOpenId={editingJudgeAssignmentForContestantId}
+							swapDraft={editingJudgeAssignmentForContestantId ? (judgeAssignmentDrafts[editingJudgeAssignmentForContestantId] ?? null) : null}
+							swapSavingId={savingJudgeAssignmentForContestantId}
+							onOpenSwap={openJudgeSwap}
+							onCancelSwap={closeJudgeSwap}
+							onToggleSwapJudge={toggleJudgeAssignment}
+							onSaveSwap={(contestantId) => void saveJudgeAssignment(contestantId)}
+							onBreakdown={setBreakdownId}
+						/>
 					) : null}
 
 					{activeTab === 'telemetry' ? (
@@ -2540,6 +2345,15 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			</div>
 
 			<div className='print:hidden'>
+				<BreakdownDialog
+					result={breakdownResult}
+					kind={scoring}
+					program={breakdownResult ? programOf(breakdownResult.contestantId) : null}
+					status={breakdownResult ? entryStatus(breakdownResult.contestantId, assignedJudgeIdsForContestant(event, breakdownResult.contestantId), compiled.judgeBreakdown) : null}
+					rows={breakdownResult ? breakdownRows(event, breakdownResult, assignedJudgeIdsForContestant(event, breakdownResult.contestantId)) : []}
+					maxPossibleScore={compiled.maxPossibleScore}
+					onClose={() => setBreakdownId(null)}
+				/>
 				<UnlockDialog
 					open={unlockRequest !== null}
 					reason={unlockRequest?.reason}
@@ -2582,7 +2396,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4 print:hidden'>
 					<div role='dialog' aria-modal='true' data-testid='password-dialog' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
 						<h3 className='text-lg font-semibold text-[var(--text-primary)]'>Authentication Required</h3>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants.</p>
+						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants. This sets the program of every entry, including those hidden by the filters or on other pages.</p>
 						<form className='mt-4 space-y-3' onSubmit={(e) => void handleProgramPasswordSubmit(e)}>
 							<div>
 								<label className='text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]'>Password</label>
