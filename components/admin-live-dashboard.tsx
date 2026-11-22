@@ -11,7 +11,9 @@ import { RankingsTab } from '@/components/admin/rankings-tab'
 import { TelemetryTab } from '@/components/admin/telemetry-tab'
 import type { ConnectionState } from '@/components/admin/connection'
 import { EventBand } from '@/components/admin/event-band'
-import { Button } from '@/components/ui/button'
+import { Button, buttonClassName } from '@/components/ui/button'
+import Dialog from '@/components/ui/dialog'
+import Icon from '@/components/ui/icon'
 import { TabPanel, Tabs } from '@/components/ui/tabs'
 import UnlockDialog from '@/components/unlock-dialog'
 import { scoreMatrixRows, toCsv } from '@/lib/admin/csv'
@@ -60,13 +62,17 @@ interface AdminEventResponse {
 type PendingQueueFilter = 'all' | QueuedAdminSaveKind
 
 // Phase 3 Task 13: the write a 401 stopped, run once after the unlock.
+// The editor's remove buttons: the admin outline button at xs, in rose.
+const REMOVE_BUTTON = 'px-space-sm py-1 rounded bg-white hover:bg-rose-50 border border-rose-200 text-rose-700 font-label-sm text-label-sm font-medium transition-colors shadow-2xs cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60'
+
 type UnlockRetry =
 	| { kind: 'program'; assignments: Array<{ contestantId: string; programTag: ProgramLabel | null }> }
 	| { kind: 'judge'; contestantId: string; judgeIds: string[] }
 	| { kind: 'editor' }
+	| { kind: 'open-editor' }
 	| { kind: 'queue' }
 
-export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false, initialTab = 'dashboard' }: AdminLiveDashboardProps) {
+export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false, openEditor = false, initialTab = 'dashboard' }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
 	const [compiled, setCompiled] = useState(initialCompiled)
 	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
@@ -77,6 +83,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	// editor view replaces the tab panel (?update=1 in an unlocked browser). Live refreshes leave both alone.
 	const [activeTab, setActiveTab] = useState<AdminTab>(initialTab)
 	const [editorView, setEditorView] = useState(allowEventEditor)
+	// ?update=1 in a locked browser offers "Unlock to edit" (owner); after the unlock the editor is allowed.
+	const [editorAllowed, setEditorAllowed] = useState(allowEventEditor)
+	// The tab a click asked for while the editor held unsaved edits: the question is open (owner, 2026-11-22).
+	const [pendingLeave, setPendingLeave] = useState<AdminTab | null>(null)
 	// Any tab, or Back, leaves the editor view; the URL follows without a navigation.
 	const showTab = useCallback((value: string) => {
 		const tab = parseAdminTabParam(value)
@@ -93,6 +103,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [savingJudgeAssignmentForContestantId, setSavingJudgeAssignmentForContestantId] = useState<string | null>(null)
 	const [showEventEditor, setShowEventEditor] = useState(Boolean(initialOpenEditor && allowEventEditor))
 	const [eventEditorDraft, setEventEditorDraft] = useState<AdminEventEditorInput>(() => synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(initialEvent)))
+	// The draft as last loaded from the event (or saved): an open editor whose draft differs from it has unsaved edits.
+	const [editorBaseline, setEditorBaseline] = useState<AdminEventEditorInput>(eventEditorDraft)
 	const [eventEditorError, setEventEditorError] = useState<string | null>(null)
 	const [eventEditorNotice, setEventEditorNotice] = useState<string | null>(null)
 	const [isSavingEventEditor, setIsSavingEventEditor] = useState(false)
@@ -412,10 +424,12 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						if (pendingSave.kind === 'event-editor') {
 							setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
 							setEditingJudgeAssignmentForContestantId(null)
-							setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
+							const uploaded = synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event))
+							setEventEditorDraft(uploaded)
+							setEditorBaseline(uploaded)
 							setShowEventEditor(false)
 							setEventEditorError(null)
-							setEventEditorNotice('Queued published event changes uploaded. Judge submissions were reset to keep scoring consistent with the updated structure.')
+							setEventEditorNotice("Queued published event changes uploaded. Judges' scores were kept.")
 						}
 					} catch (syncError) {
 						// Phase 3 Task 13: a refusal that can pass later stays queued and stops the loop (the
@@ -739,10 +753,35 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	)
 
 	const loadEventEditorFromCurrentEvent = useCallback(() => {
-		setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event)))
+		const loaded = synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(event))
+		setEventEditorDraft(loaded)
+		setEditorBaseline(loaded)
 		setEventEditorError(null)
 		setEventEditorNotice(null)
 	}, [event])
+
+	const openEditorUnlocked = useCallback(async () => {
+		try {
+			const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, { cache: 'no-store' })
+			const responseBody = (await response.json()) as AdminEventResponse
+			if (!response.ok) throw new Error(responseBody.error ?? 'Unable to load the event.')
+			setEvent(responseBody.event)
+			setCompiled(responseBody.compiled)
+			setJudgeLinksLocked(responseBody.judgeLinksLocked === true)
+			// The editor saves every judge with its link and email, so it opens only on the unlocked event (S5).
+			if (responseBody.judgeLinksLocked === true) throw new Error('This browser is still locked; unlock it to edit the event.')
+			const loaded = synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event))
+			setEventEditorDraft(loaded)
+			setEditorBaseline(loaded)
+			setEventEditorError(null)
+			setEventEditorNotice(null)
+			setShowEventEditor(true)
+			setEditorAllowed(true)
+			setEditorView(true)
+		} catch (error) {
+			setRefreshError(error instanceof Error ? error.message : 'Unable to load the event.')
+		}
+	}, [event.id])
 
 	const saveEventEditor = useCallback(async () => {
 		setEventEditorError(null)
@@ -762,8 +801,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setJudgeLinksLocked(false)
 			setManualAssignments(buildProgramAssignmentsFromEvent(responseBody.event))
 			setEditingJudgeAssignmentForContestantId(null)
-			setEventEditorDraft(synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event)))
-			setEventEditorNotice('Published event updated. Judge submissions were reset to keep scoring consistent with the new structure.')
+			const saved = synchronizeEventEditorDraft(buildAdminEventEditorSnapshot(responseBody.event))
+			setEventEditorDraft(saved)
+			setEditorBaseline(saved)
+			setEventEditorNotice("Published event updated. Judges' scores were kept.")
 			setAdminQueueNotice(null)
 			setShowEventEditor(false)
 		} catch (error) {
@@ -967,6 +1008,19 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const scoring = scoringKind(compiled)
 	const judgesWithSaves = new Set(compiled.judgeBreakdown.filter((judge) => Object.keys(judge.totalsByContestant).length > 0).map((judge) => judge.judgeId))
 
+	// Leaving the editor view with unsaved edits asks first (owner, 2026-11-22); without edits it leaves at once.
+	const editorHasUnsavedEdits = showEventEditor && JSON.stringify(eventEditorDraft) !== JSON.stringify(editorBaseline)
+	const requestTab = (value: string) => {
+		if (editorView && editorHasUnsavedEdits) setPendingLeave(parseAdminTabParam(value))
+		else showTab(value)
+	}
+	const leaveEditor = () => {
+		const tab = pendingLeave ?? activeTab
+		setPendingLeave(null)
+		loadEventEditorFromCurrentEvent()
+		showTab(tab)
+	}
+
 	// One matrix row per ranking: its filter fields, status (R47) and assigned judges' chips (R50).
 	const splitValues = (value: string | undefined) => (value ?? '').split(' / ').map((part) => part.trim()).filter(Boolean)
 	const matrixRows: MatrixRow[] = compiled.rankings.map((result) => {
@@ -1013,7 +1067,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 
 	return (
 		<div className='theme-admin min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
-			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={showTab}>
+			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={requestTab}>
 				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} />
 				{/* SCREEN VIEW */}
 				<main className='w-full pt-28 print:hidden'>
@@ -1087,16 +1141,31 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</section>
 					) : null}
 
+					{openEditor && !editorAllowed ? (
+						<section aria-label='Edit the event' className='rounded-xl border border-slate-200 bg-white p-space-lg shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-space-md'>
+							<div>
+								<h2 className='font-headline-sm text-headline-sm text-slate-900 font-bold'>Edit the published event</h2>
+								<p className='font-body-sm text-body-sm text-slate-600 mt-0.5'>This link opens the event editor. Editing needs the update password.</p>
+							</div>
+							<Button variant='admin-primary' icon='lock' data-testid='unlock-to-edit' className='self-start sm:self-auto' onClick={() => askToUnlock('Editing the published event needs the update password.', { kind: 'open-editor' })}>
+								Unlock to edit
+							</Button>
+						</section>
+					) : null}
+
 					{editorView ? (
 						<section data-testid='event-editor' className='bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'>
 							<div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
 								<div>
-									<h2 className='text-xl font-semibold text-[var(--text-primary)]'>Edit After Publish</h2>
-									<p className='mt-1 text-sm text-[var(--text-secondary)]'>Edit judges, rubric criteria, contestants/participants, presentation slots{isDirectRatingEvent ? '' : ', and rubric legend'} directly from this dashboard.</p>
-									<p className='mt-2 text-xs text-amber-700'>Saving this editor resets all current judge submissions so scoring stays consistent with the new structure.</p>
+									<h2 className='font-headline-md text-headline-md text-slate-900 font-bold'>Edit After Publish</h2>
+									<p className='mt-1 font-body-sm text-body-sm text-slate-600'>Edit judges, rubric criteria, contestants/participants, presentation slots{isDirectRatingEvent ? '' : ', and rubric legend'} directly from this dashboard.</p>
+									<p className='mt-2 flex items-start gap-space-xs font-body-sm text-body-sm text-slate-600'>
+										<Icon name='info' className='text-[16px] text-sky-600 mt-0.5' />
+										<span>Saving keeps judges&apos; scores for entries and criteria that remain; scores for removed ones are deleted.</span>
+									</p>
 								</div>
 								<div className='flex flex-wrap items-center gap-2'>
-									<Button variant='admin-outline' icon='arrow_back' data-testid='editor-back' onClick={() => showTab(activeTab)}>
+									<Button variant='admin-outline' icon='arrow_back' data-testid='editor-back' onClick={() => requestTab(activeTab)}>
 										Back to {ADMIN_TAB_LABELS[activeTab]}
 									</Button>
 									<button
@@ -1107,24 +1176,24 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												loadEventEditorFromCurrentEvent()
 											}
 										}}
-										className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+										className={buttonClassName('admin-outline')}>
 										{showEventEditor ? 'Hide Editor' : 'Open Editor Fields'}
 									</button>
-									<button type='button' onClick={loadEventEditorFromCurrentEvent} className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+									<button type='button' onClick={loadEventEditorFromCurrentEvent} className={buttonClassName('admin-outline')}>
 										Reload Snapshot
 									</button>
 								</div>
 							</div>
 
-							{eventEditorError ? <p data-testid='editor-error' className='mt-4 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{eventEditorError}</p> : null}
-							{eventEditorNotice ? <p data-testid='editor-notice' className='mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>{eventEditorNotice}</p> : null}
+							{eventEditorError ? <p data-testid='editor-error' className='mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 font-body-sm text-body-sm text-rose-800'>{eventEditorError}</p> : null}
+							{eventEditorNotice ? <p data-testid='editor-notice' className='mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 font-body-sm text-body-sm text-emerald-800'>{eventEditorNotice}</p> : null}
 
 							{showEventEditor ? (
 								<div className='mt-4 space-y-6'>
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Event Details</h3>
+									<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
+										<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Event Details</h3>
 										<div className='mt-3 grid gap-3 sm:grid-cols-2'>
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='font-body-sm text-body-sm text-slate-500'>
 												Title
 												<input
 													type='text'
@@ -1133,11 +1202,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														const value = event.target.value
 														updateEventEditorDraft((previous) => ({ ...previous, title: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 												/>
 											</label>
 
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='font-body-sm text-body-sm text-slate-500'>
 												Created By
 												<input
 													type='text'
@@ -1146,11 +1215,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														const value = event.target.value
 														updateEventEditorDraft((previous) => ({ ...previous, createdBy: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 												/>
 											</label>
 
-											<label className='text-xs text-[var(--text-secondary)]'>
+											<label className='font-body-sm text-body-sm text-slate-500'>
 												Scoring Type
 												<select
 													value={eventEditorDraft.eventScoringType ?? 'standard'}
@@ -1158,13 +1227,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														const value = event.target.value === 'final-oral-defense' ? 'final-oral-defense' : 'standard'
 														updateEventEditorDraft((previous) => ({ ...previous, eventScoringType: value }))
 													}}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+													className='mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'>
 													<option value='standard'>Standard</option>
 													<option value='final-oral-defense'>Final Oral Defense</option>
 												</select>
 											</label>
 
-											<label className='sm:col-span-2 text-xs text-[var(--text-secondary)]'>
+											<label className='sm:col-span-2 font-body-sm text-body-sm text-slate-500'>
 												Description
 												<textarea
 													value={eventEditorDraft.description ?? ''}
@@ -1173,16 +1242,16 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														updateEventEditorDraft((previous) => ({ ...previous, description: value }))
 													}}
 													rows={3}
-													className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+													className='mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 												/>
 											</label>
 										</div>
 									</section>
 
 									{!isDirectRatingEvent ? (
-										<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+										<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
 											<div className='flex items-center justify-between gap-2'>
-												<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Legend</h3>
+												<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Rubric Legend</h3>
 												<div className='flex gap-2'>
 													<button
 														type='button'
@@ -1192,7 +1261,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																rubricLegend: [...normalizeRubricLegend(previous.rubricLegend), { score: 0, label: '' }],
 															}))
 														}}
-														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+														className={buttonClassName('admin-outline', 'xs')}>
 														Add Legend Row
 													</button>
 													<button
@@ -1200,7 +1269,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														onClick={() => {
 															updateEventEditorDraft((previous) => ({ ...previous, rubricLegend: normalizeRubricLegend(undefined) }))
 														}}
-														className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+														className={buttonClassName('admin-outline', 'xs')}>
 														Reset Default
 													</button>
 												</div>
@@ -1220,7 +1289,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, score: Number.isFinite(numericScore) ? numericScore : 0 } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<input
 															type='text'
@@ -1232,7 +1301,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).map((item, itemIndex) => (itemIndex === legendIndex ? { ...item, label: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<button
 															type='button'
@@ -1242,7 +1311,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	rubricLegend: normalizeRubricLegend(previous.rubricLegend).filter((_, itemIndex) => itemIndex !== legendIndex),
 																}))
 															}}
-															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+															className={REMOVE_BUTTON}>
 															Remove
 														</button>
 													</div>
@@ -1251,9 +1320,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</section>
 									) : null}
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Judges</h3>
+											<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Judges</h3>
 											<button
 												type='button'
 												onClick={() => {
@@ -1262,7 +1331,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														judges: [...previous.judges, { id: createEditorId(), name: '', email: '' }],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className={buttonClassName('admin-outline', 'xs')}>
 												Add Judge
 											</button>
 										</div>
@@ -1281,7 +1350,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, name: value } : item)),
 															}))
 														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 													/>
 													<input
 														type='text'
@@ -1294,7 +1363,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																judges: previous.judges.map((item, itemIndex) => (itemIndex === judgeIndex ? { ...item, email: value } : item)),
 															}))
 														}}
-														className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+														className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 													/>
 													<button
 														type='button'
@@ -1304,7 +1373,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																judges: previous.judges.filter((_, itemIndex) => itemIndex !== judgeIndex),
 															}))
 														}}
-														className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+														className={REMOVE_BUTTON}>
 														Remove
 													</button>
 												</div>
@@ -1312,9 +1381,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Contestants / Entries</h3>
+											<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Contestants / Entries</h3>
 											<button
 												type='button'
 												onClick={() => {
@@ -1323,14 +1392,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														contestants: [...previous.contestants, { id: createEditorId(), name: '', entryType: 'group', participants: [], programTag: null, noatScore: null }],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className={buttonClassName('admin-outline', 'xs')}>
 												Add Entry
 											</button>
 										</div>
 
 										<div className='mt-3 space-y-3'>
 											{eventEditorDraft.contestants.map((contestant, contestantIndex) => (
-												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+												<div key={contestant.id ?? `contestant-${contestantIndex}`} className='rounded-lg border border-slate-200 bg-white p-space-sm space-y-2'>
 													<div className='grid gap-2 sm:grid-cols-[1fr_120px_120px_1fr_1fr_100px_auto]'>
 														<input
 															type='text'
@@ -1343,7 +1412,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, name: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<select
 															value={contestant.entryType === 'individual' ? 'individual' : 'group'}
@@ -1362,7 +1431,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'>
 															<option value='group'>Group</option>
 															<option value='individual'>Individual</option>
 														</select>
@@ -1375,7 +1444,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, programTag: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'>
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'>
 															<option value=''>Program</option>
 															<option value='BSINT'>BSINT</option>
 															<option value='BSCS'>BSCS</option>
@@ -1392,7 +1461,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																}))
 															}}
 															list='editor-section-options'
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<input
 															type='text'
@@ -1405,7 +1474,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, academicTrack: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<input
 															type='text'
@@ -1418,7 +1487,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, laptopAvailable: value } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<input
 															type='number'
@@ -1435,7 +1504,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.map((item, itemIndex) => (itemIndex === contestantIndex ? { ...item, noatScore: nextNoatScore } : item)),
 																}))
 															}}
-															className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-right text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='text-right rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<button
 															type='button'
@@ -1445,13 +1514,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	contestants: previous.contestants.filter((_, itemIndex) => itemIndex !== contestantIndex),
 																}))
 															}}
-															className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+															className={REMOVE_BUTTON}>
 															Remove
 														</button>
 													</div>
 
 													{contestant.entryType !== 'individual' ? (
-														<label className='block text-xs text-[var(--text-secondary)]'>
+														<label className='block font-label-sm text-label-sm text-slate-500'>
 															Participants (comma or new line separated)
 															<textarea
 																value={Array.isArray(contestant.participants) ? contestant.participants.join('\n') : ''}
@@ -1463,7 +1532,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	}))
 																}}
 																rows={2}
-																className='mt-1 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																className='mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 															/>
 														</label>
 													) : null}
@@ -1477,9 +1546,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</datalist>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
+									<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
 										<div className='flex items-center justify-between gap-2'>
-											<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Rubric Criteria</h3>
+											<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Rubric Criteria</h3>
 											<button
 												type='button'
 												onClick={() => {
@@ -1495,22 +1564,22 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														],
 													}))
 												}}
-												className='rounded-full border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'>
+												className={buttonClassName('admin-outline', 'xs')}>
 												Add Criterion
 											</button>
 										</div>
-										<p className='mt-2 text-xs text-[var(--text-secondary)]'>Subcriteria here are shared. Updates are applied automatically to all students/members.</p>
-										<p className='mt-1 text-xs text-[var(--text-secondary)]'>
-											Total Rubric Score: <span className='font-semibold text-[var(--text-primary)]'>{formatScore(eventEditorRubricTotalScore)}</span>
+										<p className='mt-2 font-body-sm text-body-sm text-slate-500'>Subcriteria here are shared. Updates are applied automatically to all students/members.</p>
+										<p className='mt-1 font-body-sm text-body-sm text-slate-500'>
+											Total Rubric Score: <span className='font-semibold text-slate-900'>{formatScore(eventEditorRubricTotalScore)}</span>
 										</p>
-										<p className='mt-1 text-[11px] text-[var(--text-muted)]'>Totals shown here are based on the visible shared subcriteria values.</p>
+										<p className='mt-1 font-label-sm text-label-sm text-slate-500'>Totals shown here are based on the visible shared subcriteria values.</p>
 
 										<div className='mt-3 space-y-3'>
 											{eventEditorDraft.criteria.map((criterion, criterionIndex) => {
 												const criterionTotalScore = criterionTotalScoreForEditor(criterion)
 
 												return (
-													<div key={criterion.id ?? `criterion-${criterionIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
+													<div key={criterion.id ?? `criterion-${criterionIndex}`} className='rounded-lg border border-slate-200 bg-white p-space-sm space-y-2'>
 														<div className='grid gap-2 sm:grid-cols-[1fr_auto_auto]'>
 															<input
 																type='text'
@@ -1523,9 +1592,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		criteria: previous.criteria.map((item, itemIndex) => (itemIndex === criterionIndex ? { ...item, name: value } : item)),
 																	}))
 																}}
-																className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 															/>
-															<p className='inline-flex items-center justify-center rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-xs font-semibold text-[var(--text-primary)]'>Total Score: {formatScore(criterionTotalScore)}</p>
+															<p className='inline-flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-label-sm text-label-sm font-semibold text-slate-800'>Total Score: {formatScore(criterionTotalScore)}</p>
 															<button
 																type='button'
 																onClick={() => {
@@ -1534,7 +1603,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		criteria: previous.criteria.filter((_, itemIndex) => itemIndex !== criterionIndex),
 																	}))
 																}}
-																className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																className={REMOVE_BUTTON}>
 																Remove Criterion
 															</button>
 														</div>
@@ -1560,7 +1629,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																		className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 																	/>
 																	<input
 																		type='number'
@@ -1581,7 +1650,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+																		className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 																	/>
 																	<button
 																		type='button'
@@ -1598,7 +1667,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																				),
 																			}))
 																		}}
-																		className='rounded-full border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100'>
+																		className={REMOVE_BUTTON}>
 																		Remove
 																	</button>
 																</div>
@@ -1619,7 +1688,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																		),
 																	}))
 																}}
-																className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-3 py-1 text-xs font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)]'>
+																className={buttonClassName('admin-outline', 'xs')}>
 																Add Subcriterion
 															</button>
 														</div>
@@ -1629,17 +1698,17 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 										</div>
 									</section>
 
-									<section className='rounded-2xl border border-[var(--border-soft)] bg-[var(--surface-muted)] p-4'>
-										<h3 className='text-sm font-semibold uppercase tracking-wide text-[var(--text-secondary)]'>Presentation Assignments</h3>
-										<p className='mt-1 text-xs text-[var(--text-secondary)]'>Slots are auto-synced with entries. Edit slot labels and assigned judges below.</p>
+									<section className='bg-slate-50 border border-slate-200 p-space-md rounded-lg'>
+										<h3 className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Presentation Assignments</h3>
+										<p className='mt-1 font-body-sm text-body-sm text-slate-500'>Slots are auto-synced with entries. Edit slot labels and assigned judges below.</p>
 										<div className='mt-3 space-y-3'>
 											{(eventEditorDraft.presentationSlots ?? []).map((slot, slotIndex) => {
 												const contestantName = eventEditorDraft.contestants.find((contestant) => contestant.id === slot.contestantId)?.name || `Entry ${slotIndex + 1}`
 
 												return (
-													<div key={slot.id ?? `slot-${slotIndex}`} className='rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] p-3 space-y-2'>
-														<p className='text-xs text-[var(--text-secondary)]'>
-															Entry: <span className='font-semibold text-[var(--text-primary)]'>{contestantName}</span>
+													<div key={slot.id ?? `slot-${slotIndex}`} className='rounded-lg border border-slate-200 bg-white p-space-sm space-y-2'>
+														<p className='font-body-sm text-body-sm text-slate-500'>
+															Entry: <span className='font-semibold text-slate-900'>{contestantName}</span>
 														</p>
 														<input
 															type='text'
@@ -1652,7 +1721,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	presentationSlots: (previous.presentationSlots ?? []).map((item, itemIndex) => (itemIndex === slotIndex ? { ...item, label: value } : item)),
 																}))
 															}}
-															className='w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none ring-emerald-500 focus:ring-2'
+															className='w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 
 														<div className='flex flex-wrap gap-2'>
@@ -1665,7 +1734,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																const isChecked = (slot.judgeIds ?? []).includes(judgeId)
 
 																return (
-																	<label key={`${judgeId}-${judgeIndex}`} className='inline-flex items-center gap-2 rounded-full border border-[var(--border-soft)] bg-[var(--surface-muted)] px-3 py-1 text-xs text-[var(--text-primary)]'>
+																	<label key={`${judgeId}-${judgeIndex}`} className='inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1 font-label-sm text-label-sm text-slate-800'>
 																		<input
 																			type='checkbox'
 																			checked={isChecked}
@@ -1711,7 +1780,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												void saveEventEditor()
 											}}
 											disabled={isSavingEventEditor}
-											className='rounded-full border border-emerald-700 bg-emerald-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60'>
+											className={buttonClassName('admin-primary')}>
 											{isSavingEventEditor ? 'Saving Published Event...' : 'Save Published Event Changes'}
 										</button>
 										<button
@@ -1721,7 +1790,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 												setEventEditorError(null)
 											}}
 											disabled={isSavingEventEditor}
-											className='rounded-full border border-[var(--border-strong)] bg-[var(--surface-muted)] px-5 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface)] disabled:cursor-not-allowed disabled:opacity-60'>
+											className={buttonClassName('admin-tonal')}>
 											Cancel
 										</button>
 									</div>
@@ -1881,6 +1950,26 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			</div>
 
 			<div className='print:hidden'>
+				<Dialog
+					open={pendingLeave !== null}
+					onClose={() => setPendingLeave(null)}
+					data-testid='editor-leave-confirm'
+					eyebrow='Unsaved changes'
+					title='Leave the editor?'
+					className='max-w-md'
+					actions={
+						<>
+							<Button variant='admin-tonal' data-testid='editor-leave-stay' onClick={() => setPendingLeave(null)}>
+								Stay in the editor
+							</Button>
+							<Button variant='admin-confirm' data-testid='editor-leave-go' onClick={leaveEditor}>
+								Leave without saving
+							</Button>
+						</>
+					}
+				>
+					<p className='font-body-sm text-body-sm text-slate-700'>Your changes to the event are not saved. Leaving the editor drops them.</p>
+				</Dialog>
 				<BreakdownDialog
 					result={breakdownResult}
 					kind={scoring}
@@ -1914,6 +2003,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 								} else if (retry.kind === 'judge') {
 									setJudgeAssignmentDrafts((previous) => ({ ...previous, [retry.contestantId]: retry.judgeIds }))
 									await saveJudgeAssignment(retry.contestantId, retry.judgeIds)
+								} else if (retry.kind === 'open-editor') {
+									await openEditorUnlocked()
 								} else if (retry.kind === 'editor') {
 									await saveEventEditor()
 								} else if (!queueSynced) {
