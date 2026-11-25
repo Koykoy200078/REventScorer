@@ -48,15 +48,22 @@ export function scoreMatrixRows(
 	const rows: CsvCell[][] = [['Rank', 'Entry', 'Section', 'Program', ...kindHeaders, 'Judges', 'Judges saved', 'Status']]
 
 	for (const result of [...compiled.rankings].sort((left, right) => left.rank - right.rank)) {
+		// The matrix's own fallbacks (B61): a part not computed yet shows 0.00, the final figure falls back to the average.
 		const kindCells: CsvCell[] =
 			kind === 'weighted'
-				? [figure(result.groupAverageScore), figure(result.groupRating), figure(result.individualAverageScore), figure(result.individualRating), figure(result.weightedScore)]
+				? [
+						figure(result.groupAverageScore ?? 0),
+						figure(result.groupRating ?? 0),
+						figure(result.individualAverageScore ?? 0),
+						figure(result.individualRating ?? 0),
+						figure(result.weightedScore ?? result.averageScore),
+					]
 				: kind === 'direct'
 					? [
-							figure(result.directDetails?.aveGpa),
-							figure(result.directDetails?.noat),
-							figure(result.directDetails?.totalInterview),
-							figure(result.finalRating),
+							figure(result.directDetails?.aveGpa ?? 0),
+							figure(result.directDetails?.noat ?? 0),
+							figure(result.directDetails?.totalInterview ?? 0),
+							figure(result.finalRating ?? result.averageScore),
 							figure(result.totalScore),
 							result.directDetails?.strand ?? '',
 							result.directDetails?.remark ?? '',

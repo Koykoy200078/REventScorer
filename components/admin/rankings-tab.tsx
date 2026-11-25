@@ -68,7 +68,8 @@ export function RankingsTab({
 }) {
 	const [showAll, setShowAll] = useState<Record<string, boolean>>({})
 	const toggle = (key: string) => setShowAll((previous) => ({ ...previous, [key]: !previous[key] }))
-	const figureLabel = kind === 'direct' ? 'Final rating' : kind === 'weighted' ? 'Final score' : 'Average'
+	// R48: "Final score" for weighted and standard events, "Final rating" for direct ones (B61).
+	const figureLabel = kind === 'direct' ? 'Final rating' : 'Final score'
 	const programs = (['BSINT', 'BSCS'] as const).filter((program) => teams[program].length > 0 || participants[program].length > 0 || subCriteria[program].length > 0)
 
 	return (
