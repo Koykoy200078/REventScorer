@@ -831,6 +831,7 @@ export function RatingSheet() {
 								type='number'
 								min={0}
 								step='0.01'
+								aria-label='Aligned strand bonus points'
 								value={directRatingConfig.strandBonus.singleAlignedBonusPoints}
 								onChange={(event) => updateAlignedBonusPoints(event.target.value)}
 								className={cx(FIELD_STRONG, 'w-24 text-right px-2 py-1')}

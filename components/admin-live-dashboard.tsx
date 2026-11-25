@@ -1318,6 +1318,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													<div key={`legend-${legendIndex}`} className='grid gap-2 sm:grid-cols-[120px_1fr_auto]'>
 														<input
 															type='number'
+															aria-label={`Legend score ${legendIndex + 1}`}
 															step='1'
 															value={legendItem.score}
 															onChange={(event) => {
@@ -1331,6 +1332,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 														/>
 														<input
 															type='text'
+															aria-label={`Legend meaning ${legendIndex + 1}`}
 															value={legendItem.label}
 															onChange={(event) => {
 																const value = event.target.value
@@ -1453,6 +1455,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															className='rounded-lg border border-slate-200 bg-white px-3 py-2 font-body-sm text-body-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500'
 														/>
 														<select
+															aria-label={`Entry type of ${contestant.name || `entry ${contestantIndex + 1}`}`}
 															value={contestant.entryType === 'individual' ? 'individual' : 'group'}
 															onChange={(event) => {
 																const value = event.target.value === 'individual' ? 'individual' : 'group'
@@ -1474,6 +1477,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 															<option value='individual'>Individual</option>
 														</select>
 														<select
+															aria-label={`Program of ${contestant.name || `entry ${contestantIndex + 1}`}`}
 															value={contestant.programTag ?? ''}
 															onChange={(event) => {
 																const value = event.target.value === 'BSINT' || event.target.value === 'BSCS' ? event.target.value : null
@@ -1671,6 +1675,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 																	/>
 																	<input
 																		type='number'
+																		aria-label={`Maximum score of ${subCriterion.name || `sub-criterion ${subCriterionIndex + 1}`}`}
 																		step='0.01'
 																		min='0'
 																		value={subCriterion.maxScore}
