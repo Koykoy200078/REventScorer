@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useId, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 
 import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
 import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput, EventProgramTag } from '@/lib/types'
 import { buttonClassName } from '@/components/ui/button'
-import { BODY_SM, BOX, BOX_SKY, CHECKBOX, CHIP_EMERALD, CHIP_NEUTRAL, CHIP_SKY_XS, DIALOG_PANEL, DIALOG_TEXT, DIALOG_TITLE, ERROR_BOX, ERROR_TEXT, EYEBROW, FIELD, FIELD_MONO, FIELD_STRONG, GROUP_BOX, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, LIST_BOX, OPTION_ROW, OVERLAY, PANEL, PANEL_SKY, TABLE_SHELL, TBODY_ROW, TEXT_EMERALD, TEXT_MUTED, THEAD_ROW, TH_FIRST, TH_LAST, TOGGLE_ON, WELL, WELL_SKY } from '@/components/ui/form-styles'
+import Dialog from '@/components/ui/dialog'
+import { BODY_SM, BOX, BOX_SKY, CHECKBOX, CHIP_EMERALD, CHIP_NEUTRAL, CHIP_SKY_XS, DIALOG_TEXT, ERROR_BOX, ERROR_TEXT, EYEBROW, FIELD, FIELD_MONO, FIELD_STRONG, GROUP_BOX, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, LIST_BOX, OPTION_ROW, PANEL, PANEL_SKY, TABLE_SHELL, TBODY_ROW, TEXT_EMERALD, TEXT_MUTED, THEAD_ROW, TH_FIRST, TH_LAST, TOGGLE_ON, WELL, WELL_SKY } from '@/components/ui/form-styles'
 import { cx } from '@/lib/ui/cx'
 
 type JudgeDraft = {
@@ -694,6 +695,18 @@ export function RatingSheet() {
 		}
 	}
 
+	const passwordRef = useRef<HTMLInputElement>(null)
+	const passwordFormId = useId()
+	const saveButtonRef = useRef<HTMLButtonElement>(null)
+	const cancelPassword = () => {
+		setIsPasswordModalOpen(false)
+		setUpdatePassword('')
+		setUpdatePasswordError('')
+		// B68: Save was disabled while its request ran, so it lost the focus; give it back once the box has gone.
+		requestAnimationFrame(() => {
+			if (document.activeElement === null || document.activeElement === document.body) saveButtonRef.current?.focus()
+		})
+	}
 	const handlePasswordSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
 		event.preventDefault()
 		if (!updatePassword.trim()) {
@@ -1049,6 +1062,7 @@ export function RatingSheet() {
 
 				<div className='mt-4 flex flex-wrap items-center gap-3'>
 					<button
+						ref={saveButtonRef}
 						type='button'
 						onClick={() => {
 							void publishRatingSheet()
@@ -1092,47 +1106,48 @@ export function RatingSheet() {
 				</section>
 			) : null}
 
-			{isPasswordModalOpen ? (
-				<div className={cx(OVERLAY, 'fixed inset-0 z-50 flex items-center justify-center')}>
-					<div role='dialog' aria-modal='true' className={cx(DIALOG_PANEL, 'w-full max-w-md')}>
-						<h3 className={DIALOG_TITLE}>Authentication Required</h3>
-						<p className={cx(DIALOG_TEXT, 'mt-1')}>{editEventId ? 'Enter the update password to edit this event.' : 'Enter the update password to publish this rating sheet.'}</p>
-						<form className='mt-4 space-y-3' onSubmit={handlePasswordSubmit}>
-							<div>
-								<label className={EYEBROW}>Password</label>
-								<input
-									type='password'
-									value={updatePassword}
-									onChange={(e) => {
-										setUpdatePassword(e.target.value)
-										if (updatePasswordError) setUpdatePasswordError('')
-									}}
-									className={cx(FIELD, 'mt-2 w-full px-3 py-2')}
-									autoFocus
-									required
-								/>
-							</div>
-							{updatePasswordError ? <p className={ERROR_TEXT}>{updatePasswordError}</p> : null}
-							<div className='flex flex-wrap justify-end gap-2 pt-2'>
-								<button
-									type='button'
-									onClick={() => {
-										setIsPasswordModalOpen(false)
-										setUpdatePassword('')
-										setUpdatePasswordError('')
-									}}
-									className={buttonClassName('admin-tonal')}
-								>
-									Cancel
-								</button>
-								<button type='submit' disabled={isVerifyingPassword} className={buttonClassName('admin-confirm')}>
-									{isVerifyingPassword ? 'Checking...' : 'Confirm'}
-								</button>
-							</div>
-						</form>
-					</div>
-				</div>
-			) : null}
+			{/* B68: the shared Dialog (a named dialog, a labelled field, Escape, a focus trap and focus return). */}
+			<Dialog
+				open={isPasswordModalOpen}
+				onClose={cancelPassword}
+				title='Authentication Required'
+				initialFocusRef={passwordRef}
+				className='max-w-md'
+				actions={
+					<>
+						<button type='button' onClick={cancelPassword} className={buttonClassName('admin-tonal')}>
+							Cancel
+						</button>
+						<button type='submit' form={passwordFormId} disabled={isVerifyingPassword} className={buttonClassName('admin-confirm')}>
+							{isVerifyingPassword ? 'Checking...' : 'Confirm'}
+						</button>
+					</>
+				}
+			>
+				<form id={passwordFormId} className='flex flex-col gap-space-sm' onSubmit={handlePasswordSubmit}>
+					<p className={DIALOG_TEXT}>{editEventId ? 'Enter the update password to edit this event.' : 'Enter the update password to publish this rating sheet.'}</p>
+					<label className={cx(EYEBROW, 'flex flex-col gap-space-xs')}>
+						Password
+						<input
+							ref={passwordRef}
+							type='password'
+							autoComplete='current-password'
+							value={updatePassword}
+							onChange={(e) => {
+								setUpdatePassword(e.target.value)
+								if (updatePasswordError) setUpdatePasswordError('')
+							}}
+							className={cx(FIELD, 'w-full px-3 py-2 normal-case tracking-normal font-normal')}
+							required
+						/>
+					</label>
+					{updatePasswordError ? (
+						<p role='alert' className={ERROR_TEXT}>
+							{updatePasswordError}
+						</p>
+					) : null}
+				</form>
+			</Dialog>
 		</section>
 	)
 }

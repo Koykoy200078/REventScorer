@@ -2,7 +2,7 @@
 
 import { saveAs } from 'file-saver'
 import { useRouter } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
 import { BreakdownDialog } from '@/components/admin/breakdown-dialog'
@@ -611,6 +611,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		[compiled.rankings, saveProgramAssignments],
 	)
 
+	const programPasswordRef = useRef<HTMLInputElement>(null)
+	const programPasswordFormId = useId()
+	const cancelProgramPassword = () => {
+		setIsProgramPasswordModalOpen(false)
+		setProgramPassword('')
+		setProgramPasswordError('')
+		setPendingProgramTarget(null)
+	}
 	const handleProgramPasswordSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault()
 		if (!programPassword.trim()) {
@@ -2049,52 +2057,51 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				/>
 			</div>
 
-			{isProgramPasswordModalOpen ? (
-				<div className='fixed inset-0 z-[100] flex items-center justify-center bg-black/40 px-4 print:hidden'>
-					<div role='dialog' aria-modal='true' data-testid='password-dialog' className='w-full max-w-md rounded-2xl bg-[var(--surface)] p-6 shadow-2xl'>
-						<h3 className='text-lg font-semibold text-[var(--text-primary)]'>Authentication Required</h3>
-						<p className='mt-1 text-sm text-[var(--text-secondary)]'>Enter the update password to apply changes to all contestants. This sets the program of every entry, including those hidden by the filters or on other pages.</p>
-						<form className='mt-4 space-y-3' onSubmit={(e) => void handleProgramPasswordSubmit(e)}>
-							<div>
-								<label className='text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]'>Password</label>
-								<input
-									type='password' data-testid='password-input'
-									value={programPassword}
-									onChange={(e) => {
-										setProgramPassword(e.target.value)
-										if (programPasswordError) setProgramPasswordError('')
-									}}
-									className='mt-2 w-full rounded-xl border border-[var(--border-soft)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none focus:ring-1 focus:ring-[var(--border-focus)]'
-									autoFocus
-									required
-								/>
-							</div>
-							{programPasswordError ? <p data-testid='password-error' className='text-sm text-rose-600'>{programPasswordError}</p> : null}
-							<div className='flex flex-wrap justify-end gap-2 pt-2'>
-								<button
-									type='button' data-testid='password-cancel'
-									onClick={() => {
-										setIsProgramPasswordModalOpen(false)
-										setProgramPassword('')
-										setProgramPasswordError('')
-										setPendingProgramTarget(null)
-									}}
-									className='rounded-full border border-[var(--border-strong)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition hover:bg-[var(--surface-muted)]'
-								>
-									Cancel
-								</button>
-								<button
-									type='submit' data-testid='password-submit'
-									disabled={isVerifyingProgramPassword}
-									className='rounded-full bg-emerald-600 px-6 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60'
-								>
-									{isVerifyingProgramPassword ? 'Verifying...' : 'Verify'}
-								</button>
-							</div>
-						</form>
-					</div>
-				</div>
-			) : null}
+			{/* B68: the shared Dialog (a named dialog, a labelled field, Escape, a focus trap and focus return). */}
+			<Dialog
+				open={isProgramPasswordModalOpen}
+				onClose={cancelProgramPassword}
+				title='Authentication Required'
+				initialFocusRef={programPasswordRef}
+				className='max-w-md'
+				overlayClassName='print:hidden'
+				data-testid='password-dialog'
+				actions={
+					<>
+						<Button variant='admin-tonal' data-testid='password-cancel' onClick={cancelProgramPassword}>
+							Cancel
+						</Button>
+						<Button variant='admin-confirm' type='submit' form={programPasswordFormId} data-testid='password-submit' disabled={isVerifyingProgramPassword}>
+							{isVerifyingProgramPassword ? 'Verifying...' : 'Verify'}
+						</Button>
+					</>
+				}
+			>
+				<form id={programPasswordFormId} className='flex flex-col gap-space-sm' onSubmit={(e) => void handleProgramPasswordSubmit(e)}>
+					<p className='font-body-sm text-body-sm text-slate-600'>Enter the update password to apply changes to all contestants. This sets the program of every entry, including those hidden by the filters or on other pages.</p>
+					<label className='flex flex-col gap-space-xs font-label-md text-label-md text-slate-700'>
+						Password
+						<input
+							ref={programPasswordRef}
+							type='password'
+							data-testid='password-input'
+							autoComplete='current-password'
+							value={programPassword}
+							onChange={(e) => {
+								setProgramPassword(e.target.value)
+								if (programPasswordError) setProgramPasswordError('')
+							}}
+							className='w-full px-space-md py-2 rounded-lg bg-white border border-slate-200 text-slate-900 font-body-md text-body-md focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500'
+							required
+						/>
+					</label>
+					{programPasswordError ? (
+						<p data-testid='password-error' role='alert' className='font-body-sm text-body-sm text-rose-600'>
+							{programPasswordError}
+						</p>
+					) : null}
+				</form>
+			</Dialog>
 		</div>
 	)
 }
