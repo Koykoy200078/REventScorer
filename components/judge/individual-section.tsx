@@ -96,7 +96,7 @@ export function IndividualSection({
 			<div data-testid='member-group' data-member-label={examinee.memberLabel} className='flex flex-col gap-space-md'>
 				<Card variant='unified-header'>
 					<div className='flex items-center gap-space-md min-w-0'>
-						<div aria-hidden className='w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-headline-sm text-headline-sm font-bold shadow-xs shrink-0'>
+						<div aria-hidden className='w-9 h-9 rounded-lg bg-emerald-700 text-white flex items-center justify-center font-headline-sm text-headline-sm font-bold shadow-xs shrink-0'>
 							A
 						</div>
 						<div className='min-w-0'>

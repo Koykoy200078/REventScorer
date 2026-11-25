@@ -33,7 +33,7 @@ const BUTTON_RECIPES = {
 		// disabled classes, so it does not fade.
 		lg: {
 			className:
-				'px-space-md py-2.5 rounded-lg bg-emerald-600 text-white font-label-md text-label-md font-bold hover:bg-emerald-700 active:scale-[0.99] transition-all flex items-center gap-1.5 shadow-md ring-2 ring-emerald-600/20',
+				'px-space-md py-2.5 rounded-lg bg-emerald-700 text-white font-label-md text-label-md font-bold hover:bg-emerald-800 active:scale-[0.99] transition-all flex items-center gap-1.5 shadow-md ring-2 ring-emerald-600/20',
 			icon: 'text-[18px]',
 			disabled: 'disabled:cursor-not-allowed',
 		},
@@ -137,13 +137,13 @@ const BUTTON_RECIPES = {
 		// P-4, A2c6861 and A37: header and toolbar primary.
 		sm: {
 			className:
-				'flex items-center gap-space-xs px-space-md py-space-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-label-md text-label-md font-semibold transition-colors shadow-xs',
+				'flex items-center gap-space-xs px-space-md py-space-xs rounded-lg bg-emerald-700 text-white hover:bg-emerald-800 font-label-md text-label-md font-semibold transition-colors shadow-xs',
 			icon: 'text-[16px]',
 		},
 		// P-6, A694: table row primary.
 		xs: {
 			className:
-				'px-space-sm py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-label-sm text-label-sm font-semibold transition-colors shadow-2xs',
+				'px-space-sm py-1 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-label-sm text-label-sm font-semibold transition-colors shadow-2xs',
 			icon: 'text-[15px]',
 		},
 	},
@@ -151,7 +151,7 @@ const BUTTON_RECIPES = {
 		// P-5, A1151: modal confirm.
 		sm: {
 			className:
-				'px-space-md py-space-xs rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-label-md text-label-md font-semibold transition-colors shadow-2xs',
+				'px-space-md py-space-xs rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-label-md text-label-md font-semibold transition-colors shadow-2xs',
 			icon: 'text-[16px]',
 		},
 	},

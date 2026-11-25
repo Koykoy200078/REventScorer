@@ -90,7 +90,7 @@ export default function UnlockDialog({ open, onUnlocked, onCancel, reason }: Unl
 						form={formId}
 						data-testid='unlock-submit'
 						disabled={isChecking}
-						className='px-space-md py-space-xs rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-label-md text-label-md font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60'
+						className='px-space-md py-space-xs rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-label-md text-label-md font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60'
 					>
 						{isChecking ? 'Checking...' : 'Unlock'}
 					</button>

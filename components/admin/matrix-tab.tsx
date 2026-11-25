@@ -245,7 +245,7 @@ export function MatrixTab({
 					<DataTableHeaderCell className='w-40'>
 						<span className='block'>Program</span>
 						<span className='mt-1 flex flex-wrap items-center gap-x-space-sm gap-y-0.5 normal-case tracking-normal font-normal text-slate-500'>
-							<span>Set every entry&apos;s program:</span>
+							<span className='text-slate-600'>Set every entry&apos;s program:</span>
 							{(['BSINT', 'BSCS'] as const).map((program) => (
 								<label key={program} className='flex items-center gap-1 cursor-pointer'>
 									<input

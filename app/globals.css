@@ -34,8 +34,8 @@
 	--color-on-tertiary-fixed-variant: #065f46;
 	--color-outline: #cbd5e1;
 	--color-outline-variant: #e2e8f0;
-	--color-primary: #059669;
-	--color-primary-container: #10b981;
+	--color-primary: #047857; /* B71 (owner 2026-11-26): emerald-700, white on it is 5.5:1 (the guide's emerald-600 was 3.77:1) */
+	--color-primary-container: #065f46; /* B71: emerald-800, the hover of primary and text on a primary tint */
 	--color-primary-fixed: #a7f3d0;
 	--color-primary-fixed-dim: #34d399;
 	--color-secondary: #0f766e;

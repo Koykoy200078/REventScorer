@@ -12,7 +12,7 @@ const ICON_TILE = {
 
 const SUFFIX = {
 	muted: 'font-body-sm text-body-sm text-slate-500 font-medium',
-	emerald: 'font-body-sm text-body-sm text-emerald-600 font-semibold',
+	emerald: 'font-body-sm text-body-sm text-emerald-700 font-semibold',
 } as const
 
 const VALUE = 'font-display text-display text-slate-900 leading-none font-bold'

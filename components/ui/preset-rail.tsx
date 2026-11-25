@@ -53,20 +53,20 @@ const RAIL_WIDE = 'flex items-center gap-2 max-w-xl pt-1'
 const CHIP: Record<PresetRailVariant, ChipStyle> = {
 	'unified-individual': {
 		off: 'flex-1 min-w-[100px] py-2 px-3 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200 hover:text-slate-900 font-label-md text-label-md text-center transition-all',
-		on: 'flex-1 min-w-[100px] py-2 px-3 rounded-lg bg-emerald-600 border border-emerald-600 text-white font-semibold font-label-md text-label-md text-center shadow-xs',
-		subOff: 'font-label-sm text-label-sm text-slate-500',
+		on: 'flex-1 min-w-[100px] py-2 px-3 rounded-lg bg-emerald-700 border border-emerald-700 text-white font-semibold font-label-md text-label-md text-center shadow-xs',
+		subOff: 'font-label-sm text-label-sm text-slate-600',
 		subOn: 'font-label-sm text-label-sm text-emerald-100',
 		percent: true,
 	},
 	'unified-group': {
 		off: 'flex-1 py-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 hover:bg-slate-200 font-label-sm text-label-sm text-center transition-all',
-		on: 'flex-1 py-1.5 rounded-md bg-teal-600 border border-teal-600 text-white font-semibold font-label-sm text-label-sm text-center shadow-xs',
+		on: 'flex-1 py-1.5 rounded-md bg-teal-700 border border-teal-700 text-white font-semibold font-label-sm text-label-sm text-center shadow-xs',
 		percent: false,
 	},
 	group: {
 		off: 'px-3.5 py-1.5 rounded-lg border border-surface-container-high bg-surface-variant/30 text-on-surface-variant hover:bg-surface-variant text-label-md font-label-md font-semibold transition-all',
 		on: 'px-3.5 py-1.5 rounded-lg border border-primary bg-primary text-on-primary font-bold shadow-xs text-label-md font-label-md transition-all',
-		subOff: 'text-[11px] opacity-75',
+		subOff: 'text-[11px]',
 		subOn: 'text-[11px] text-on-primary/90',
 		percent: true,
 	},
@@ -230,7 +230,7 @@ const BATCH: Record<BatchRailVariant, BatchStyle> = {
 			'px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 font-label-sm text-label-sm font-medium flex items-center gap-1 transition-colors',
 		reset:
 			'px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 hover:text-red-600 font-label-sm text-label-sm font-medium transition-colors',
-		marker: { primary: 'text-emerald-600 font-bold', secondary: 'text-teal-600 font-bold' },
+		marker: { primary: 'text-emerald-700 font-bold', secondary: 'text-teal-700 font-bold' },
 		resetMarker: '↺',
 	},
 	group: {

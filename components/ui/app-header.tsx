@@ -175,7 +175,7 @@ export default function AppHeader({
 				<div className='flex items-center gap-space-md min-w-0'>
 					{lead === undefined ? (
 						<div className='flex items-center gap-space-xs shrink-0'>
-							<div className='w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-xs'>
+							<div className='w-8 h-8 rounded-lg bg-emerald-700 flex items-center justify-center text-white shadow-xs'>
 								<Icon name='gavel' className='text-[19px]' />
 							</div>
 							{brand ? (
@@ -242,7 +242,7 @@ export function HeaderUserChip({ name, detail, className, ...rest }: HeaderUserC
 			)}
 			{...rest}
 		>
-			<div className='w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-white'>
+			<div className='w-7 h-7 rounded-full bg-emerald-700 flex items-center justify-center text-white'>
 				<Icon name='person' className='text-[16px]' />
 			</div>
 			<div className='hidden xl:flex flex-col text-left'>
@@ -268,7 +268,7 @@ export function HeaderAvatar({ label, className, ...rest }: HeaderAvatarProps) {
 	return (
 		<div
 			className={cx(
-				'w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0 ml-space-xs text-white font-semibold text-xs shadow-xs',
+				'w-8 h-8 rounded-full bg-emerald-700 flex items-center justify-center shrink-0 ml-space-xs text-white font-semibold text-xs shadow-xs',
 				className,
 			)}
 			{...(label ? { role: 'img', 'aria-label': label, title: label } : { 'aria-hidden': true })}

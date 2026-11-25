@@ -20,7 +20,7 @@ const PAGES = 'flex flex-wrap items-center justify-center gap-space-xs min-w-0 m
 
 // A793: the current page. The mockup writes a span; it is a button here (with no action) so that
 // React keeps the focused node when a page number becomes the current page.
-const CURRENT = 'px-space-sm py-1 rounded bg-emerald-600 text-white font-bold font-mono shadow-2xs'
+const CURRENT = 'px-space-sm py-1 rounded bg-emerald-700 text-white font-bold font-mono shadow-2xs'
 
 // A794: the other page numbers.
 const PAGE = 'px-space-sm py-1 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700'

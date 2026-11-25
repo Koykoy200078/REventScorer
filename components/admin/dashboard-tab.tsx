@@ -264,7 +264,7 @@ function PodiumCard({
 					<span className={cx('font-label-sm text-label-sm', champion ? 'text-emerald-800 font-semibold' : 'text-slate-500')}>{figureLabel}</span>
 					<div className='flex items-baseline gap-1'>
 						<span className={cx('font-score-display text-score-display font-mono font-bold', champion ? 'text-emerald-700' : 'text-slate-900')}>{formatScore(place.score)}</span>
-						{outOf === null ? null : <span className='font-label-sm text-label-sm text-slate-400'>/ {formatScore(outOf)}</span>}
+						{outOf === null ? null : <span className='font-label-sm text-label-sm text-slate-500'>/ {formatScore(outOf)}</span>}
 					</div>
 				</div>
 				<div className='flex flex-wrap items-center justify-between gap-x-space-sm font-label-sm text-label-sm text-slate-600 mt-1'>

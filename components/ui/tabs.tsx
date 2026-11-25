@@ -50,7 +50,7 @@ export function rosterCardClassName(state: 'active' | 'done' | 'other'): string 
 }
 // U37c2458; py-0.2 (no such v3 key, so no padding in screen.png) is written as a 1px hairline.
 const UNIFIED_TAG =
-	'absolute -top-1.5 right-2 px-1.5 py-px rounded-full bg-emerald-600 text-white font-label-sm text-[10px] font-bold uppercase tracking-wider'
+	'absolute -top-1.5 right-2 px-1.5 py-px rounded-full bg-emerald-700 text-white font-label-sm text-[10px] font-bold uppercase tracking-wider'
 
 // T-1: A2c7585 nav, A2c7732 current link, A2c7972 other links (data-active-classes dropped).
 const ROUTE_TABS = 'flex items-center gap-space-xs shrink-0'

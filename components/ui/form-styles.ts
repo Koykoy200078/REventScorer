@@ -12,7 +12,7 @@ import { cx } from '@/lib/ui/cx'
 /** A page card: the editor panel (bg-white rounded-xl p-space-lg, slate border). */
 export const PANEL = 'bg-white rounded-xl p-space-lg border border-slate-200 shadow-xs'
 /** A page card in the sky tone (preview and published results). */
-export const PANEL_SKY = 'bg-sky-50 rounded-xl p-space-lg border border-sky-200 shadow-xs'
+export const PANEL_SKY = 'bg-sky-50/40 rounded-xl p-space-lg border border-sky-200 shadow-xs'
 /** A section inside a card: the editor's well. */
 export const WELL = 'bg-slate-50 border border-slate-200 p-space-md rounded-lg'
 /** A well in the sky tone. */

@@ -29,14 +29,14 @@ const STRIP_KEYS: ReadonlyMap<string, string> = new Map([
 // SC-1 (U24, U25 active, U28 inactive). v3 shadow-sm is v4 shadow-xs.
 const TOGGLE = 'flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 self-start md:self-auto'
 const TOGGLE_ON =
-	'px-space-md py-1.5 rounded-md bg-emerald-600 text-white font-label-md text-label-md font-semibold transition-colors shadow-xs'
+	'px-space-md py-1.5 rounded-md bg-emerald-700 text-white font-label-md text-label-md font-semibold transition-colors shadow-xs'
 const TOGGLE_OFF = 'px-space-md py-1.5 rounded-md text-slate-600 hover:text-slate-900 font-label-md text-label-md transition-colors'
 
 // SC-2 (U3c5487 container, U3c5579 active, U3c5803 inactive). The owner chose U's emerald active
 // link for every view, so G4c5007's and I4c5215's white actives are not used.
 const SWITCHER = 'flex items-center bg-slate-100 p-1 rounded-lg gap-1 border border-slate-200/80'
 const SWITCHER_ON =
-	'px-space-md py-1.5 rounded-md text-sm font-semibold transition-colors whitespace-nowrap bg-emerald-600 text-white shadow-xs'
+	'px-space-md py-1.5 rounded-md text-sm font-semibold transition-colors whitespace-nowrap bg-emerald-700 text-white shadow-xs'
 const SWITCHER_OFF =
 	'font-label-md text-label-md px-space-md py-1.5 rounded-md text-slate-600 hover:text-slate-900 hover:bg-white/70 transition-colors whitespace-nowrap'
 

@@ -31,13 +31,13 @@ const BADGES = {
 	'admin-judge-scoring':
 		'inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 font-label-sm text-label-sm font-medium animate-pulse motion-reduce:animate-none',
 	/** Programme badge, solid sky: A514, A617, A674, A760. */
-	'admin-program-sky': 'px-space-xs py-1 rounded bg-sky-600 text-white font-label-sm text-label-sm font-bold shadow-2xs',
+	'admin-program-sky': 'px-space-xs py-1 rounded bg-sky-700 text-white font-label-sm text-label-sm font-bold shadow-2xs',
 	/** Programme badge, solid emerald: A565, A717. */
 	'admin-program-emerald':
-		'px-space-xs py-1 rounded bg-emerald-600 text-white font-label-sm text-label-sm font-bold shadow-2xs',
+		'px-space-xs py-1 rounded bg-emerald-700 text-white font-label-sm text-label-sm font-bold shadow-2xs',
 	/** Programme badge, solid sky, podium size: A176. */
 	'admin-program-sky-compact':
-		'px-space-xs py-0.5 rounded bg-sky-600 text-white font-label-sm text-label-sm font-bold shadow-2xs',
+		'px-space-xs py-0.5 rounded bg-sky-700 text-white font-label-sm text-label-sm font-bold shadow-2xs',
 	/** Programme badge, soft emerald: A146. */
 	'admin-program-emerald-soft':
 		'px-space-xs py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-label-sm text-label-sm font-semibold',
@@ -116,13 +116,13 @@ const BADGES = {
 		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-700 font-mono font-semibold text-label-md',
 	/** Rank circle, pending: A745. */
 	'admin-rank-circle-pending':
-		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-500 font-mono font-semibold text-label-md',
+		'inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-mono font-semibold text-label-md',
 	/** Avatar initials, emerald: A69. */
 	'admin-avatar-emerald':
-		'w-6 h-6 rounded-full bg-emerald-600 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
+		'w-6 h-6 rounded-full bg-emerald-700 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
 	/** Avatar initials, sky: A70. */
 	'admin-avatar-sky':
-		'w-6 h-6 rounded-full bg-sky-600 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
+		'w-6 h-6 rounded-full bg-sky-700 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
 	/** Avatar initials, slate: A71. */
 	'admin-avatar-slate':
 		'w-6 h-6 rounded-full bg-slate-700 text-white font-label-sm text-[11px] flex items-center justify-center font-bold ring-2 ring-white',
@@ -141,13 +141,13 @@ const BADGES = {
 	'unified-roster-done':
 		'px-1.5 py-px bg-emerald-100 border border-emerald-200 text-emerald-800 rounded font-label-sm text-[11px] font-semibold flex items-center gap-0.5',
 	/** Roster score, active: U37c2773. */
-	'unified-roster-active': 'px-1.5 py-px bg-emerald-600 text-white rounded font-label-sm text-[11px] font-bold',
+	'unified-roster-active': 'px-1.5 py-px bg-emerald-700 text-white rounded font-label-sm text-[11px] font-bold',
 	/** Roster queued: U37c3496, U37c4126, U37c4749, U37c5372. */
 	'unified-roster-queued':
-		'px-1.5 py-px bg-slate-100 border border-slate-200 text-slate-500 rounded font-label-sm text-[11px] font-medium',
+		'px-1.5 py-px bg-slate-100 border border-slate-200 text-slate-600 rounded font-label-sm text-[11px] font-medium',
 	/** Floating active tag: U37c2458 (the mockup places it with absolute -top-1.5 right-2). */
 	'unified-active-tag':
-		'px-1.5 py-px rounded-full bg-emerald-600 text-white font-label-sm text-[10px] font-bold uppercase tracking-wider',
+		'px-1.5 py-px rounded-full bg-emerald-700 text-white font-label-sm text-[10px] font-bold uppercase tracking-wider',
 	/**
 	 * Room chip: U3c7423, G4c6340, I4c6368. The mockup is a div with an inner text span; here it is
 	 * one span carrying both class sets. The mockup hides it below sm: wrap it in an element with
@@ -168,7 +168,7 @@ const BADGES = {
 	'group-dock-percent': 'text-label-sm font-label-sm font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full',
 	/** Criterion number circle: G28, G66, G104, G142, G180. */
 	'group-number':
-		'w-6 h-6 rounded-full bg-primary/15 text-primary flex items-center justify-center font-label-sm text-label-sm font-bold',
+		'w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center font-label-sm text-label-sm font-bold',
 
 	// Individual-only judge view, section 2c.
 	/** Mode badge: I4c8401. */
