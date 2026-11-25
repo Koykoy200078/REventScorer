@@ -86,7 +86,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [activeTab, setActiveTab] = useState<AdminTab>(initialTab)
 	const [editorView, setEditorView] = useState(allowEventEditor)
 	// ?update=1 in a locked browser offers "Unlock to edit" (owner); after the unlock the editor is allowed.
-	const [editorAllowed, setEditorAllowed] = useState(allowEventEditor)
+	const [, setEditorAllowed] = useState(allowEventEditor)
+	// B57: the card shows only while the page was opened as the editor link (?update=1) and the editor is not open.
+	const [editorLinkOpen, setEditorLinkOpen] = useState(openEditor)
 	// The tab a click asked for while the editor held unsaved edits: the question is open (owner, 2026-11-22).
 	const [pendingLeave, setPendingLeave] = useState<AdminTab | 'hub' | null>(null)
 	const router = useRouter()
@@ -95,6 +97,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		const tab = parseAdminTabParam(value)
 		setActiveTab(tab)
 		setEditorView(false)
+		setEditorLinkOpen(false)
 		window.history.replaceState(null, '', window.location.pathname + searchForTab(window.location.search, tab) + window.location.hash)
 	}, [])
 	const [copiedLink, setCopiedLink] = useState<string | null>(null)
@@ -798,6 +801,21 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setRefreshError(error instanceof Error ? error.message : 'Unable to load the event.')
 		}
 	}, [event.id])
+	// B57, B67: open the editor if this browser is unlocked (here or in another tab); otherwise ask for the password
+	// and open it after the unlock.
+	const requestEditor = useCallback(async () => {
+		try {
+			const response = await fetch(`/api/eventscorer/admin/events/${event.id}`, { cache: 'no-store' })
+			const responseBody = (await response.json()) as AdminEventResponse
+			if (response.ok && responseBody.judgeLinksLocked !== true) {
+				await openEditorUnlocked()
+				return
+			}
+		} catch {
+			// Asking for the password below is the safe answer to any failure.
+		}
+		askToUnlock('Editing the published event needs the update password.', { kind: 'open-editor' })
+	}, [event.id, openEditorUnlocked, askToUnlock])
 
 	const saveEventEditor = useCallback(async () => {
 		setEventEditorError(null)
@@ -1182,13 +1200,13 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						</section>
 					) : null}
 
-					{openEditor && !editorAllowed ? (
+					{editorLinkOpen && !editorView ? (
 						<section aria-label='Edit the event' className='rounded-xl border border-slate-200 bg-white p-space-lg shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-space-md'>
 							<div>
 								<h2 className='font-headline-sm text-headline-sm text-slate-900 font-bold'>Edit the published event</h2>
 								<p className='font-body-sm text-body-sm text-slate-600 mt-0.5'>This link opens the event editor. Editing needs the update password.</p>
 							</div>
-							<Button variant='admin-primary' icon='lock' data-testid='unlock-to-edit' className='self-start sm:self-auto' onClick={() => askToUnlock('Editing the published event needs the update password.', { kind: 'open-editor' })}>
+							<Button variant='admin-primary' icon='lock' data-testid='unlock-to-edit' className='self-start sm:self-auto' onClick={() => void requestEditor()}>
 								Unlock to edit
 							</Button>
 						</section>
