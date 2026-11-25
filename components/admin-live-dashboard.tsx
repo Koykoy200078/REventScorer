@@ -1026,7 +1026,11 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 		setPendingLeave(null)
 		loadEventEditorFromCurrentEvent()
 		if (target === 'hub') router.push('/')
-		else showTab(target)
+		else {
+			showTab(target)
+			// B59: the button that asked (Back, or a tab) may be gone; the focus goes to the tab now shown.
+			requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-testid="admin-tab"][data-tab="${target}"]`)?.focus())
+		}
 	}
 	// Admin Hub leaves the page by a Next navigation (no beforeunload): it asks the same question (finding 2).
 	const guardLeavePage = (clickEvent: React.MouseEvent<HTMLAnchorElement>) => {
