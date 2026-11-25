@@ -41,6 +41,9 @@ export function queuedScoreUploadId(token: string, contestantId: string): string
 	return `${token}:${contestantId}`
 }
 
+// P13: the last stored text and its entries; a typing pause reads the queue, which rarely changes.
+let lastRead: { raw: string; entries: QueuedScoreUpload[] } | null = null
+
 export function readQueuedScoreUploads(): QueuedScoreUpload[] {
 	if (typeof window === 'undefined') {
 		return []
@@ -50,6 +53,9 @@ export function readQueuedScoreUploads(): QueuedScoreUpload[] {
 		const raw = window.localStorage.getItem(QUEUED_SCORE_UPLOADS_STORAGE_KEY)
 		if (!raw) {
 			return []
+		}
+		if (lastRead?.raw === raw) {
+			return [...lastRead.entries]
 		}
 
 		const parsed = JSON.parse(raw) as unknown
@@ -100,7 +106,8 @@ export function readQueuedScoreUploads(): QueuedScoreUpload[] {
 			})
 		}
 
-		return normalized
+		lastRead = { raw, entries: normalized }
+		return [...normalized]
 	} catch {
 		return []
 	}
