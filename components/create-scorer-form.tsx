@@ -7,6 +7,7 @@ import UnlockDialog from '@/components/unlock-dialog'
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
+import LeaveGuard, { useFormChanges } from '@/components/leave-guard'
 import { buttonClassName } from '@/components/ui/button'
 import { BODY, BOX, BOX_SKY, CELL_LABEL, CHECKBOX, CHIP_EMERALD, ENTRY_TYPE_GROUP, ENTRY_TYPE_INDIVIDUAL, ERROR_BOX, EYEBROW, FIELD, FIELD_STATIC, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, NOTE_BOX, OPTION_CHIP, PANEL, PANEL_SKY, TABLE_CAPTION, TABLE_DIVIDE, TABLE_HEAD, TABLE_ROW, TABLE_SHELL, VALUE, WELL } from '@/components/ui/form-styles'
 import { cx } from '@/lib/ui/cx'
@@ -202,6 +203,8 @@ function dateDisplay(iso: string): string {
 }
 
 export function CreateScorerForm() {
+	// B63: leaving with changes asks first.
+	const formChanges = useFormChanges()
 	const [title, setTitle] = useState('')
 	const [description, setDescription] = useState('')
 	const [createdBy, setCreatedBy] = useState('')
@@ -612,6 +615,7 @@ export function CreateScorerForm() {
 			}
 
 			setCreated(responseData)
+			formChanges.markUnchanged()
 			setShowPreview(false)
 		} catch (submitError) {
 			setError(submitError instanceof Error ? submitError.message : 'Unable to create scorer event.')
@@ -637,7 +641,7 @@ export function CreateScorerForm() {
 					</button>
 				</div>
 
-				<form onSubmit={onSubmit} className='mt-8 space-y-8'>
+				<form onSubmit={onSubmit} onInput={formChanges.onInput} className='mt-8 space-y-8'>
 					<section className={cx(WELL, 'grid gap-4 sm:grid-cols-2')}>
 						<label className={LABEL}>
 							Event Title
@@ -1301,6 +1305,7 @@ export function CreateScorerForm() {
 					</section>
 				) : null}
 			</div>
+			<LeaveGuard changed={formChanges.changed} />
 		</div>
 	)
 }

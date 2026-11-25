@@ -8,6 +8,7 @@ import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
 import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput, EventProgramTag } from '@/lib/types'
 import { buttonClassName } from '@/components/ui/button'
 import Dialog from '@/components/ui/dialog'
+import LeaveGuard, { useFormChanges } from '@/components/leave-guard'
 import { BODY_SM, BOX, BOX_SKY, CHECKBOX, CHIP_EMERALD, CHIP_NEUTRAL, CHIP_SKY_XS, DIALOG_TEXT, ERROR_BOX, ERROR_TEXT, EYEBROW, FIELD, FIELD_MONO, FIELD_STRONG, GROUP_BOX, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, LIST_BOX, OPTION_ROW, PANEL, PANEL_SKY, TABLE_SHELL, TBODY_ROW, TEXT_EMERALD, TEXT_MUTED, THEAD_ROW, TH_FIRST, TH_LAST, TOGGLE_ON, WELL, WELL_SKY } from '@/components/ui/form-styles'
 import { cx } from '@/lib/ui/cx'
 
@@ -216,6 +217,8 @@ function dateDisplay(iso: string): string {
 }
 
 export function RatingSheet() {
+	// B63: leaving with changes asks first.
+	const formChanges = useFormChanges()
 	const searchParams = useSearchParams()
 	const editEventId = searchParams.get('editEventId')
 
@@ -686,6 +689,7 @@ export function RatingSheet() {
 			}
 			
 			setPublishedAt(new Date().toISOString())
+			formChanges.markUnchanged()
 		} catch (publishError) {
 			const errorMessage = publishError instanceof Error ? publishError.message : 'Unable to publish rating sheet.'
 			setError(errorMessage)
@@ -750,7 +754,7 @@ export function RatingSheet() {
 	}
 
 	return (
-		<section className='mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8'>
+		<section className='mx-auto w-full max-w-6xl px-4 pt-6 sm:px-8' onInput={formChanges.onInput}>
 			<div className={PANEL}>
 				<p className={EYEBROW}>Dynamic Event Scorer</p>
 				<h1 className={cx(H1, 'mt-2')}>{editEventId ? 'Update Rating Sheet' : 'Create Rating Sheet'}</h1>
@@ -1149,6 +1153,7 @@ export function RatingSheet() {
 					) : null}
 				</form>
 			</Dialog>
+			<LeaveGuard changed={formChanges.changed} />
 		</section>
 	)
 }
