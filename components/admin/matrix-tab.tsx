@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Badge, type BadgeVariant } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -426,6 +426,23 @@ function MatrixTableRow({
 	const changed = draft.length !== assignedIds.length || draft.some((judgeId) => !assignedIds.includes(judgeId))
 	const scoredIds = new Set(row.judges.filter((judge) => judge.scored).map((judge) => judge.id))
 	const pendingName = pendingRemovalJudgeId ? (judges.find((judge) => judge.id === pendingRemovalJudgeId)?.name ?? 'This judge') : null
+	// B72: Save, Cancel and the removal question unmount the button that was pressed; the focus goes back to Edit
+	// Judge when the swap closes, and to that judge's box when the question is answered.
+	const editJudgeRef = useRef<HTMLButtonElement>(null)
+	const swapRef = useRef<HTMLDivElement>(null)
+	const wasOpen = useRef(swapOpen)
+	useEffect(() => {
+		if (wasOpen.current && !swapOpen && (document.activeElement === null || document.activeElement === document.body)) editJudgeRef.current?.focus()
+		wasOpen.current = swapOpen
+	}, [swapOpen])
+	const answerRemoval = (remove: boolean) => {
+		const judgeId = pendingRemovalJudgeId
+		onAnswerRemoval(remove)
+		requestAnimationFrame(() => {
+			if (document.activeElement !== null && document.activeElement !== document.body) return
+			swapRef.current?.querySelector<HTMLInputElement>(`[data-testid="judge-swap-option"][data-judge-id="${judgeId}"]`)?.focus()
+		})
+	}
 	const percent = status.assigned > 0 ? (status.saved * 100) / status.assigned : 0
 
 	return (
@@ -466,12 +483,12 @@ function MatrixTableRow({
 								{judge.scored ? `${judge.name} ✓ ${judge.total === null ? '' : formatScore(judge.total)}`.trim() : `${judge.name} · not scored`}
 							</span>
 						))}
-						<Button variant='admin-link-inline' size='xs' icon='edit' data-testid='edit-judge' data-contestant-id={id} aria-expanded={swapOpen} onClick={onOpenSwap}>
+						<Button ref={editJudgeRef} variant='admin-link-inline' size='xs' icon='edit' data-testid='edit-judge' data-contestant-id={id} aria-expanded={swapOpen} onClick={onOpenSwap}>
 							Edit Judge
 						</Button>
 					</div>
 					{swapOpen ? (
-						<div data-testid='judge-swap' className='rounded-lg border border-slate-200 bg-slate-50 p-space-sm flex flex-col gap-space-sm max-w-xl'>
+						<div ref={swapRef} data-testid='judge-swap' className='rounded-lg border border-slate-200 bg-slate-50 p-space-sm flex flex-col gap-space-sm max-w-xl'>
 							<span className='font-label-sm text-label-sm text-slate-500 uppercase font-bold tracking-wider'>Judges for this entry</span>
 							<div className='flex flex-wrap gap-space-xs'>
 								{judges.map((judge) => {
@@ -504,10 +521,10 @@ function MatrixTableRow({
 										<span>{pendingName} has already scored this entry; removing them drops that score from the results.</span>
 									</p>
 									<div className='flex flex-wrap gap-space-xs'>
-										<Button variant='admin-primary' size='xs' data-testid='judge-removal-accept' onClick={() => onAnswerRemoval(true)}>
+										<Button variant='admin-primary' size='xs' data-testid='judge-removal-accept' onClick={() => answerRemoval(true)}>
 											Remove judge
 										</Button>
-										<Button variant='admin-outline' size='xs' data-testid='judge-removal-cancel' onClick={() => onAnswerRemoval(false)}>
+										<Button variant='admin-outline' size='xs' data-testid='judge-removal-cancel' onClick={() => answerRemoval(false)}>
 											Keep judge
 										</Button>
 									</div>
