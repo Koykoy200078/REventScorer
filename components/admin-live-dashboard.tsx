@@ -26,7 +26,7 @@ import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEve
 import { formatDate, formatScore } from '@/lib/admin/format'
 import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
 import { adminKpis, programCohorts } from '@/lib/admin/kpis'
-import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
+import { assignedJudgeIdsForContestant, scoresDroppedByEditorSave } from '@/lib/admin/judges'
 import { observationsLog, remarkItems } from '@/lib/admin/observations-log'
 import { podiumPlaces } from '@/lib/admin/podium'
 import { buildProgramAssignmentsFromEvent, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
@@ -873,6 +873,18 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setIsSavingEventEditor(false)
 		}
 	}, [askToUnlock, event, eventEditorDraft, patchAdminEvent, refreshQueuedAdminSaves, syncQueuedAdminSaves])
+
+	// B56 (owner 2026-11-26): a save that takes a judge off an entry they scored drops that score, as Edit Judge does,
+	// so Save first names those judges and entries and asks. The sign-in retry and the queue save as asked before.
+	const [editorRemovals, setEditorRemovals] = useState<Array<{ judgeName: string; contestantName: string }> | null>(null)
+	const requestEditorSave = () => {
+		const removals = scoresDroppedByEditorSave(event, compiled.judgeBreakdown, prepareEventEditorPayloadForSubmit(eventEditorDraft, event))
+		if (removals.length > 0) {
+			setEditorRemovals(removals)
+			return
+		}
+		void saveEventEditor()
+	}
 
 	useEffect(() => {
 		const eventId = event.id
@@ -1852,9 +1864,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 									<div className='flex flex-wrap items-center gap-2'>
 										<button
 											type='button' data-testid='editor-save'
-											onClick={() => {
-												void saveEventEditor()
-											}}
+											onClick={requestEditorSave}
 											disabled={isSavingEventEditor}
 											className={buttonClassName('admin-primary')}>
 											{isSavingEventEditor ? 'Saving Published Event...' : 'Save Published Event Changes'}
@@ -2047,6 +2057,39 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					}
 				>
 					<p className='font-body-sm text-body-sm text-slate-700'>Your changes to the event are not saved. Leaving the editor drops them.</p>
+				</Dialog>
+				<Dialog
+					open={editorRemovals !== null}
+					onClose={() => setEditorRemovals(null)}
+					data-testid='editor-removal-confirm'
+					eyebrow='Scores will be dropped'
+					title='Save and drop these scores?'
+					className='max-w-md'
+					actions={
+						<>
+							<Button variant='admin-tonal' data-testid='editor-removal-cancel' onClick={() => setEditorRemovals(null)}>
+								Go back
+							</Button>
+							<Button
+								variant='admin-confirm'
+								data-testid='editor-removal-accept'
+								onClick={() => {
+									setEditorRemovals(null)
+									void saveEventEditor()
+								}}
+							>
+								Save and drop these scores
+							</Button>
+						</>
+					}
+				>
+					<ul className='flex flex-col gap-space-xs font-body-sm text-body-sm text-slate-700'>
+						{(editorRemovals ?? []).map((removal, index) => (
+							<li key={index}>
+								{removal.judgeName} has already scored {removal.contestantName}; removing them drops that score from the results.
+							</li>
+						))}
+					</ul>
 				</Dialog>
 				<BreakdownDialog
 					result={breakdownResult}

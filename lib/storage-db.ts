@@ -3038,6 +3038,12 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 
 		const validContestantIds = new Set(normalizedEvent.contestants.map((c) => c.id))
 		const validJudgeIds = new Set(normalizedEvent.judges.map((j) => j.id))
+		// B56 (owner 2026-11-26): a judge this save takes off an entry no longer counts there, as Edit Judge does (the score
+		// itself is kept). Only assignments this save removes are dropped from a judge's saved list; a judge left with no
+		// list counts only where still assigned (savedContestantIdsForSubmission).
+		const assignedBefore = new Map(existingEvent.contestants.map((c) => [c.id, new Set(assignedJudgeIdsForContestant(existingEvent, c.id))]))
+		const assignedAfter = new Map(normalizedEvent.contestants.map((c) => [c.id, new Set(assignedJudgeIdsForContestant(normalizedEvent, c.id))]))
+		const unassignedBySave = (judgeId: string, contestantId: string) => (assignedBefore.get(contestantId)?.has(judgeId) ?? false) && !(assignedAfter.get(contestantId)?.has(judgeId) ?? false)
 
 		for (const oldSubmission of existingEvent.submissions) {
 			if (!validJudgeIds.has(oldSubmission.judgeId)) {
@@ -3057,7 +3063,7 @@ export async function updateEventDefinition(eventId: string, rawInput: unknown):
 			}
 
 			const newSavedContestantIds = Array.isArray(oldSubmission.savedContestantIds)
-				? oldSubmission.savedContestantIds.filter((id) => validContestantIds.has(id))
+				? oldSubmission.savedContestantIds.filter((id) => validContestantIds.has(id) && !unassignedBySave(oldSubmission.judgeId, id))
 				: []
 
 			const newContestantDetails: JudgeContestantDetailsMap = {}
