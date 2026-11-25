@@ -1115,7 +1115,14 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	})
 	const breakdownResult = breakdownId ? (compiled.rankings.find((result) => result.contestantId === breakdownId) ?? null) : null
 
-	const rankOf = (contestantId: string) => compiled.rankings.find((result) => result.contestantId === contestantId)?.rank
+	// P9: ranks by entry in a map (the first ranking of an entry wins, as find did).
+	const rankById = useMemo(() => {
+		const byId = new Map<string, number>()
+		for (const result of compiled.rankings) if (!byId.has(result.contestantId)) byId.set(result.contestantId, result.rank)
+		return byId
+	}, [compiled.rankings])
+	const rankOf = useCallback((contestantId: string) => rankById.get(contestantId), [rankById])
+	const telemetryRemarks = useMemo(() => (activeTab === 'telemetry' ? remarkItems(event, rankOf, scoring === 'direct') : []), [activeTab, event, rankOf, scoring])
 	// "{title} - Observations Log.txt": every remark the judges saved, newest submission first.
 	const exportObservations = () => {
 		saveAs(new Blob([observationsLog(event.title, remarkItems(event, rankOf, scoring === 'direct'))], { type: 'text/plain;charset=utf-8' }), `${event.title} - Observations Log.txt`)
@@ -1952,7 +1959,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							legend={normalizedRubricLegend}
 							criteria={event.criteria}
 							contestants={event.contestants}
-							remarks={remarkItems(event, rankOf, scoring === 'direct')}
+							remarks={telemetryRemarks}
 							programOf={programOf}
 							onExportObservations={exportObservations}
 						/>

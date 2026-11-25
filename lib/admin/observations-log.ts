@@ -22,7 +22,16 @@ function time(iso: string): number {
 export function remarkItems(event: Pick<EventScorer, 'contestants' | 'judges' | 'submissions'>, rankOf: (contestantId: string) => number | undefined, isDirect: boolean): RemarkItem[] {
 	const judges = new Map(event.judges.map((judge) => [judge.id, judge]))
 	const contestants = new Map(event.contestants.map((contestant) => [contestant.id, contestant]))
-	const rank = (contestantId: string) => rankOf(contestantId) ?? Number.POSITIVE_INFINITY
+	// P9: each entry's rank is asked once; the sort below compares ranks many times.
+	const ranks = new Map<string, number>()
+	const rank = (contestantId: string) => {
+		let value = ranks.get(contestantId)
+		if (value === undefined) {
+			value = rankOf(contestantId) ?? Number.POSITIVE_INFINITY
+			ranks.set(contestantId, value)
+		}
+		return value
+	}
 	const additionalLabel = isDirect ? 'Laptop / remark' : 'Additional remark'
 	const items: RemarkItem[] = []
 
