@@ -13,8 +13,10 @@ const BAR =
 // A790: the numbers inside the summary line.
 const COUNT = 'text-slate-900 font-mono'
 
-// A791: the page controls.
-const PAGES = 'flex items-center gap-space-xs'
+// A791: the page controls. Deviation (Task 9 review): every page number is a button, so with many
+// pages the row is wider than a phone or tablet; it wraps (and may shrink in the bar's row) instead
+// of being clipped by the card, so Previous, Next and every number stay on screen.
+const PAGES = 'flex flex-wrap items-center justify-center gap-space-xs min-w-0 max-w-full'
 
 // A793: the current page. The mockup writes a span; it is a button here (with no action) so that
 // React keeps the focused node when a page number becomes the current page.
