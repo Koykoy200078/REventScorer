@@ -998,7 +998,7 @@ export function RatingSheet() {
 					</div>
 				) : null}
 
-				<div className={cx(TABLE_SHELL, 'mt-4 overflow-hidden')}>
+				<div className={cx(TABLE_SHELL, 'mt-4 overflow-x-auto')}>
 					<table className='w-full border-separate border-spacing-0'>
 						<thead>
 							<tr className={cx(THEAD_ROW, 'text-left')}>
