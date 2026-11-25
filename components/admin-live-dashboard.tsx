@@ -1107,7 +1107,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={requestTab}>
 				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} onLeavePage={guardLeavePage} />
 				{/* SCREEN VIEW */}
-				<main className='w-full pt-28 print:hidden'>
+				{/* pb-24: the end of the page (the matrix pager) stays clear of the round scroll button (B73). */}
+				<main className='w-full pt-28 pb-24 print:hidden'>
 					<EventBand
 						event={event}
 						formula={adminFormulaSentence(event, compiled)}
