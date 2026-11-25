@@ -15,7 +15,7 @@ const HEIGHT_VAR = '--es-dock-height'
 
 const SHELL = {
 	unified: {
-		aside: 'fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-2xl',
+		aside: 'fixed bottom-0 left-0 right-0 z-40 bg-white/95 border-t border-slate-200 shadow-2xl',
 		inner:
 			'w-full max-w-5xl mx-auto px-margin md:px-margin-desktop py-space-sm flex flex-col md:flex-row items-center justify-between gap-space-md',
 		lead: 'flex items-center gap-space-lg w-full md:w-auto justify-between md:justify-start',
@@ -24,14 +24,14 @@ const SHELL = {
 	},
 	group: {
 		aside:
-			'fixed bottom-0 left-0 right-0 w-full z-40 bg-surface/95 backdrop-blur-md border-t border-surface-container-high shadow-lg px-gutter-desktop py-space-md',
+			'fixed bottom-0 left-0 right-0 w-full z-40 bg-surface/95 border-t border-surface-container-high shadow-lg px-gutter-desktop py-space-md',
 		inner: 'max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-space-md',
 		lead: 'flex items-center gap-space-md w-full sm:w-auto justify-between sm:justify-start',
 		divider: 'h-8 w-px bg-surface-container-high hidden md:block',
 		actions: 'flex flex-wrap items-center gap-space-sm w-full sm:w-auto justify-end',
 	},
 	individual: {
-		aside: 'fixed bottom-0 left-0 right-0 w-full z-40 bg-surface/95 backdrop-blur-xl border-t border-slate-200 shadow-xl',
+		aside: 'fixed bottom-0 left-0 right-0 w-full z-40 bg-surface/95 border-t border-slate-200 shadow-xl',
 		inner:
 			'max-w-5xl mx-auto px-gutter-desktop py-space-sm flex flex-col md:flex-row md:items-center md:justify-between gap-space-md',
 		lead: 'flex items-center gap-space-lg',

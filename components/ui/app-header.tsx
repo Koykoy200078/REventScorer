@@ -164,7 +164,7 @@ export default function AppHeader({
 	return (
 		<header
 			className={cx(
-				'fixed top-0 left-0 right-0 w-full z-50 bg-white/95 backdrop-blur-xl border-b border-slate-200 shadow-xs',
+				'fixed top-0 left-0 right-0 w-full z-50 bg-white/95 border-b border-slate-200 shadow-xs',
 				className,
 			)}
 			{...rest}
