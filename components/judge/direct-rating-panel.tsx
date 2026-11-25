@@ -22,8 +22,9 @@ const STRAND_GROUPS = DIRECT_RATING_STRAND_SELECT_GROUPS.map((group) => ({ label
 const ALL_STRANDS = DIRECT_RATING_STRAND_SELECT_GROUPS.flatMap((group) => group.options)
 const REMARKS = DIRECT_REMARK_OPTIONS.map((option) => ({ value: option, label: option }))
 
+// Up to two decimals, as the admin console's formula sentence prints the weights (B66): 40, 33.33, 2.5.
 function percentText(weight: number): string {
-	return `${Number(weight.toFixed(3))}%`
+	return `${Math.round(weight * 100) / 100}%`
 }
 
 /**
