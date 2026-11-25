@@ -43,7 +43,7 @@ const STYLE: Record<ScoreInputVariant, InputStyle> = {
 		root: 'ml-auto flex items-center gap-1',
 		label: 'font-label-sm text-label-sm text-on-surface-variant',
 		input:
-			'w-20 px-2 py-1 text-label-md font-label-md font-semibold rounded bg-surface border border-surface-container-high text-on-surface focus:outline-hidden focus:border-primary text-right',
+			'w-20 px-2 py-1 text-label-md font-label-md font-semibold rounded bg-surface border border-surface-container-high text-on-surface focus:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary text-right',
 	},
 	// SI-4: box I4c18813, caption I4c18936, input I4c19042, suffix I4c19358.
 	individual: {
