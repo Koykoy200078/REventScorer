@@ -1,5 +1,6 @@
 import { DEFAULT_DIRECT_RATING_CONFIG, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightsFromConfig, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import type { DirectRatingScoreField } from '@/lib/direct-rating-config'
+import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import type { CompiledContestantResult, EventCompiledResults, EventContestant, EventCriterion, EventScorer, JudgeContestantDetails, JudgeContestantDetailsMap, JudgeBreakdown, JudgeSubmission, ScoreMatrix, DirectRatingScoreWeights } from '@/lib/types'
 
 function round(value: number): number {
@@ -381,7 +382,10 @@ function savedContestantIdsForSubmission(event: EventScorer, submission: JudgeSu
 	}
 
 	// Backward compatibility for older submissions that do not yet track saved contestant IDs.
+	// B56/B76 (owner 2026-11-26): a judge with no saved list left, as a save that took them off their only entry leaves
+	// them, counts only entries they are still assigned to. No slots (or no judge on any slot) means every judge, as before.
 	const inferredSavedContestantIds = event.contestants.filter((contestant) => {
+		if (!assignedJudgeIdsForContestant(event, contestant.id).includes(submission.judgeId)) return false
 		const hasScore = hasPositiveScoreForContestant(event, submission, contestant.id)
 		const hasDetails = submission.contestantDetails?.[contestant.id] !== undefined
 		return hasScore || hasDetails

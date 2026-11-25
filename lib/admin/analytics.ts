@@ -2,6 +2,7 @@
 // components/admin-live-dashboard.tsx (Stage 5 Task 7 step 1).
 
 import { roundAnalytics } from '@/lib/admin/format'
+import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import { isSubCriterionApplicableToContestant, resolveMemberLabelForContestant, splitMemberCriterionName } from '@/lib/admin/members'
 import { extractDynamicTeamName, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
 import type { EventCompiledResults, EventContestant, EventCriterion, EventScorer } from '@/lib/types'
@@ -328,7 +329,11 @@ export function savedContestantIdsForAnalytics(event: EventScorer, submission: E
 		return new Set(submission.savedContestantIds.filter((contestantId) => validContestantIds.has(contestantId)))
 	}
 
-	const inferredSavedContestantIds = event.contestants.filter((contestant) => hasPositiveScoreForContestant(submission, contestant.id)).map((contestant) => contestant.id)
+	// B56/B76 (owner 2026-11-26): a judge with no saved list left, as a save that took them off their only entry leaves
+	// them, counts only entries they are still assigned to. No slots (or no judge on any slot) means every judge, as before.
+	const inferredSavedContestantIds = event.contestants
+		.filter((contestant) => assignedJudgeIdsForContestant(event, contestant.id).includes(submission.judgeId) && hasPositiveScoreForContestant(submission, contestant.id))
+		.map((contestant) => contestant.id)
 
 	return new Set(inferredSavedContestantIds)
 }
