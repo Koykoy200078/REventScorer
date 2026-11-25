@@ -1098,6 +1098,10 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 				onNext={() => goToContestant(activeContestantIndex + 1)}
 			/>
 			<main className='w-full pt-16 bg-slate-50 min-h-[calc(100vh-4rem)] flex flex-col'>
+				{/* B69: the header hides the event title below 640 px; every view but Group-only (whose strip shows it) repeats it. */}
+				{view !== 'group' ? (
+					<p className='sm:hidden px-gutter-desktop pt-space-sm font-label-sm text-label-sm text-slate-500 uppercase tracking-wider font-bold [overflow-wrap:anywhere]'>{eventTitle}</p>
+				) : null}
 				<form data-testid='judge-form' data-layout={layout} data-view={view} onSubmit={submitScores}>
 					{view === 'group' ? (
 						<ContextStripGroup eventTitle={eventTitle} contestant={activeContestant} slotLabel={activeSlotLabel} participantCount={participants.length} entryMax={entryTotals.max} meta={meta} switcher={toggle} />
