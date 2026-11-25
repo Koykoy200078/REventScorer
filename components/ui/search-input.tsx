@@ -14,8 +14,9 @@ const ICON = 'pointer-events-none absolute left-3 top-2.5 text-slate-400 text-[1
 
 // A445 in v4 spelling. The mockup draws its own focus (emerald ring and border), so the shared
 // FOCUS_RING is not added: its outline would be cancelled by outline-hidden and doubled by the ring.
+// B77 (owner 2026-11-26): placeholder hints are slate-500 (about 4.8:1 on white), darker than the guide's slate-400.
 const INPUT =
-	'w-full pl-9 pr-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-900 placeholder:text-slate-400 font-body-sm text-body-sm focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 shadow-xs'
+	'w-full pl-9 pr-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-900 placeholder:text-slate-500 font-body-sm text-body-sm focus:outline-hidden focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 shadow-xs'
 
 export type SearchInputProps = Omit<ComponentPropsWithRef<'input'>, 'value' | 'defaultValue' | 'type' | 'aria-label'> & {
 	/** The search text (controlled). */

@@ -195,7 +195,8 @@ export function selectStyles(variant: SelectVariant = 'filter'): SelectBoxStyles
 		}),
 		valueContainer: (base) => ({ ...base, padding: look.valuePadding }),
 		singleValue: (base) => ({ ...base, marginLeft: 0, marginRight: 0, color: look.color }),
-		placeholder: (base) => ({ ...base, marginLeft: 0, marginRight: 0, color: SLATE_400 }),
+		// B77 (owner 2026-11-26): placeholder hints are slate-500 (about 4.8:1 on white), darker than the guide's slate-400.
+		placeholder: (base) => ({ ...base, marginLeft: 0, marginRight: 0, color: SLATE_500 }),
 		input: (base) => ({ ...base, margin: 0, paddingTop: 0, paddingBottom: 0, color: look.color }),
 		indicatorSeparator: () => ({ display: 'none' }),
 		clearIndicator: (base) => ({

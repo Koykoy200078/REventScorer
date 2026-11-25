@@ -11,13 +11,14 @@ import { cx } from '@/lib/ui/cx'
 export type TextareaVariant = 'unified' | 'group' | 'individual'
 
 /** The field itself per variant, with the focus treatment each mockup shows. */
+// B77 (owner 2026-11-26): placeholder hints are slate-500 (about 4.8:1 on white), darker than the guide's slate-400.
 const FIELD: Record<TextareaVariant, string> = {
 	unified:
-		'w-full bg-white text-slate-900 border border-slate-300 rounded-lg p-space-md font-body-md text-body-md placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 resize-y shadow-inner',
+		'w-full bg-white text-slate-900 border border-slate-300 rounded-lg p-space-md font-body-md text-body-md placeholder:text-slate-500 focus:outline-hidden focus:ring-2 focus:ring-emerald-600 focus:border-emerald-600 resize-y shadow-inner',
 	group:
 		'w-full rounded-lg bg-surface-variant/20 border border-surface-container-high px-space-md py-space-sm font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary transition-colors resize-y',
 	individual:
-		'w-full bg-surface-container-low text-on-surface font-body-md text-body-md p-space-md rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-hidden focus:ring-1 focus:ring-primary shadow-inner resize-y',
+		'w-full bg-surface-container-low text-on-surface font-body-md text-body-md p-space-md rounded-lg border border-slate-200 placeholder:text-slate-500 focus:outline-hidden focus:ring-1 focus:ring-primary shadow-inner resize-y',
 }
 
 /**
