@@ -30,6 +30,7 @@ export function EventBand({
 	autoSyncing,
 	refreshing,
 	onForceSync,
+	onEditEvent,
 }: {
 	event: Pick<EventScorer, 'title' | 'description' | 'createdAt' | 'createdBy'>
 	formula: string[]
@@ -39,6 +40,8 @@ export function EventBand({
 	autoSyncing: boolean
 	refreshing: boolean
 	onForceSync: () => void
+	/** Opens Edit After Publish (B67); left out while the editor is open. */
+	onEditEvent?: () => void
 }) {
 	const tone = connectionTone(connectionState)
 
@@ -78,6 +81,11 @@ export function EventBand({
 						</span>
 					) : null}
 					{autoSyncing ? <span className={cx(SMALL_CHIP, 'bg-sky-50 border border-sky-200 text-sky-800')}>Auto-uploading pending saves…</span> : null}
+					{onEditEvent ? (
+						<Button variant='admin-outline' icon='edit' data-testid='edit-event' onClick={onEditEvent}>
+							Edit event
+						</Button>
+					) : null}
 					<Button variant='admin-primary' icon='sync' data-testid='force-sync' onClick={onForceSync} disabled={refreshing}>
 						{refreshing ? 'Syncing…' : 'Force Sync'}
 					</Button>

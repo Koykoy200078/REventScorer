@@ -797,6 +797,10 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 			setShowEventEditor(true)
 			setEditorAllowed(true)
 			setEditorView(true)
+			// The address says the editor is open, so a reload opens it again (B67).
+			const params = new URLSearchParams(window.location.search)
+			params.set('update', '1')
+			window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}${window.location.hash}`)
 		} catch (error) {
 			setRefreshError(error instanceof Error ? error.message : 'Unable to load the event.')
 		}
@@ -1139,6 +1143,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 						autoSyncing={isAutoSyncingAdminSaves}
 						refreshing={isRefreshing}
 						onForceSync={() => void refreshDashboard()}
+						onEditEvent={editorView ? undefined : () => void requestEditor()}
 					/>
 				<div className='w-full px-gutter-desktop py-space-xl flex flex-col gap-space-xl'>
 
