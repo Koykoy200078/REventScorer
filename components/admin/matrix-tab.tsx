@@ -126,7 +126,8 @@ export function MatrixTab({
 	everyProgram: Record<ProgramLabel, boolean>
 	savingPrograms: boolean
 	onToggleProgram: (contestantId: string, program: ProgramLabel) => void
-	onSetEveryProgram: (program: ProgramLabel | null) => void
+	/** shownIds: the entries the filter shows now; they stay in view after the change (B54, R49). */
+	onSetEveryProgram: (program: ProgramLabel | null, shownIds: string[]) => void
 	judges: Array<{ id: string; name: string }>
 	swapOpenId: string | null
 	swapDraft: string[] | null
@@ -261,7 +262,7 @@ export function MatrixTab({
 										className={cx(CHECKBOX[program], 'disabled:cursor-not-allowed')}
 										checked={everyProgram[program]}
 										disabled={savingPrograms}
-										onChange={(event) => onSetEveryProgram(event.target.checked ? program : null)}
+										onChange={(event) => onSetEveryProgram(event.target.checked ? program : null, filtered.map((entry) => entry.contestantId))}
 									/>
 									<span className={PROGRAM_TEXT[program]}>All {program}</span>
 								</label>

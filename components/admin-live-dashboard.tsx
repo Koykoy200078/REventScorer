@@ -123,6 +123,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const [programPasswordError, setProgramPasswordError] = useState('')
 	const [isVerifyingProgramPassword, setIsVerifyingProgramPassword] = useState(false)
 	const [pendingProgramTarget, setPendingProgramTarget] = useState<ProgramLabel | null>(null)
+	// B54 (R49): the entries the matrix filter showed when "Set every entry's program" was chosen; only they stay in view.
+	const [pendingProgramShownIds, setPendingProgramShownIds] = useState<string[]>([])
 
 	const refreshInFlight = useRef(false)
 	// A refresh asked for while one runs is run right after it, so no update is lost.
@@ -639,7 +641,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 				return
 			}
 			setProgramForAllContestants(pendingProgramTarget)
-			keepMatrixRows(event.contestants.map((contestant) => contestant.id))
+			// B54 (R49): only the rows the filter showed stay in view; the others keep filtering as before.
+			keepMatrixRows(pendingProgramShownIds)
 			setIsProgramPasswordModalOpen(false)
 			setProgramPassword('')
 			setProgramPasswordError('')
@@ -1887,8 +1890,9 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							everyProgram={{ BSINT: allContestantsBSINT, BSCS: allContestantsBSCS }}
 							savingPrograms={isSavingProgramAssignments}
 							onToggleProgram={toggleContestantProgram}
-							onSetEveryProgram={(program) => {
+							onSetEveryProgram={(program, shownIds) => {
 								setPendingProgramTarget(program)
+								setPendingProgramShownIds(shownIds)
 								setIsProgramPasswordModalOpen(true)
 							}}
 							judges={event.judges.map((judge) => ({ id: judge.id, name: judge.name }))}
