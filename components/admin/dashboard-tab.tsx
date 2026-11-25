@@ -96,7 +96,7 @@ export function DashboardTab({
 					footer={
 						judges.length > 0 ? (
 							<KpiAvatarStack
-								people={judges.slice(0, 6).map((judge) => ({ initials: judgeInitials(judge.name), name: judge.name, tone: judge.saved ? 'emerald' : 'slate' }))}
+								people={judges.slice(0, 6).map((judge) => ({ initials: judgeInitials(judge.name), name: `${judge.name}: ${judge.saved ? 'has saved' : 'no saves yet'}`, tone: judge.saved ? 'emerald' : 'slate' }))}
 								note={judges.length > 6 ? `+${judges.length - 6} more` : undefined}
 							/>
 						) : null

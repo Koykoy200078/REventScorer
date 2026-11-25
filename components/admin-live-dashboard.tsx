@@ -1140,7 +1140,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 											const isActive = pendingQueueFilter === option.id
 
 											return (
-												<button key={option.id} type='button' data-testid='pending-filter' data-filter={option.id} onClick={() => setPendingQueueFilter(option.id)} className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${isActive ? 'border-amber-700 bg-amber-900 text-white' : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'}`}>
+												<button key={option.id} type='button' data-testid='pending-filter' data-filter={option.id} aria-pressed={isActive} onClick={() => setPendingQueueFilter(option.id)} className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${isActive ? 'border-amber-700 bg-amber-900 text-white' : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'}`}>
 													{option.label}
 												</button>
 											)
