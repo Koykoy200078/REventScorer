@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { startTransition, useEffect, useRef, useState } from 'react'
 
 import { Badge, type BadgeVariant } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -187,14 +187,7 @@ export function MatrixTab({
 					<p className='font-body-sm text-body-sm text-slate-600 mt-0.5'>Every entry with its figures, the judges who scored it and its status. Export CSV exports every entry, whatever the filters.</p>
 				</div>
 				<div className='flex flex-col xl:flex-row xl:items-center justify-between gap-space-md'>
-					<SearchInput
-						data-testid='matrix-search'
-						value={view.query}
-						onValueChange={(query) => onFilterChange({ query })}
-						label='Search entries, sections and participants'
-						placeholder='Search an entry, section or participant…'
-						wrapperClassName='flex-1 min-w-[16rem] max-w-md'
-					/>
+					<MatrixSearch query={view.query} onQueryChange={(query) => onFilterChange({ query })} />
 					<div className='flex flex-wrap items-center gap-space-md'>
 						<div className='flex items-center gap-space-sm bg-white border border-slate-200 px-space-md py-1.5 rounded-lg shadow-2xs' role='group' aria-label='Show programs'>
 							<span className='font-label-sm text-label-sm text-slate-500 uppercase font-semibold'>Show</span>
@@ -379,6 +372,25 @@ export function MatrixTab({
 				}
 			/>
 		</Card>
+	)
+}
+
+// P10: the typed text lives here, so a keystroke repaints only this box; the console, which filters and renders every
+// row (all of them with Show all), gets the query in a transition that later keystrokes interrupt.
+function MatrixSearch({ query, onQueryChange }: { query: string; onQueryChange: (query: string) => void }) {
+	const [text, setText] = useState(query)
+	return (
+		<SearchInput
+			data-testid='matrix-search'
+			value={text}
+			onValueChange={(next) => {
+				setText(next)
+				startTransition(() => onQueryChange(next))
+			}}
+			label='Search entries, sections and participants'
+			placeholder='Search an entry, section or participant…'
+			wrapperClassName='flex-1 min-w-[16rem] max-w-md'
+		/>
 	)
 }
 
