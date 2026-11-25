@@ -39,6 +39,7 @@ export function DashboardTab({
 	places,
 	programOf,
 	isIndividual,
+	entryMaxOf,
 	cohorts,
 	topTeams,
 	onShowRankings,
@@ -51,6 +52,8 @@ export function DashboardTab({
 	places: PodiumPlace[]
 	programOf: (contestantId: string) => ProgramLabel | null
 	isIndividual: (contestantId: string) => boolean
+	/** The most one judge can give an entry (its own member rows, B65). */
+	entryMaxOf: (contestantId: string) => number
 	cohorts: Record<ProgramLabel, ProgramCohort>
 	topTeams: Record<ProgramLabel, ProgramTopTeam[]>
 	onShowRankings: () => void
@@ -154,7 +157,7 @@ export function DashboardTab({
 								key={place.rank}
 								place={place}
 								figureLabel={figureLabel}
-								scaleMax={scaleMax}
+								outOf={podiumOutOf(place, kind, scaleMax, entryMaxOf)}
 								programOf={programOf}
 								isIndividual={isIndividual}
 								centred={place.rank === 1 && !places.some((other) => other.rank === 2)}
@@ -192,10 +195,18 @@ export function DashboardTab({
 	)
 }
 
+// A standard event's figure is out of the entry's own raw maximum (B65); tied entries with different maxima show none,
+// since one number would be untrue for one of them. Weighted and direct figures are out of 100.
+function podiumOutOf(place: PodiumPlace, kind: ScoringKind, scaleMax: number, entryMaxOf: (contestantId: string) => number): number | null {
+	if (kind !== 'standard') return scaleMax
+	const maxima = place.entries.map((entry) => entryMaxOf(entry.contestantId))
+	return maxima.length > 0 && maxima.every((max) => max === maxima[0]) ? maxima[0] : null
+}
+
 function PodiumCard({
 	place,
 	figureLabel,
-	scaleMax,
+	outOf,
 	programOf,
 	isIndividual,
 	centred,
@@ -203,7 +214,8 @@ function PodiumCard({
 }: {
 	place: PodiumPlace
 	figureLabel: string
-	scaleMax: number
+	/** The figure's "/ X", or null when tied entries have different maxima. */
+	outOf: number | null
 	programOf: (contestantId: string) => ProgramLabel | null
 	isIndividual: (contestantId: string) => boolean
 	centred: boolean
@@ -252,7 +264,7 @@ function PodiumCard({
 					<span className={cx('font-label-sm text-label-sm', champion ? 'text-emerald-800 font-semibold' : 'text-slate-500')}>{figureLabel}</span>
 					<div className='flex items-baseline gap-1'>
 						<span className={cx('font-score-display text-score-display font-mono font-bold', champion ? 'text-emerald-700' : 'text-slate-900')}>{formatScore(place.score)}</span>
-						<span className='font-label-sm text-label-sm text-slate-400'>/ {formatScore(scaleMax)}</span>
+						{outOf === null ? null : <span className='font-label-sm text-label-sm text-slate-400'>/ {formatScore(outOf)}</span>}
 					</div>
 				</div>
 				<div className='flex flex-wrap items-center justify-between gap-x-space-sm font-label-sm text-label-sm text-slate-600 mt-1'>

@@ -1,7 +1,7 @@
 import { DEFAULT_DIRECT_RATING_CONFIG, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightsFromConfig, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import type { ContestantCells, JudgeLayout, ShownView } from '@/lib/judge/layout'
 import { isDirectScoreEvent } from '@/lib/judge/layout'
-import { applicableSubCriteriaForContestant, isIndividualCriterion } from '@/lib/judge/members'
+import { entryMaxScore, isIndividualCriterion } from '@/lib/judge/members'
 import { parseAndClampScore, round } from '@/lib/judge/score-input'
 import { compileEventResults } from '@/lib/scoring'
 import type { CompiledContestantResult, DirectRatingConfig, EventContestant, EventCriterion, EventScorer, EventScoringType, JudgeContestantDetails } from '@/lib/types'
@@ -97,7 +97,7 @@ export function previewScore(event: PreviewEvent, judgeId: string, input: Previe
 	const kind: PreviewKind = result.finalRating !== undefined ? 'direct' : compiled.hasWeightedScores ? 'weighted' : 'total'
 	const value = kind === 'direct' ? (result.finalRating ?? null) : kind === 'weighted' ? (result.weightedScore ?? null) : result.averageScore
 	const contestant = event.contestants.find((candidate) => candidate.id === input.contestantId)
-	const outOf = kind === 'total' ? round(event.criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, contestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0)) : 100
+	const outOf = kind === 'total' ? entryMaxScore(event.criteria, contestant) : 100
 	return { kind, value, outOf, result, hasWeightedScores: compiled.hasWeightedScores ?? false }
 }
 

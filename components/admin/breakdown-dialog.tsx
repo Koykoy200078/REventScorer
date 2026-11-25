@@ -24,7 +24,7 @@ export function BreakdownDialog({
 	program,
 	status,
 	rows,
-	maxPossibleScore,
+	entryMax,
 	onClose,
 }: {
 	result: Ranking | null
@@ -32,10 +32,11 @@ export function BreakdownDialog({
 	program: ProgramLabel | null
 	status: EntryStatus | null
 	rows: BreakdownRow[]
-	maxPossibleScore: number
+	/** The most one judge can give this entry (its own member rows, B65). */
+	entryMax: number
 	onClose: () => void
 }) {
-	const denominator = kind === 'direct' ? '/ 100' : `/ ${formatScore(maxPossibleScore)} raw`
+	const denominator = kind === 'direct' ? '/ 100' : `/ ${formatScore(entryMax)} raw`
 	const score = result ? (kind === 'direct' ? (result.finalRating ?? result.averageScore) : kind === 'weighted' ? (result.weightedScore ?? result.averageScore) : result.averageScore) : 0
 
 	return (

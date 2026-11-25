@@ -1,3 +1,4 @@
+import { round } from '@/lib/judge/score-input'
 import type { EventContestant, EventCriterion } from '@/lib/types'
 
 export function isIndividualCriterion(criterion: EventCriterion): boolean {
@@ -121,6 +122,15 @@ export function groupSubCriteriaByMember(subCriteria: EventCriterion['subCriteri
 		memberDisplayLabel: resolvedMemberLabel(memberLabel, contestant),
 		items,
 	}))
+}
+
+/**
+ * The most one judge can give this entry: every sub-criterion that applies to it, so a team's own member rows, not
+ * those of the largest team (the stored criteria hold Student 1..N for the largest team). The judge page's "this
+ * entry's maximum" and the admin's "/ X raw" (B65) both use it.
+ */
+export function entryMaxScore(criteria: EventCriterion[], contestant?: EventContestant): number {
+	return round(criteria.reduce((sum, criterion) => sum + applicableSubCriteriaForContestant(criterion, contestant).reduce((subTotal, subCriterion) => subTotal + Number(subCriterion.maxScore), 0), 0))
 }
 
 export function applicableSubCriteriaForContestant(criterion: EventCriterion, contestant?: EventContestant): EventCriterion['subCriteria'] {

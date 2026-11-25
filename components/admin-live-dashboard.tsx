@@ -18,6 +18,7 @@ import Icon from '@/components/ui/icon'
 import { TabPanel, Tabs } from '@/components/ui/tabs'
 import UnlockDialog from '@/components/unlock-dialog'
 import { scoreMatrixRows, toCsv } from '@/lib/admin/csv'
+import { entryMaxScore } from '@/lib/judge/members'
 import { breakdownRows } from '@/lib/admin/breakdown'
 import { createEditorId } from '@/lib/admin/editor-id'
 import { participantRankingsByProgram, rankingsBySection, subCriteriaRankingsByProgram, teamsByProgram } from '@/lib/admin/analytics'
@@ -142,6 +143,8 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
+	// The most one judge can give an entry: its own member rows, as the judge page counts them (B65).
+	const entryMaxOf = (contestantId: string) => entryMaxScore(event.criteria, contestantsById.get(contestantId))
 	const judgesById = useMemo(() => new Map(event.judges.map((judge) => [judge.id, judge])), [event.judges])
 	const resolvedProgramByContestantId = useMemo(() => {
 		const map = new Map<string, ProgramLabel | null>()
@@ -1831,6 +1834,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							places={podiumPlaces(compiled.rankings, scoring === 'weighted')}
 							programOf={programOf}
 							isIndividual={(contestantId) => contestantsById.get(contestantId)?.entryType === 'individual'}
+							entryMaxOf={entryMaxOf}
 							cohorts={programCohorts(event, compiled, programOf)}
 							topTeams={analyticsByProgram}
 							onShowRankings={() => showTab('rankings')}
@@ -1861,7 +1865,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 							onShowAllChange={(showAll) => setMatrixView((previous) => ({ ...previous, showAll, page: 1 }))}
 							strandOptions={filterOptions.strands}
 							remarkOptions={filterOptions.remarks}
-							maxPossibleScore={compiled.maxPossibleScore}
+							entryMaxOf={entryMaxOf}
 							everyProgram={{ BSINT: allContestantsBSINT, BSCS: allContestantsBSCS }}
 							savingPrograms={isSavingProgramAssignments}
 							onToggleProgram={toggleContestantProgram}
@@ -1998,7 +2002,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					program={breakdownResult ? programOf(breakdownResult.contestantId) : null}
 					status={breakdownResult ? entryStatus(breakdownResult.contestantId, assignedJudgeIdsForContestant(event, breakdownResult.contestantId), compiled.judgeBreakdown) : null}
 					rows={breakdownResult ? breakdownRows(event, breakdownResult, assignedJudgeIdsForContestant(event, breakdownResult.contestantId)) : []}
-					maxPossibleScore={compiled.maxPossibleScore}
+					entryMax={breakdownResult ? entryMaxOf(breakdownResult.contestantId) : 0}
 					onClose={() => setBreakdownId(null)}
 				/>
 				<UnlockDialog

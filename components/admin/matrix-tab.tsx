@@ -98,7 +98,7 @@ export function MatrixTab({
 	onShowAllChange,
 	strandOptions,
 	remarkOptions,
-	maxPossibleScore,
+	entryMaxOf,
 	everyProgram,
 	savingPrograms,
 	onToggleProgram,
@@ -121,7 +121,8 @@ export function MatrixTab({
 	onShowAllChange: (showAll: boolean) => void
 	strandOptions: string[]
 	remarkOptions: string[]
-	maxPossibleScore: number
+	/** The most one judge can give an entry (its own member rows, B65). */
+	entryMaxOf: (contestantId: string) => number
 	everyProgram: Record<ProgramLabel, boolean>
 	savingPrograms: boolean
 	onToggleProgram: (contestantId: string, program: ProgramLabel) => void
@@ -315,7 +316,7 @@ export function MatrixTab({
 								key={row.result.contestantId}
 								row={row}
 								kind={kind}
-								maxPossibleScore={maxPossibleScore}
+								entryMaxOf={entryMaxOf}
 								savingPrograms={savingPrograms}
 								onToggleProgram={onToggleProgram}
 								judges={judges}
@@ -383,7 +384,7 @@ export function MatrixTab({
 function MatrixTableRow({
 	row,
 	kind,
-	maxPossibleScore,
+	entryMaxOf,
 	savingPrograms,
 	onToggleProgram,
 	judges,
@@ -401,7 +402,8 @@ function MatrixTableRow({
 }: {
 	row: MatrixRow
 	kind: ScoringKind
-	maxPossibleScore: number
+	/** The most one judge can give an entry (its own member rows, B65). */
+	entryMaxOf: (contestantId: string) => number
 	savingPrograms: boolean
 	onToggleProgram: (contestantId: string, program: ProgramLabel) => void
 	judges: Array<{ id: string; name: string }>
@@ -601,7 +603,7 @@ function MatrixTableRow({
 						<span data-col='total' className={FIGURE}>
 							{formatScore(result.totalScore)}
 						</span>
-						{result.judgeCount > 0 ? <span className={CAPTION}>/ {formatScore(maxPossibleScore * result.judgeCount)} raw</span> : null}
+						{result.judgeCount > 0 ? <span className={CAPTION}>/ {formatScore(entryMaxOf(result.contestantId) * result.judgeCount)} raw</span> : null}
 					</DataTableCell>
 				</>
 			)}
