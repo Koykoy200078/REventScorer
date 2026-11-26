@@ -2,6 +2,8 @@
 // components/admin-live-dashboard.tsx (Stage 5 Task 7 step 1).
 
 import { roundAnalytics } from '@/lib/admin/format'
+import { detectDirectRatingScoreFields } from '@/lib/direct-rating-config'
+import { applyMasterNoat } from '@/lib/scoring'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import { isSubCriterionApplicableToContestant, resolveMemberLabelForContestant, splitMemberCriterionName } from '@/lib/admin/members'
 import { extractDynamicTeamName, type ProgramLabel, resolveProgramLabel } from '@/lib/admin/program'
@@ -385,8 +387,12 @@ export function subCriteriaRankingsByProgram(event: EventScorer, manualAssignmen
 		}
 	}
 
-	for (const submission of event.submissions) {
-		const savedContestantIds = savedContestantIdsForAnalytics(event, submission)
+	// Review F10 (D42): on direct-rating events the master NOAT counts here too, as in compile. Which entries a judge saved
+	// is read from the stored submission, so a master value never makes an entry count.
+	const noatSubCriterionId = detectDirectRatingScoreFields(event.criteria).find((field) => field.key === 'noat')?.subCriterionId
+	for (const storedSubmission of event.submissions) {
+		const savedContestantIds = savedContestantIdsForAnalytics(event, storedSubmission)
+		const submission = noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId) : storedSubmission
 
 		if (savedContestantIds.size === 0) {
 			continue
