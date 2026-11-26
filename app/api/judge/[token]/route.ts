@@ -160,7 +160,9 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 		if (body.scores && typeof body.scores === 'object') {
 			const incomingScores = body.scores as Record<string, Record<string, number>>
 			if (incomingScores[body.contestantId]) {
-				mergedMatrix[body.contestantId] = incomingScores[body.contestantId]
+				// D39: cell by cell, so a cell the page did not send (a sub-criterion added after it loaded) keeps its stored
+				// value instead of becoming 0. Cells it sends, 0 included, are stored as sent.
+				mergedMatrix[body.contestantId] = { ...(existingMatrix[body.contestantId] ?? {}), ...incomingScores[body.contestantId] }
 			}
 		}
 

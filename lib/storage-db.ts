@@ -825,7 +825,51 @@ function normalizeJudgesForAdminEditor(rawJudges: AdminEventEditorInput['judges'
 	return judges
 }
 
-function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['criteria'], contestants: EventContestant[]): EventCriterion[] {
+// D39: an admin save (Edit After Publish, the rating sheet) may send a sub-criterion without its id, or with an id
+// this event does not know: the editor sends member rows 2..N without ids, the rating sheet sends no ids at all.
+// A row that is still there keeps its existing id, so a judge page opened before the save (judge pages never
+// re-fetch) keeps saving to the right cells: first by exact name, then, for member rows renamed through member 1
+// (D27: "Student 1 - X" keeps its id and becomes "Student 1 - Y"), "<label> - <old wording>". Each existing id is
+// used at most once; ids the payload already gives for this criterion are claimed first.
+function reuseSubCriterionIds(subCriteria: Array<{ id?: string; name: string }>, previous: EventCriterion['subCriteria']): Array<string | undefined> {
+	const previousIds = new Set(previous.map((sub) => sub.id))
+	const chosen = subCriteria.map((sub) => (sub.id && previousIds.has(sub.id) ? sub.id : undefined))
+	const claimed = new Set(chosen.filter((id): id is string => Boolean(id)))
+	const renamedWordings = new Map<string, string>()
+	subCriteria.forEach((sub, index) => {
+		const keptId = chosen[index]
+		const { memberLabel, displayName } = splitMemberCriterionName(sub.name)
+		if (!keptId || memberIndexFromLabel(memberLabel) !== 1) {
+			return
+		}
+		const old = previous.find((candidate) => candidate.id === keptId)
+		const oldWording = old ? splitMemberCriterionName(old.name).displayName : ''
+		if (oldWording && oldWording.toLowerCase() !== displayName.toLowerCase()) {
+			renamedWordings.set(displayName.toLowerCase(), oldWording)
+		}
+	})
+	const take = (name: string): string | undefined => {
+		const match = previous.find((candidate) => !claimed.has(candidate.id) && candidate.name === name)
+		if (match) {
+			claimed.add(match.id)
+		}
+		return match?.id
+	}
+	return subCriteria.map((sub, index) => {
+		if (chosen[index]) {
+			return chosen[index]
+		}
+		const byName = take(sub.name)
+		if (byName) {
+			return byName
+		}
+		const { memberLabel, displayName } = splitMemberCriterionName(sub.name)
+		const oldWording = memberIndexFromLabel(memberLabel) !== null ? renamedWordings.get(displayName.toLowerCase()) : undefined
+		return oldWording ? take(`${memberLabel} - ${oldWording}`) : undefined
+	})
+}
+
+function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['criteria'], contestants: EventContestant[], previousCriteria: EventCriterion[] = []): EventCriterion[] {
 	if (!Array.isArray(rawCriteria)) {
 		throw new Error('Criteria payload must be an array.')
 	}
@@ -833,6 +877,14 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 	const usedCriterionIds = new Set<string>()
 	const usedSubCriterionIds = new Set<string>()
 	const criteria: EventCriterion[] = []
+	// D39: a criterion keeps its id when the payload gives it; one sent without a known id takes the id of the
+	// existing criterion with the same name (the rating sheet sends none).
+	const previousCriteriaById = new Map(previousCriteria.map((criterion) => [criterion.id, criterion]))
+	const claimedCriterionIds = new Set(
+		rawCriteria
+			.map((rawCriterion) => (rawCriterion && typeof rawCriterion === 'object' && typeof rawCriterion.id === 'string' ? rawCriterion.id : ''))
+			.filter((id) => previousCriteriaById.has(id)),
+	)
 
 	for (const rawCriterion of rawCriteria) {
 		if (!rawCriterion || typeof rawCriterion !== 'object') {
@@ -871,8 +923,20 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 		}
 
 		const expandedSubCriteria = expandIndividualPresentationSubCriteriaIfNeeded(criterionName, baseSubCriteria as unknown as import('@/lib/types').SubCriterionInput[], contestants)
-		const normalizedSubCriteria = expandedSubCriteria.map((subCriterion) => ({
-			id: normalizeUniqueIdCandidate(subCriterion.id, usedSubCriterionIds),
+		const rawCriterionId = typeof rawCriterion.id === 'string' ? rawCriterion.id : undefined
+		let previousCriterion = rawCriterionId ? previousCriteriaById.get(rawCriterionId) : undefined
+		if (!previousCriterion) {
+			previousCriterion = previousCriteria.find((candidate) => !claimedCriterionIds.has(candidate.id) && candidate.name === criterionName)
+			if (previousCriterion) {
+				claimedCriterionIds.add(previousCriterion.id)
+			}
+		}
+		const reusedSubCriterionIds = reuseSubCriterionIds(
+			expandedSubCriteria.map((subCriterion) => ({ id: typeof subCriterion.id === 'string' ? subCriterion.id : undefined, name: compactWhitespace(String(subCriterion.name ?? '')) })),
+			previousCriterion?.subCriteria ?? [],
+		)
+		const normalizedSubCriteria = expandedSubCriteria.map((subCriterion, subCriterionIndex) => ({
+			id: normalizeUniqueIdCandidate(reusedSubCriterionIds[subCriterionIndex] ?? subCriterion.id, usedSubCriterionIds),
 			name: compactWhitespace(String(subCriterion.name ?? '')),
 			maxScore: toPositiveNumber(subCriterion.maxScore, `Subcriterion max score (${criterionName})`),
 		}))
@@ -883,7 +947,7 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 		}
 
 		criteria.push({
-			id: normalizeUniqueIdCandidate(rawCriterion.id, usedCriterionIds),
+			id: normalizeUniqueIdCandidate(previousCriterion?.id ?? rawCriterion.id, usedCriterionIds),
 			name: criterionName,
 			maxScore,
 			subCriteria: normalizedSubCriteria,
@@ -988,7 +1052,7 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const replacedIds = new Map<string, string>()
 	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [], replacedIds)
 	const judges = normalizeJudgesForAdminEditor(source.judges ?? [], previousEvent.judges, replacedIds)
-	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants)
+	const criteria = normalizeCriteriaForAdminEditor(source.criteria ?? [], contestants, previousEvent.criteria)
 	const presentationSlots = normalizePresentationSlotsForAdminEditor(source.presentationSlots, contestants, judges, replacedIds)
 	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(criteria)
 	// D32: a payload without directRatingConfig (the admin dashboard's editor sends none) keeps the
@@ -1014,7 +1078,9 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	}
 }
 
-function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown): ScoreMatrix {
+// D39: `clampContestantId` (the entry a judge is saving) clamps a value above a sub-criterion's maximum to the maximum,
+// so a save from a page loaded before an admin lowered that maximum still lands; every other row is checked as before.
+function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown, options: { clampContestantId?: string } = {}): ScoreMatrix {
 	if (!rawMatrix || typeof rawMatrix !== 'object') {
 		throw new Error('Scores payload must be an object.')
 	}
@@ -1029,7 +1095,8 @@ function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown): ScoreMatr
 		for (const parentCriterion of event.criteria) {
 			for (const subCriterion of parentCriterion.subCriteria) {
 				const incomingValue = contestantScores[subCriterion.id] ?? 0
-				const numeric = typeof incomingValue === 'number' ? incomingValue : Number(incomingValue)
+				const typedValue = typeof incomingValue === 'number' ? incomingValue : Number(incomingValue)
+				const numeric = contestant.id === options.clampContestantId && typedValue > subCriterion.maxScore ? subCriterion.maxScore : typedValue
 
 				if (!Number.isFinite(numeric)) {
 					throw new Error(`Score for ${contestant.name} / ${subCriterion.name} must be a number.`)
@@ -2968,7 +3035,7 @@ export async function submitJudgeScoresByToken(token: string, rawScores: unknown
 			throw new Error('You are not assigned to score this presentation.')
 		}
 
-		const normalizedScores = normalizeScoreMatrix(event, rawScores)
+		const normalizedScores = normalizeScoreMatrix(event, rawScores, { clampContestantId: savedContestantId })
 		const submittedAt = new Date().toISOString()
 		const submissionIndex = event.submissions.findIndex((submission) => submission.judgeId === judge.id)
 		const previousSubmission = submissionIndex >= 0 ? event.submissions[submissionIndex] : undefined
