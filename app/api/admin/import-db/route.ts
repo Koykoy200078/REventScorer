@@ -66,17 +66,33 @@ export async function POST(request: Request) {
 		// That is fine, it will drop and recreate it if --add-drop-table was used.
 		const command = `mysql -h "${config.host}" -P ${config.port} -u "${config.user}" "${config.database}" < "${tempFilePath}"`
 
+		// A backup made by an older version may lack columns this one reads (rubric_legend_shown): add them right after
+		// the import, whether it finished or stopped part-way (it may already have replaced a table). False when even
+		// that fails; EventScorer then needs a restart.
+		const restoreSchema = async (): Promise<boolean> => {
+			try {
+				await reapplySchema()
+				return true
+			} catch (schemaError) {
+				console.error('Could not update the database tables after the import:', schemaError)
+				return false
+			}
+		}
+
+		let imported: { stdout: string; stderr: string }
 		try {
-			const { stdout, stderr } = await execAsync(command, {
+			imported = await execAsync(command, {
 				env: { ...process.env, MYSQL_PWD: config.password }
 			})
-			// A backup made by an older version may lack columns this one reads (rubric_legend_shown): add them now.
-			await reapplySchema()
-			return NextResponse.json({ success: true, stdout, stderr })
 		} catch (execError: any) {
 			console.error('Database import failed:', execError)
+			await restoreSchema()
 			return NextResponse.json({ error: 'Database import failed. Check the SQL syntax or server logs.', stdout: execError.stdout, stderr: execError.stderr }, { status: 500 })
 		}
+		if (!(await restoreSchema())) {
+			return NextResponse.json({ error: 'The import finished, but EventScorer could not update the database tables. Restart EventScorer.', stdout: imported.stdout, stderr: imported.stderr }, { status: 500 })
+		}
+		return NextResponse.json({ success: true, stdout: imported.stdout, stderr: imported.stderr })
 	} catch (error) {
 		console.error('Import error:', error)
 		return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 })
