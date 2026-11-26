@@ -389,10 +389,11 @@ export function subCriteriaRankingsByProgram(event: EventScorer, manualAssignmen
 
 	// Review F10 (D42): on direct-rating events the master NOAT counts here too, as in compile. Which entries a judge saved
 	// is read from the stored submission, so a master value never makes an entry count.
-	const noatSubCriterionId = detectDirectRatingScoreFields(event.criteria).find((field) => field.key === 'noat')?.subCriterionId
+	const noatField = detectDirectRatingScoreFields(event.criteria).find((field) => field.key === 'noat')
+	const noatSubCriterionId = noatField?.subCriterionId
 	for (const storedSubmission of event.submissions) {
 		const savedContestantIds = savedContestantIdsForAnalytics(event, storedSubmission)
-		const submission = noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId) : storedSubmission
+		const submission = noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId, noatField?.maxScore) : storedSubmission
 
 		if (savedContestantIds.size === 0) {
 			continue

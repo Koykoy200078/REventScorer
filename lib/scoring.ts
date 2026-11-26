@@ -387,7 +387,10 @@ function withRanks(sortedResults: CompiledContestantResult[], getScore: (result:
  * every applicant who has a master NOAT (a finite number, 0 included) replaced by it; applicants without one keep the
  * judge's own NOAT (older events). Nothing stored changes: compile reads the copy.
  */
-export function applyMasterNoat(submission: JudgeSubmission, event: EventScorer, noatSubCriterionId: string): JudgeSubmission {
+export function applyMasterNoat(submission: JudgeSubmission, event: EventScorer, noatSubCriterionId: string, noatMax?: number): JudgeSubmission {
+	// Review round 2 G4: the master counts within the NOAT range, as the judge page shows it, so the admin NOAT column,
+	// the CSV and the print sheet show the figure that counts (a master above the maximum counts as the maximum).
+	const inRange = (value: number) => Math.max(0, typeof noatMax === 'number' && Number.isFinite(noatMax) && noatMax > 0 ? Math.min(value, noatMax) : value)
 	let scores = submission.scores
 	for (const contestant of event.contestants) {
 		const master = contestant.noatScore
@@ -397,7 +400,7 @@ export function applyMasterNoat(submission: JudgeSubmission, event: EventScorer,
 		if (scores === submission.scores) {
 			scores = { ...submission.scores }
 		}
-		scores[contestant.id] = { ...(submission.scores[contestant.id] ?? {}), [noatSubCriterionId]: master }
+		scores[contestant.id] = { ...(submission.scores[contestant.id] ?? {}), [noatSubCriterionId]: inRange(master) }
 	}
 	return scores === submission.scores ? submission : { ...submission, scores }
 }
@@ -474,11 +477,12 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 
 	const judgeBreakdown: JudgeBreakdown[] = []
 
-	const noatSubCriterionId = directScoreFields.find((field) => field.key === 'noat')?.subCriterionId
+	const noatField = directScoreFields.find((field) => field.key === 'noat')
+	const noatSubCriterionId = noatField?.subCriterionId
 	for (const judge of event.judges) {
 		const storedSubmission = submittedByJudge.get(judge.id)
 		// D42: the master NOAT counts, for every judge, in every figure below (final rating, NOAT detail, totals).
-		const submission = storedSubmission && isDirectRatingEvent && noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId) : storedSubmission
+		const submission = storedSubmission && isDirectRatingEvent && noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId, noatField?.maxScore) : storedSubmission
 
 		if (!submission) {
 			judgeBreakdown.push({
