@@ -33,17 +33,41 @@ export function isMemberRowName(name: string): boolean {
 	return memberIndexFromLabel(splitMemberRowName(name).memberLabel) !== null && name.includes(SEPARATOR)
 }
 
+const compact = (value: string) => value.trim().replace(/\s+/g, ' ')
+
+export function isIndividualPresentationName(name: string): boolean {
+	return compact(name).toLowerCase() === 'individual presentation'
+}
+
 /**
- * A row written like a member row with another dash ("Student 2 – X", "Student 2—X"). By the shared rule it is an
- * ordinary row, but it is never expanded per member: expanded, it would become "Student 1 - Student 2 – X" and member
- * 2's old row would count for member 1 (review round 2 G9).
+ * The member number of a row written like a member row with another separator: an en or em dash, a hyphen with or
+ * without spaces, or a colon ("Student 2 – X", "Student 2-X", "P2: X"). The label is letters (spaces, "." and "#"
+ * allowed) followed by a number, so "Time (3–5 min)" is not one.
  */
-export function looksLikeMemberRowName(name: string): boolean {
-	if (isMemberRowName(name)) {
-		return true
+function lookAlikeMemberIndex(name: string): number | null {
+	const match = compact(name).match(/^\p{L}[\p{L} .#]*?\s?(\d+)\s?[-\u2013\u2014:]\s?\S/u)
+	const index = match ? Number.parseInt(match[1], 10) : 0
+	return index > 0 ? index : null
+}
+
+/**
+ * Review round 3 H1 (D60): whether an "Individual Presentation" criterion of plain rows is expanded per member (member
+ * 1 keeping the rows' ids). The admin editor asks this about the rows it sends and the server about the rows it
+ * receives, with the same team size, so the two always agree (they used to decide differently, and the server's
+ * expansion drops ids). Not expanded when a row is already a member row, or when a row is written like the row of
+ * another member of the team (2..memberCount) with another separator: expanded, it would count for member 1 (D58).
+ */
+export function shouldExpandIndividualPresentation(criterionName: string, rowNames: string[], memberCount: number): boolean {
+	if (!isIndividualPresentationName(criterionName) || memberCount <= 1) {
+		return false
 	}
-	const dash = name.search(/[–—]/)
-	return dash > 0 && memberIndexFromLabel(name.slice(0, dash)) !== null && name.slice(dash + 1).trim().length > 0
+	return !rowNames.some((name) => {
+		if (isMemberRowName(compact(name))) {
+			return true
+		}
+		const index = lookAlikeMemberIndex(name)
+		return index !== null && index >= 2 && index <= memberCount
+	})
 }
 
 /** The label without its number: "Student 2" -> "Student", "Day 2" -> "Day", "2" -> "". */

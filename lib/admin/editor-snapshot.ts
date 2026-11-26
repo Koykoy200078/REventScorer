@@ -3,7 +3,7 @@
 
 import { createEditorId } from '@/lib/admin/editor-id'
 import { memberCountFromSubCriteriaNames } from '@/lib/admin/members'
-import { isMemberRowName, looksLikeMemberRowName, memberIndexFromLabel, memberLabelWord, splitMemberRowName } from '@/lib/member-rows'
+import { isMemberRowName, memberIndexFromLabel, memberLabelWord, shouldExpandIndividualPresentation, splitMemberRowName } from '@/lib/member-rows'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, EventCriterion, EventScorer } from '@/lib/types'
 
@@ -123,19 +123,34 @@ export function criterionSubCriteriaTotalScore(subCriteria: Array<{ maxScore: nu
 	)
 }
 
-export function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorInput['criteria'][number], existingCriterion?: EventCriterion): boolean {
-	// D40: a member grid (existing or typed) is re-expanded. An "Individual Presentation" criterion whose rows hold no
-	// member rows yet (plain rows: created before teams had participants, or a plain criterion renamed to it) is expanded
-	// per member as before, member 1 keeping the plain rows' ids (review F1). Rows that already hold member rows but are
-	// not a full grid pass through unchanged, and so do rows written like member rows with an en or em dash (round 2 G9).
+// The team size the server sees for a draft: blank participants dropped and the rest de-duplicated in any letter case
+// (storage-db.ts normalizeContestantParticipants), so the editor and the server ask shouldExpandIndividualPresentation
+// with the same number.
+export function serverMemberCount(contestants: AdminEventEditorInput['contestants']): number {
+	return (Array.isArray(contestants) ? contestants : []).reduce((maxCount, contestant) => {
+		// The server reads anything but 'individual' as a group (normalizeContestantEntryType).
+		if (contestant.entryType === 'individual') {
+			return maxCount
+		}
+		const participants = Array.isArray(contestant.participants) ? contestant.participants : []
+		const unique = new Set(participants.map((participant) => String(participant ?? '').trim().replace(/\s+/g, ' ')).filter((participant) => participant.length > 0).map((participant) => participant.toLowerCase()))
+		return Math.max(maxCount, unique.size > 0 ? unique.size : 1)
+	}, 1)
+}
+
+export function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorInput['criteria'][number], existingCriterion: EventCriterion | undefined, memberCount: number): boolean {
+	// D40: a member grid (existing or typed) is re-expanded. An "Individual Presentation" criterion of plain rows (created
+	// before teams had participants, or a plain criterion renamed to it) is expanded per member, member 1 keeping the
+	// rows' ids (review F1), exactly when the server would expand the rows the editor sends (review round 3 H1): the
+	// decision looks only at those rows.
 	if (hasMemberScopedSubCriteria(criterion.subCriteria) || (existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria))) {
 		return true
 	}
-	if (criterion.name.trim().toLowerCase() !== 'individual presentation') {
-		return false
-	}
-	const holdsMemberRows = (rows: Array<{ name: string }>) => rows.some((row) => looksLikeMemberRowName(row.name))
-	return !holdsMemberRows(criterion.subCriteria) && !(existingCriterion && holdsMemberRows(existingCriterion.subCriteria))
+	return shouldExpandIndividualPresentation(
+		criterion.name,
+		criterion.subCriteria.map((subCriterion) => subCriterion.name),
+		memberCount,
+	)
 }
 
 export function resolveSharedCriterionMemberCount(criterion: AdminEventEditorInput['criteria'][number], existingCriterion: EventCriterion | undefined, editorMemberCount: number): number {
@@ -190,12 +205,13 @@ export function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput,
 	const synchronizedDraft = synchronizeEventEditorDraft(draft)
 	const existingCriteriaById = new Map(existingEvent.criteria.map((criterion) => [criterion.id, criterion]))
 	const editorMemberCount = maxEditorMemberCount(synchronizedDraft.contestants)
+	const serverTeamSize = serverMemberCount(synchronizedDraft.contestants)
 
 	return {
 		...synchronizedDraft,
 		criteria: synchronizedDraft.criteria.map((criterion) => {
 			const existingCriterion = criterion.id ? existingCriteriaById.get(criterion.id) : undefined
-			const shouldExpandForMembers = criterionUsesSharedMemberExpansion(criterion, existingCriterion)
+			const shouldExpandForMembers = criterionUsesSharedMemberExpansion(criterion, existingCriterion, serverTeamSize)
 			const existingGrid = existingCriterion ? memberGridOf(existingCriterion.subCriteria) : null
 			const labelGrid = existingGrid ?? memberGridOf(criterion.subCriteria)
 
