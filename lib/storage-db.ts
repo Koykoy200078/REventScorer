@@ -8,7 +8,7 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
-import { memberIndexFromLabel, splitMemberRowName as splitMemberCriterionName } from '@/lib/member-rows'
+import { looksLikeMemberRowName, memberIndexFromLabel, splitMemberRowName as splitMemberCriterionName } from '@/lib/member-rows'
 import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import { applySchema, EVENTSCORER_SCHEMA_VERSION, TABLE_EVENTS, TABLE_CONTESTANTS, TABLE_CONTESTANT_PARTICIPANTS, TABLE_JUDGES, TABLE_CRITERIA, TABLE_SUBCRITERIA, TABLE_PRESENTATION_SLOTS, TABLE_PRESENTATION_SLOT_JUDGES, TABLE_SUBMISSIONS, TABLE_SUBMISSION_SAVED_CONTESTANTS, TABLE_SUBMISSION_SCORES, TABLE_SUBMISSION_CONTESTANT_DETAILS } from '@/lib/schema-sql'
 import type {
@@ -557,7 +557,9 @@ function expandIndividualPresentationSubCriteriaIfNeeded(criterionName: string, 
 	const hasExplicitMemberPrefix = subCriteria.some((subCriterion) => {
 		const normalizedName = compactWhitespace(String(subCriterion.name ?? ''))
 		const { memberLabel } = splitMemberCriterionName(normalizedName)
-		return memberIndexFromLabel(memberLabel) !== null
+		// Review round 2 G9: rows written like member rows with an en or em dash are not expanded either; expanded, member
+		// 2's old row would count for member 1.
+		return memberIndexFromLabel(memberLabel) !== null || looksLikeMemberRowName(normalizedName)
 	})
 
 	if (hasExplicitMemberPrefix) {

@@ -3,7 +3,7 @@
 
 import { createEditorId } from '@/lib/admin/editor-id'
 import { memberCountFromSubCriteriaNames } from '@/lib/admin/members'
-import { isMemberRowName, memberIndexFromLabel, memberLabelWord, splitMemberRowName } from '@/lib/member-rows'
+import { isMemberRowName, looksLikeMemberRowName, memberIndexFromLabel, memberLabelWord, splitMemberRowName } from '@/lib/member-rows'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, EventCriterion, EventScorer } from '@/lib/types'
 
@@ -127,14 +127,14 @@ export function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorIn
 	// D40: a member grid (existing or typed) is re-expanded. An "Individual Presentation" criterion whose rows hold no
 	// member rows yet (plain rows: created before teams had participants, or a plain criterion renamed to it) is expanded
 	// per member as before, member 1 keeping the plain rows' ids (review F1). Rows that already hold member rows but are
-	// not a full grid pass through unchanged.
+	// not a full grid pass through unchanged, and so do rows written like member rows with an en or em dash (round 2 G9).
 	if (hasMemberScopedSubCriteria(criterion.subCriteria) || (existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria))) {
 		return true
 	}
 	if (criterion.name.trim().toLowerCase() !== 'individual presentation') {
 		return false
 	}
-	const holdsMemberRows = (rows: Array<{ name: string }>) => rows.some((row) => isMemberRowName(row.name))
+	const holdsMemberRows = (rows: Array<{ name: string }>) => rows.some((row) => looksLikeMemberRowName(row.name))
 	return !holdsMemberRows(criterion.subCriteria) && !(existingCriterion && holdsMemberRows(existingCriterion.subCriteria))
 }
 

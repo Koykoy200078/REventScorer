@@ -33,6 +33,19 @@ export function isMemberRowName(name: string): boolean {
 	return memberIndexFromLabel(splitMemberRowName(name).memberLabel) !== null && name.includes(SEPARATOR)
 }
 
+/**
+ * A row written like a member row with another dash ("Student 2 – X", "Student 2—X"). By the shared rule it is an
+ * ordinary row, but it is never expanded per member: expanded, it would become "Student 1 - Student 2 – X" and member
+ * 2's old row would count for member 1 (review round 2 G9).
+ */
+export function looksLikeMemberRowName(name: string): boolean {
+	if (isMemberRowName(name)) {
+		return true
+	}
+	const dash = name.search(/[–—]/)
+	return dash > 0 && memberIndexFromLabel(name.slice(0, dash)) !== null && name.slice(dash + 1).trim().length > 0
+}
+
 /** The label without its number: "Student 2" -> "Student", "Day 2" -> "Day", "2" -> "". */
 export function memberLabelWord(memberLabel: string): string {
 	return memberLabel.replace(/\s*\d+\s*$/, '').trim()
