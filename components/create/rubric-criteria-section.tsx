@@ -3,8 +3,10 @@
 // Create Scorer Event's Rubric Criteria section (design 2026-11-26-create-rubric-legend), moved verbatim from
 // create-scorer-form.tsx; the form keeps the criteria and passes them in with the legend lock already applied.
 
+import { useId } from 'react'
+
 import { buttonClassName } from '@/components/ui/button'
-import { BOX, CHIP_EMERALD, FIELD, FIELD_STATIC, H2, HELP, NOTE_BOX, PANEL, WELL } from '@/components/ui/form-styles'
+import { BODY, BOX, CHIP_EMERALD, FIELD, FIELD_STATIC, H2, HELP, NOTE_BOX, PANEL, WELL } from '@/components/ui/form-styles'
 import type { LegendLock } from '@/lib/create/legend-max'
 import { formatLegendScore } from '@/lib/rubric-legend'
 import { cx } from '@/lib/ui/cx'
@@ -42,17 +44,30 @@ export type RubricCriteriaSectionProps = {
 	addSubCriterion: (criterionId: string) => void
 	updateSubCriterion: (criterionId: string, subCriterionId: string, value: Partial<Pick<SubCriterionDraft, 'name' | 'maxScore'>>) => void
 	removeSubCriterion: (criterionId: string, subCriterionId: string) => void
+	/** Design 2026-11-26-create-rubric-legend: the folded criteria (ids), kept by the form. */
+	collapsedIds: ReadonlySet<string>
+	onToggle: (criterionId: string) => void
+	onSetAll: (collapsed: boolean) => void
 }
 
-export function RubricCriteriaSection({ lockedCriteria, legendLock, totalEventMaxScore, addCriterion, updateCriterion, removeCriterion, addSubCriterion, updateSubCriterion, removeSubCriterion }: RubricCriteriaSectionProps) {
+export function RubricCriteriaSection({ lockedCriteria, legendLock, totalEventMaxScore, addCriterion, updateCriterion, removeCriterion, addSubCriterion, updateSubCriterion, removeSubCriterion, collapsedIds, onToggle, onSetAll }: RubricCriteriaSectionProps) {
 	// The moved JSX counts the criteria (only one left: no Remove Parent); the locked copies are the same list.
 	const criteria = lockedCriteria
+	// DOM ids for the fold: a criterion's own id is random and made separately by the server render and the browser,
+	// so it must not reach the HTML (hydration); useId plus the position is the same on both.
+	const foldIdPrefix = useId()
 	return (
 		<section className={PANEL}>
 			<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
 				<h2 className={H2}>Rubric Criteria</h2>
-				<div className='flex items-center gap-3'>
+				<div className='flex flex-wrap items-center gap-3'>
 					<span className={CHIP_EMERALD}>Event Max Score: {totalEventMaxScore.toFixed(2)}</span>
+					<button type='button' onClick={() => onSetAll(true)} className={buttonClassName('admin-outline', 'sm')}>
+						Collapse all
+					</button>
+					<button type='button' onClick={() => onSetAll(false)} className={buttonClassName('admin-outline', 'sm')}>
+						Expand all
+					</button>
 					<button type='button' onClick={addCriterion} className={buttonClassName('admin-outline')}>
 						Add Parent Criterion
 					</button>
@@ -68,9 +83,30 @@ export function RubricCriteriaSection({ lockedCriteria, legendLock, totalEventMa
 			<div className='space-y-5'>
 				{lockedCriteria.map((criterion, criterionIndex) => {
 					const parentMaxScore = criterionMaxScore(criterion)
+					// Show/hide: the one-line summary stays; the fields fold away (they keep their values).
+					const label = criterion.name.trim() || `Parent criterion ${criterionIndex + 1}`
+					const collapsed = collapsedIds.has(criterion.id)
+					const bodyId = `${foldIdPrefix}-criterion-${criterionIndex}`
+					const count = criterion.subCriteria.length
 
 					return (
 						<div key={criterion.id} className={WELL}>
+							<div className='flex flex-wrap items-center gap-2'>
+								<button
+									type='button'
+									data-testid='criterion-fold'
+									aria-expanded={!collapsed}
+									aria-controls={bodyId}
+									aria-label={`${collapsed ? 'Show' : 'Hide'} ${label}`}
+									onClick={() => onToggle(criterion.id)}
+									className={buttonClassName('admin-outline', 'xs')}>
+									{collapsed ? 'Show' : 'Hide'}
+								</button>
+								<p data-testid='criterion-summary' className={cx(BODY, 'min-w-0 flex-1 break-words')}>
+									<span className='font-semibold'>{label}</span> · {count} {count === 1 ? 'subcriterion' : 'subcriteria'} · Parent Max {parentMaxScore.toFixed(2)} · {criterion.appliesTo === 'individual' ? 'Per Contestant' : 'Group'}
+								</p>
+							</div>
+							<div id={bodyId} hidden={collapsed} className='mt-3'>
 							<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_180px_auto]'>
 								<input
 									value={criterion.name}
@@ -150,6 +186,7 @@ export function RubricCriteriaSection({ lockedCriteria, legendLock, totalEventMa
 										) : null}
 									</div>
 								))}
+							</div>
 							</div>
 						</div>
 					)

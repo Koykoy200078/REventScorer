@@ -199,6 +199,9 @@ export function CreateScorerForm() {
 	const [judges, setJudges] = useState<JudgeDraft[]>([createJudge()])
 	const [presentationSlots, setPresentationSlots] = useState<PresentationSlotDraft[]>(() => buildPresentationSlots(contestants.length))
 	const [criteria, setCriteria] = useState<CriterionDraft[]>([createCriterion()])
+	// Design 2026-11-26-create-rubric-legend: folded Rubric Criteria (ids). A template opens collapsed; an added
+	// criterion opens expanded.
+	const [collapsedCriterionIds, setCollapsedCriterionIds] = useState<ReadonlySet<string>>(() => new Set())
 	const [rubricLegend, setRubricLegend] = useState<RubricLegendDraft[]>(() => defaultRubricLegendDrafts())
 	const [showRubricLegend, setShowRubricLegend] = useState(false)
 	const [isSaving, setIsSaving] = useState(false)
@@ -255,7 +258,9 @@ export function CreateScorerForm() {
 		setEventScoringType('standard')
 		setContestants(contestantsFromNames(sampleContestants, 'group'))
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
-		setCriteria(toCriterionDraft(PAPER_PRESENTATION_CRITERIA))
+		const templateCriteria = toCriterionDraft(PAPER_PRESENTATION_CRITERIA)
+		setCriteria(templateCriteria)
+		setCollapsedCriterionIds(new Set(templateCriteria.map((criterion) => criterion.id)))
 		setRubricLegend(defaultRubricLegendDrafts())
 		setShowRubricLegend(false)
 		setShowPreview(false)
@@ -269,7 +274,9 @@ export function CreateScorerForm() {
 		setEventScoringType('final-oral-defense')
 		setContestants(contestantsFromNames(sampleContestants, 'group'))
 		setPresentationSlots(buildPresentationSlots(sampleContestants.length))
-		setCriteria(toCriterionDraft(buildFinalOralDefenseCriteria()))
+		const templateCriteria = toCriterionDraft(buildFinalOralDefenseCriteria())
+		setCriteria(templateCriteria)
+		setCollapsedCriterionIds(new Set(templateCriteria.map((criterion) => criterion.id)))
 		setRubricLegend(defaultRubricLegendDrafts())
 		setShowRubricLegend(false)
 		setShowPreview(false)
@@ -847,18 +854,6 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
-					<RubricCriteriaSection
-						lockedCriteria={lockedCriteria}
-						legendLock={legendLock}
-						totalEventMaxScore={totalEventMaxScore}
-						addCriterion={addCriterion}
-						updateCriterion={updateCriterion}
-						removeCriterion={removeCriterion}
-						addSubCriterion={addSubCriterion}
-						updateSubCriterion={updateSubCriterion}
-						removeSubCriterion={removeSubCriterion}
-					/>
-
 					<section className={PANEL}>
 						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
 							<div>
@@ -931,6 +926,29 @@ export function CreateScorerForm() {
 							<p className={HELP}>Rubric Legend is disabled. Enable it to customize score meanings for judges.</p>
 						)}
 					</section>
+
+					<RubricCriteriaSection
+						lockedCriteria={lockedCriteria}
+						legendLock={legendLock}
+						totalEventMaxScore={totalEventMaxScore}
+						addCriterion={addCriterion}
+						updateCriterion={updateCriterion}
+						removeCriterion={removeCriterion}
+						addSubCriterion={addSubCriterion}
+						updateSubCriterion={updateSubCriterion}
+						removeSubCriterion={removeSubCriterion}
+						collapsedIds={collapsedCriterionIds}
+						onToggle={(criterionId) =>
+							setCollapsedCriterionIds((previous) => {
+								const next = new Set(previous)
+								if (next.has(criterionId)) next.delete(criterionId)
+								else next.add(criterionId)
+								return next
+							})
+						}
+						onSetAll={(collapsed) => setCollapsedCriterionIds(collapsed ? new Set(criteria.map((criterion) => criterion.id)) : new Set())}
+					/>
+
 
 					<section className={PANEL_SKY}>
 						<div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
