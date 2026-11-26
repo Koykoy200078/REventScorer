@@ -32,14 +32,14 @@ export interface SharedSubCriterionDraft {
 // (lib/member-rows.ts), with one label word, members 1..N, and the same wordings and maximums, in the same order, for
 // every member. Only a grid is shown once in the editor and re-expanded on save, keeping its label word ("Day 2 -
 // Talk" stays "Day"); any other layout passes through unchanged, with its ids.
-export function memberGridOf(subCriteria: Array<{ id?: string; name: string; maxScore: number }>): { labelWord: string; memberCount: number; shared: SharedSubCriterionDraft[] } | null {
+export function memberGridOf(subCriteria: Array<{ id?: string; name: string; maxScore: number }>): { labelWord: string; memberCount: number; shared: SharedSubCriterionDraft[]; labels: Map<number, string> } | null {
 	if (!Array.isArray(subCriteria) || subCriteria.length === 0 || !subCriteria.every((subCriterion) => isMemberRowName(subCriterion.name))) {
 		return null
 	}
 
 	const parsed = subCriteria.map((subCriterion) => {
 		const { memberLabel, displayName } = splitMemberRowName(subCriterion.name)
-		return { id: subCriterion.id, labelWord: memberLabelWord(memberLabel), index: memberIndexFromLabel(memberLabel) ?? 0, wording: displayName, maxScore: Number(subCriterion.maxScore) }
+		return { id: subCriterion.id, label: memberLabel, labelWord: memberLabelWord(memberLabel), index: memberIndexFromLabel(memberLabel) ?? 0, wording: displayName, maxScore: Number(subCriterion.maxScore) }
 	})
 	const labelWord = parsed[0].labelWord
 	if (parsed.some((row) => row.labelWord !== labelWord)) {
@@ -63,7 +63,19 @@ export function memberGridOf(subCriteria: Array<{ id?: string; name: string; max
 		labelWord,
 		memberCount,
 		shared: first.map((row) => ({ id: row.id, name: row.wording, maxScore: Number.isFinite(row.maxScore) ? row.maxScore : 0 })),
+		labels: new Map(parsed.map((row) => [row.index, row.label])),
 	}
+}
+
+// Review round 2 G1 (D57): each member keeps its stored label exactly ("P1", "Student 01", "Member #1"), so the
+// server finds members 2..N's rows by name and keeps their ids and scores. A member the grid does not have yet takes
+// member 1's label with its number replaced, zero-padded as member 1 is ("Student 01" -> "Student 03").
+export function memberLabelMaker(grid: { labels: Map<number, string> }): (memberIndex: number) => string {
+	const first = grid.labels.get(1) ?? ''
+	const match = first.match(/^(.*?)(\d+)\s*$/)
+	const prefix = match ? match[1] : `${first} `
+	const width = match && match[2].length > 1 && match[2].startsWith('0') ? match[2].length : 1
+	return (memberIndex) => grid.labels.get(memberIndex) ?? `${prefix}${String(memberIndex).padStart(width, '0')}`
 }
 
 export function hasMemberScopedSubCriteria(subCriteria: Array<{ name: string; maxScore?: number; id?: string }>): boolean {
@@ -137,7 +149,12 @@ export function criterionTotalScoreForEditor(criterion: AdminEventEditorInput['c
 	return criterionSubCriteriaTotalScore(criterion.subCriteria)
 }
 
-export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: string; name: string; maxScore: number }>, memberCount: number, labelWord = 'Student', keepPrefixForOne = false): AdminEventEditorInput['criteria'][number]['subCriteria'] {
+export function expandSharedSubCriteriaForMembers(
+	subCriteria: Array<{ id?: string; name: string; maxScore: number }>,
+	memberCount: number,
+	labelWord: string | ((memberIndex: number) => string) = 'Student',
+	keepPrefixForOne = false,
+): AdminEventEditorInput['criteria'][number]['subCriteria'] {
 	const sharedSubCriteria = collapseMemberScopedSubCriteria(subCriteria)
 
 	if ((memberCount <= 1 && !keepPrefixForOne) || sharedSubCriteria.length === 0) {
@@ -154,7 +171,7 @@ export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: stri
 	const typedIdByName = new Map(subCriteria.filter((subCriterion) => subCriterion.id && isMemberRowName(subCriterion.name)).map((subCriterion) => [subCriterion.name.trim().toLowerCase(), subCriterion.id]))
 
 	for (let memberIndex = 1; memberIndex <= Math.max(1, memberCount); memberIndex += 1) {
-		const memberLabel = labelWord ? `${labelWord} ${memberIndex}` : String(memberIndex)
+		const memberLabel = typeof labelWord === 'function' ? labelWord(memberIndex) : labelWord ? `${labelWord} ${memberIndex}` : String(memberIndex)
 
 		for (const sharedSubCriterion of sharedSubCriteria) {
 			expanded.push({
@@ -180,6 +197,7 @@ export function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput,
 			const existingCriterion = criterion.id ? existingCriteriaById.get(criterion.id) : undefined
 			const shouldExpandForMembers = criterionUsesSharedMemberExpansion(criterion, existingCriterion)
 			const existingGrid = existingCriterion ? memberGridOf(existingCriterion.subCriteria) : null
+			const labelGrid = existingGrid ?? memberGridOf(criterion.subCriteria)
 
 			if (!shouldExpandForMembers) {
 				return criterion
@@ -190,7 +208,7 @@ export function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput,
 				subCriteria: expandSharedSubCriteriaForMembers(
 					criterion.subCriteria,
 					resolveSharedCriterionMemberCount(criterion, existingCriterion, editorMemberCount),
-					existingGrid?.labelWord ?? memberGridOf(criterion.subCriteria)?.labelWord ?? 'Student',
+					labelGrid ? memberLabelMaker(labelGrid) : 'Student',
 					existingGrid !== null,
 				),
 			}
