@@ -241,6 +241,8 @@ export function RatingSheet() {
 	const [loadedAssignment, setLoadedAssignment] = useState<Assignment>({})
 	const [loadedEvent, setLoadedEvent] = useState<{ event: EventScorer; judgeBreakdown: JudgeBreakdown[] } | null>(null)
 	const [ratingRemovals, setRatingRemovals] = useState<Array<{ judgeName: string; contestantName: string }> | null>(null)
+	// Review F5: the admin's answer to the question survives the password box (a 401 retry does not ask again).
+	const confirmedRemovalsRef = useRef(false)
 
 	useEffect(() => {
 		if (!editEventId) return
@@ -667,9 +669,14 @@ export function RatingSheet() {
 			const method = editEventId ? 'PATCH' : 'POST'
 			const url = editEventId ? `/api/eventscorer/admin/events/${editEventId}` : '/api/eventscorer/events'
 			
-			// D47: before an Update takes a judge off an applicant they scored, ask, as the admin editor does (B56).
+			// D47: before an Update takes a judge off an applicant they scored, ask, as the admin editor does (B56). Review F5:
+			// with the judges' figures as they are now, so a judge who scored after the sheet was opened is named too.
 			if (editEventId && loadedEvent && !confirmedRemovals) {
-				const removals = scoresDroppedByEditorSave(loadedEvent.event, loadedEvent.judgeBreakdown, payload as unknown as AdminEventEditorInput)
+				const current = (await fetch(`/api/eventscorer/admin/events/${editEventId}`)
+					.then((res) => (res.ok ? res.json() : null))
+					.catch(() => null)) as { event?: EventScorer; compiled?: { judgeBreakdown?: JudgeBreakdown[] } } | null
+				const figures = current?.event && current.compiled ? { event: current.event, judgeBreakdown: current.compiled.judgeBreakdown ?? [] } : loadedEvent
+				const removals = scoresDroppedByEditorSave(figures.event, figures.judgeBreakdown, payload as unknown as AdminEventEditorInput)
 				if (removals.length > 0) {
 					setRatingRemovals(removals)
 					return
@@ -760,7 +767,7 @@ export function RatingSheet() {
 			if (passwordPurpose === 'load') {
 				setLoadKey((key) => key + 1)
 			} else {
-				void publishRatingSheet()
+				void publishRatingSheet({ confirmedRemovals: confirmedRemovalsRef.current })
 			}
 		} catch {
 			setUpdatePasswordError('Unable to verify password. Try again.')
@@ -1094,6 +1101,7 @@ export function RatingSheet() {
 						ref={saveButtonRef}
 						type='button'
 						onClick={() => {
+							confirmedRemovalsRef.current = false
 							void publishRatingSheet()
 						}}
 						disabled={isSaving}
@@ -1194,6 +1202,7 @@ export function RatingSheet() {
 							data-testid='rating-removal-accept'
 							onClick={() => {
 								setRatingRemovals(null)
+								confirmedRemovalsRef.current = true
 								void publishRatingSheet({ confirmedRemovals: true })
 							}}
 							className={buttonClassName('admin-confirm')}
