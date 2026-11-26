@@ -159,6 +159,22 @@ export function withNewEntries(assignment: Assignment, entries: Array<{ id: stri
 	return next
 }
 
+// D47: removing a row. Typed ranges are applied with the numbering they were typed in, then the applicant goes and
+// every judge's range is renumbered, so every remaining applicant keeps its judges. An applicant added since the sheet
+// loaded that no range covers stays uncovered: it goes to every judge by the fallback on Update, and writing that into
+// the range texts made them overlap (review round 2 G2).
+export function afterRemovingEntry(
+	assignment: Assignment,
+	entries: Array<{ id: string }>,
+	judges: Array<{ id: string; assignedRange?: string }>,
+	removedId: string,
+): { assignment: Assignment; rangeTexts: Record<string, string> } {
+	const next = { ...withTypedRanges(assignment, entries, judges) }
+	delete next[removedId]
+	const remainingIds = entries.map((entry) => entry.id).filter((entryId) => entryId !== removedId)
+	return { assignment: next, rangeTexts: Object.fromEntries(judges.map((judge) => [judge.id, rangeTextFor(judge.id, remainingIds, next)])) }
+}
+
 // D47: the slots an Update sends, by applicant id, and the typed ranges that now overlap (refused). An applicant left
 // with no judge goes to every judge not set to "none", as before.
 export function planUpdate(

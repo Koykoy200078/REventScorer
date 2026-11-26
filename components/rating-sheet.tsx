@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
 import { scoresDroppedByEditorSave } from '@/lib/admin/judges'
-import { assignmentFromSlots, planUpdate, rangeTextFor, withNewEntries, withTypedRanges, type Assignment } from '@/lib/rating-sheet/assignments'
+import { afterRemovingEntry, assignmentFromSlots, planUpdate, rangeTextFor, type Assignment } from '@/lib/rating-sheet/assignments'
 import type { AdminEventEditorInput, ContestantInput, CreateEventResponse, DirectRatingConfig, EventScorer, JudgeBreakdown, JudgeInput, EventProgramTag } from '@/lib/types'
 import { buttonClassName } from '@/components/ui/button'
 import Dialog from '@/components/ui/dialog'
@@ -453,13 +453,10 @@ export function RatingSheet() {
 		if (!assignment) {
 			return
 		}
-		// D47: typed ranges are applied with the numbering they were typed in, then the applicant goes and the other
-		// judges' ranges are renumbered, so every remaining applicant keeps its judges.
-		const next = { ...withNewEntries(withTypedRanges(assignment, entries, judges), entries, judges, new Set(Object.keys(assignment))) }
-		delete next[id]
-		const remainingIds = remaining.map((entry) => entry.id)
+		// D47: every remaining applicant keeps its judges (lib/rating-sheet/assignments.ts afterRemovingEntry).
+		const { assignment: next, rangeTexts } = afterRemovingEntry(assignment, entries, judges, id)
 		setAssignment(next)
-		setJudges((previous) => previous.map((judge) => ({ ...judge, assignedRange: rangeTextFor(judge.id, remainingIds, next) })))
+		setJudges((previous) => previous.map((judge) => ({ ...judge, assignedRange: rangeTexts[judge.id] ?? judge.assignedRange })))
 	}
 
 	const removeJudge = (id: string) => {
