@@ -1357,6 +1357,19 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 													</button>
 												</div>
 											</div>
+											{/* The Rubric Legend switch (design 2026-11-26-create-rubric-legend): display only; max scores stay editable here. */}
+											<label className='mt-space-sm inline-flex items-center gap-2 font-label-sm text-label-sm text-slate-800'>
+												<input
+													type='checkbox'
+													data-testid='editor-legend-switch'
+													checked={eventEditorDraft.showRubricLegend !== false}
+													onChange={(event) => {
+														const checked = event.target.checked
+														updateEventEditorDraft((previous) => ({ ...previous, showRubricLegend: checked }))
+													}}
+												/>
+												Show the Rubric Legend to judges
+											</label>
 
 											<div className='mt-3 space-y-2'>
 												{normalizeRubricLegend(eventEditorDraft.rubricLegend).map((legendItem, legendIndex) => (
