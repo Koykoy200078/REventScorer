@@ -149,14 +149,17 @@ export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: stri
 	}
 
 	const expanded: AdminEventEditorInput['criteria'][number]['subCriteria'] = []
+	// Review F3: rows the admin typed as a member grid keep their own ids (a row fixed from "Student 2 – X" to
+	// "Student 2 - X" is still member 2's row).
+	const typedIdByName = new Map(subCriteria.filter((subCriterion) => subCriterion.id && isMemberRowName(subCriterion.name)).map((subCriterion) => [subCriterion.name.trim().toLowerCase(), subCriterion.id]))
 
 	for (let memberIndex = 1; memberIndex <= Math.max(1, memberCount); memberIndex += 1) {
 		const memberLabel = labelWord ? `${labelWord} ${memberIndex}` : String(memberIndex)
 
 		for (const sharedSubCriterion of sharedSubCriteria) {
 			expanded.push({
-				// Members 2..N go without ids: the server keeps their existing ids by name (D39).
-				id: memberIndex === 1 ? sharedSubCriterion.id : undefined,
+				// Members 2..N go without ids unless the admin typed them: the server keeps their existing ids by name (D39).
+				id: memberIndex === 1 ? sharedSubCriterion.id : typedIdByName.get(`${memberLabel} - ${sharedSubCriterion.name}`.toLowerCase()),
 				name: `${memberLabel} - ${sharedSubCriterion.name}`,
 				maxScore: sharedSubCriterion.maxScore,
 			})
