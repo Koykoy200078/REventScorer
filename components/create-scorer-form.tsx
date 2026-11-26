@@ -5,13 +5,14 @@ import { useMemo, useRef, useState } from 'react'
 
 import UnlockDialog from '@/components/unlock-dialog'
 
+import { criterionMaxScore, type CriterionDraft, RubricCriteriaSection, type SubCriterionDraft } from '@/components/create/rubric-criteria-section'
 import { legendTopScore, withLegendMaxes } from '@/lib/create/legend-max'
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
 import LeaveGuard, { useFormChanges } from '@/components/leave-guard'
 import { buttonClassName } from '@/components/ui/button'
-import { BODY, BOX, BOX_SKY, CELL_LABEL, CHECKBOX, CHIP_EMERALD, ENTRY_TYPE_GROUP, ENTRY_TYPE_INDIVIDUAL, ERROR_BOX, EYEBROW, FIELD, FIELD_STATIC, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, NOTE_BOX, OPTION_CHIP, PANEL, PANEL_SKY, TABLE_CAPTION, TABLE_DIVIDE, TABLE_HEAD, TABLE_ROW, TABLE_SHELL, VALUE, WELL } from '@/components/ui/form-styles'
+import { BODY, BOX, BOX_SKY, CELL_LABEL, CHECKBOX, CHIP_EMERALD, ENTRY_TYPE_GROUP, ENTRY_TYPE_INDIVIDUAL, ERROR_BOX, EYEBROW, FIELD, H1, H2, H3, HELP, LABEL, LABEL_SM, LEDE, LINK, NOTE_BOX, OPTION_CHIP, PANEL, PANEL_SKY, TABLE_CAPTION, TABLE_DIVIDE, TABLE_HEAD, TABLE_ROW, TABLE_SHELL, VALUE, WELL } from '@/components/ui/form-styles'
 import { cx } from '@/lib/ui/cx'
 
 type ContestantDraft = {
@@ -27,19 +28,6 @@ type JudgeDraft = {
 	id: string
 	name: string
 	email: string
-}
-
-type SubCriterionDraft = {
-	id: string
-	name: string
-	maxScore: string
-}
-
-type CriterionDraft = {
-	id: string
-	name: string
-	appliesTo: 'group' | 'individual'
-	subCriteria: SubCriterionDraft[]
 }
 
 type PresentationSlotDraft = {
@@ -186,10 +174,6 @@ function isEmptyContestantDraft(contestant: ContestantDraft): boolean {
 	}
 
 	return contestant.participants.every((participant) => participant.trim().length === 0)
-}
-
-function criterionMaxScore(criterion: CriterionDraft): number {
-	return criterion.subCriteria.reduce((sum, subCriterion) => sum + toNumber(subCriterion.maxScore), 0)
 }
 
 function dateDisplay(iso: string): string {
@@ -863,114 +847,17 @@ export function CreateScorerForm() {
 						</div>
 					</section>
 
-					<section className={PANEL}>
-						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-							<h2 className={H2}>Rubric Criteria</h2>
-							<div className='flex items-center gap-3'>
-								<span className={CHIP_EMERALD}>Event Max Score: {totalEventMaxScore.toFixed(2)}</span>
-								<button type='button' onClick={addCriterion} className={buttonClassName('admin-outline')}>
-									Add Parent Criterion
-								</button>
-							</div>
-						</div>
-						<p className={cx(HELP, 'mb-4')}>Choose each criterion scope: Per Contestant (Individual) for member-based questions, or Group Criteria Only for one team-level set of questions.</p>
-						{legendLock.on ? (
-							<p className={cx(NOTE_BOX, 'mb-4')}>
-								Max scores follow the Rubric Legend (top score {formatLegendScore(legendLock.top)}). Turn the legend off to set them yourself.
-							</p>
-						) : null}
-
-						<div className='space-y-5'>
-							{lockedCriteria.map((criterion, criterionIndex) => {
-								const parentMaxScore = criterionMaxScore(criterion)
-
-								return (
-									<div key={criterion.id} className={WELL}>
-										<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_180px_auto]'>
-											<input
-												value={criterion.name}
-												onChange={(event) =>
-													updateCriterion(criterion.id, {
-														name: event.target.value,
-													})
-												}
-												placeholder={`Parent criterion ${criterionIndex + 1}`}
-												className={cx(FIELD, 'px-3 py-2')}
-											/>
-											<div className={cx(FIELD_STATIC, 'flex items-center')}>Parent Max: {parentMaxScore.toFixed(2)}</div>
-											<select
-												value={criterion.appliesTo}
-												onChange={(event) =>
-													updateCriterion(criterion.id, {
-														appliesTo: event.target.value as 'group' | 'individual',
-													})
-												}
-												className={cx(FIELD, 'px-3 py-2')}>
-												<option value='group'>Apply To: Group Criteria Only</option>
-												<option value='individual'>Apply To: Per Contestant (Individual)</option>
-											</select>
-											{criteria.length > 1 ? (
-												<button type='button' onClick={() => removeCriterion(criterion.id)} className={buttonClassName('admin-remove', 'sm')}>
-													Remove Parent
-												</button>
-											) : null}
-										</div>
-										{criterion.appliesTo === 'individual' ? (
-											<p className={cx(HELP, 'mb-3')}>This criterion will be expanded per member and scored per contestant member, even when the event uses Standard Scoring.</p>
-										) : (
-											<p className={cx(HELP, 'mb-3')}>This criterion will stay as group-only questions (one set for the whole team/entry).</p>
-										)}
-
-										<div className='mb-3 flex items-center justify-between'>
-											<span className={HELP}>Subcriteria total max score: {parentMaxScore.toFixed(2)}</span>
-											<button type='button' onClick={() => addSubCriterion(criterion.id)} className={buttonClassName('admin-outline', 'xs')}>
-												Add Subcriterion
-											</button>
-										</div>
-
-										<div className='space-y-2'>
-											{criterion.subCriteria.map((subCriterion, subCriterionIndex) => (
-												<div key={subCriterion.id} className={cx(BOX, 'grid gap-2 sm:grid-cols-[1fr_160px_auto]')}>
-													<input
-														value={subCriterion.name}
-														onChange={(event) =>
-															updateSubCriterion(criterion.id, subCriterion.id, {
-																name: event.target.value,
-															})
-														}
-														placeholder={`Subcriterion ${subCriterionIndex + 1}`}
-														className={cx(FIELD, 'px-3 py-2')}
-													/>
-													<div className='flex flex-col gap-1'>
-														<input
-															value={subCriterion.maxScore}
-															onChange={(event) =>
-																updateSubCriterion(criterion.id, subCriterion.id, {
-																	maxScore: event.target.value,
-																})
-															}
-															readOnly={legendLock.on}
-															type='number'
-															min={0}
-															step='0.01'
-															placeholder='Subcriterion max score'
-															className={cx(FIELD, 'px-3 py-2', legendLock.on && 'bg-slate-100')}
-														/>
-														{legendLock.on ? <span className={HELP}>from legend</span> : null}
-													</div>
-													{criterion.subCriteria.length > 1 ? (
-														<button type='button' onClick={() => removeSubCriterion(criterion.id, subCriterion.id)} className={buttonClassName('admin-remove', 'sm')}>
-															Remove
-														</button>
-													) : null}
-												</div>
-											))}
-										</div>
-									</div>
-								)
-							})}
-						</div>
-					</section>
+					<RubricCriteriaSection
+						lockedCriteria={lockedCriteria}
+						legendLock={legendLock}
+						totalEventMaxScore={totalEventMaxScore}
+						addCriterion={addCriterion}
+						updateCriterion={updateCriterion}
+						removeCriterion={removeCriterion}
+						addSubCriterion={addSubCriterion}
+						updateSubCriterion={updateSubCriterion}
+						removeSubCriterion={removeSubCriterion}
+					/>
 
 					<section className={PANEL}>
 						<div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
