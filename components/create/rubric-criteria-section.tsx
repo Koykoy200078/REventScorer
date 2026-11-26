@@ -106,7 +106,7 @@ export function RubricCriteriaSection({ lockedCriteria, legendLock, totalEventMa
 									<span className='font-semibold'>{label}</span> · {count} {count === 1 ? 'subcriterion' : 'subcriteria'} · Parent Max {parentMaxScore.toFixed(2)} · {criterion.appliesTo === 'individual' ? 'Per Contestant' : 'Group'}
 								</p>
 							</div>
-							<div id={bodyId} hidden={collapsed} className='mt-3'>
+							<div id={bodyId} hidden={collapsed} data-criterion-index={criterionIndex} className='mt-3'>
 							<div className='mb-3 grid gap-2 sm:grid-cols-[1fr_180px_180px_auto]'>
 								<input
 									value={criterion.name}

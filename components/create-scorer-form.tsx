@@ -525,6 +525,24 @@ export function CreateScorerForm() {
 		}
 	}
 
+	// Final review (Minor 1, re-graded): a field the browser finds invalid inside a folded criterion cannot show its
+	// message, so Publish did nothing. Open that criterion, then let the field report once it is visible.
+	function onInvalidField(event: React.FormEvent<HTMLFormElement>): void {
+		const field = event.target as HTMLInputElement
+		const index = Number(field.closest('[data-criterion-index]')?.getAttribute('data-criterion-index'))
+		const criterionId = Number.isInteger(index) ? criteria[index]?.id : undefined
+		if (!criterionId || !collapsedCriterionIds.has(criterionId)) {
+			return
+		}
+		event.preventDefault()
+		setCollapsedCriterionIds((previous) => {
+			const next = new Set(previous)
+			next.delete(criterionId)
+			return next
+		})
+		requestAnimationFrame(() => field.reportValidity())
+	}
+
 	async function onSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
 		event.preventDefault()
 		setError(null)
@@ -641,7 +659,7 @@ export function CreateScorerForm() {
 					</button>
 				</div>
 
-				<form onSubmit={onSubmit} onInput={formChanges.onInput} className='mt-8 space-y-8'>
+				<form onSubmit={onSubmit} onInput={formChanges.onInput} onInvalidCapture={onInvalidField} className='mt-8 space-y-8'>
 					<section className={cx(WELL, 'grid gap-4 sm:grid-cols-2')}>
 						<label className={LABEL}>
 							Event Title
