@@ -1082,7 +1082,8 @@ function normalizeScoreMatrix(event: EventScorer, rawMatrix: unknown, options: {
 			for (const subCriterion of parentCriterion.subCriteria) {
 				const incomingValue = contestantScores[subCriterion.id] ?? 0
 				const typedValue = typeof incomingValue === 'number' ? incomingValue : Number(incomingValue)
-				const numeric = contestant.id === options.clampContestantId && typedValue > subCriterion.maxScore ? subCriterion.maxScore : typedValue
+				// Review F6: only a finite number is clamped; anything else is refused below as before.
+				const numeric = contestant.id === options.clampContestantId && Number.isFinite(typedValue) && typedValue > subCriterion.maxScore ? subCriterion.maxScore : typedValue
 
 				if (!Number.isFinite(numeric)) {
 					throw new Error(`Score for ${contestant.name} / ${subCriterion.name} must be a number.`)
