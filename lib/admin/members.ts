@@ -2,56 +2,22 @@
 // components/admin-live-dashboard.tsx (Stage 5 Task 7 step 1).
 
 import { extractDynamicTeamName } from '@/lib/admin/program'
+import { isMemberRowName, memberIndexFromLabel, splitMemberRowName } from '@/lib/member-rows'
 import type { EventContestant, EventCriterion } from '@/lib/types'
 
+// D40 (owner 2026-11-26): the shared member-row rule (lib/member-rows.ts), the server's. A row that is not a member
+// row keeps its whole name as its wording here, as the admin screens have always shown it.
+export { memberIndexFromLabel } from '@/lib/member-rows'
+
 export function isIndividualPresentationCriterion(criterion: EventCriterion): boolean {
-	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
-		return true
-	}
-
-	return criterion.subCriteria.some((subCriterion) => {
-		const normalizedName = subCriterion.name.trim()
-		const splitMatch = normalizedName.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
-		if (!splitMatch) {
-			return false
-		}
-
-		return /(\d+)\s*$/.test(splitMatch[1].trim())
-	})
+	return criterion.name.trim().toLowerCase() === 'individual presentation' || criterion.subCriteria.some((subCriterion) => isMemberRowName(subCriterion.name))
 }
 
 export function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
-	const normalizedName = name.trim()
-	const splitMatch = normalizedName.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
-	if (!splitMatch) {
-		return { memberLabel: 'Individual', displayName: normalizedName || name }
+	if (!isMemberRowName(name)) {
+		return { memberLabel: 'Individual', displayName: name.trim() || name }
 	}
-
-	const memberLabel = splitMatch[1].trim()
-	const displayName = splitMatch[2].trim()
-	const hasMemberSuffix = /(\d+)\s*$/.test(memberLabel)
-
-	if (!hasMemberSuffix) {
-		return {
-			memberLabel: 'Individual',
-			displayName: normalizedName || name,
-		}
-	}
-
-	return {
-		memberLabel: memberLabel || 'Individual',
-		displayName: displayName || normalizedName || name,
-	}
-}
-
-export function memberIndexFromLabel(memberLabel: string): number | null {
-	const match = memberLabel.match(/(\d+)\s*$/)
-	if (!match) {
-		return null
-	}
-
-	const index = Number.parseInt(match[1], 10)
-	return Number.isFinite(index) && index > 0 ? index : null
+	return splitMemberRowName(name)
 }
 
 export function normalizedParticipants(contestant: EventContestant): string[] {

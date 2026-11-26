@@ -8,6 +8,7 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise.js'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
 import { deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
+import { memberIndexFromLabel, splitMemberRowName as splitMemberCriterionName } from '@/lib/member-rows'
 import { assertTestModeDatabase } from '@/lib/test-mode-guard'
 import { applySchema, EVENTSCORER_SCHEMA_VERSION, TABLE_EVENTS, TABLE_CONTESTANTS, TABLE_CONTESTANT_PARTICIPANTS, TABLE_JUDGES, TABLE_CRITERIA, TABLE_SUBCRITERIA, TABLE_PRESENTATION_SLOTS, TABLE_PRESENTATION_SLOT_JUDGES, TABLE_SUBMISSIONS, TABLE_SUBMISSION_SAVED_CONTESTANTS, TABLE_SUBMISSION_SCORES, TABLE_SUBMISSION_CONTESTANT_DETAILS } from '@/lib/schema-sql'
 import type {
@@ -533,30 +534,6 @@ function normalizeSubCriteria(subCriteria: CreateEventInput['criteria'][number][
 		name: subCriterion.name,
 		maxScore: subCriterion.maxScore,
 	}))
-}
-
-function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
-	const separatorIndex = name.indexOf(' - ')
-	if (separatorIndex === -1) {
-		return { memberLabel: 'Individual', displayName: name }
-	}
-
-	const memberLabel = name.slice(0, separatorIndex).trim()
-	const displayName = name.slice(separatorIndex + 3).trim()
-	return {
-		memberLabel: memberLabel || 'Individual',
-		displayName: displayName || name,
-	}
-}
-
-function memberIndexFromLabel(memberLabel: string): number | null {
-	const match = memberLabel.match(/(\d+)\s*$/)
-	if (!match) {
-		return null
-	}
-
-	const index = Number.parseInt(match[1], 10)
-	return Number.isFinite(index) && index > 0 ? index : null
 }
 
 function isIndividualPresentationCriterionName(name: string): boolean {

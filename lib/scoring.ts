@@ -1,3 +1,4 @@
+import { isMemberRowName, memberIndexFromLabel, splitMemberRowName as splitMemberCriterionName } from '@/lib/member-rows'
 import { DEFAULT_DIRECT_RATING_CONFIG, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightsFromConfig, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import type { DirectRatingScoreField } from '@/lib/direct-rating-config'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
@@ -22,41 +23,9 @@ function criterionMaxScore(criterion: EventScorer['criteria'][number]): number {
 	return round(computedMaxScore)
 }
 
+// D40: the shared member-row rule (lib/member-rows.ts).
 function isIndividualCriterion(criterion: EventScorer['criteria'][number]): boolean {
-	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
-		return true
-	}
-
-	return criterion.subCriteria.some((subCriterion) => {
-		const separatorIndex = subCriterion.name.indexOf(' - ')
-		if (separatorIndex === -1) {
-			return false
-		}
-
-		const memberLabel = subCriterion.name.slice(0, separatorIndex).trim()
-		return /(\d+)\s*$/.test(memberLabel)
-	})
-}
-
-function splitMemberCriterionName(name: string): { memberLabel: string; displayName: string } {
-	const separatorIndex = name.indexOf(' - ')
-	if (separatorIndex === -1) {
-		return { memberLabel: 'Individual', displayName: name }
-	}
-
-	const memberLabel = name.slice(0, separatorIndex).trim()
-	const displayName = name.slice(separatorIndex + 3).trim()
-	return { memberLabel: memberLabel || 'Individual', displayName: displayName || name }
-}
-
-function memberIndexFromLabel(memberLabel: string): number | null {
-	const match = memberLabel.match(/(\d+)\s*$/)
-	if (!match) {
-		return null
-	}
-
-	const index = Number.parseInt(match[1], 10)
-	return Number.isFinite(index) && index > 0 ? index : null
+	return criterion.name.trim().toLowerCase() === 'individual presentation' || criterion.subCriteria.some((subCriterion) => isMemberRowName(subCriterion.name))
 }
 
 function normalizedParticipants(contestant: EventScorer['contestants'][number]): string[] {

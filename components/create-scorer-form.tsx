@@ -1,5 +1,6 @@
 'use client'
 
+import { isMemberRowName } from '@/lib/member-rows'
 import { useMemo, useRef, useState } from 'react'
 
 import UnlockDialog from '@/components/unlock-dialog'
@@ -120,14 +121,9 @@ function toCriterionDraft(criteria: CriterionInput[]): CriterionDraft[] {
 	}))
 }
 
+// D40: the shared member-row rule (lib/member-rows.ts).
 function hasMemberPrefix(value: string): boolean {
-	const normalized = value.trim()
-	const parts = normalized.match(/^(.+?)\s*[-\u2013\u2014]\s*(.+)$/)
-	if (!parts) {
-		return false
-	}
-
-	return /(\d+)\s*$/.test(parts[1])
+	return isMemberRowName(value.trim())
 }
 
 function contestantMemberCount(contestant: ContestantDraft): number {

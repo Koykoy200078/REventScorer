@@ -2,7 +2,8 @@
 // saves. Moved verbatim from components/admin-live-dashboard.tsx (Stage 5 Task 7 step 1).
 
 import { createEditorId } from '@/lib/admin/editor-id'
-import { memberCountFromSubCriteriaNames, memberIndexFromLabel, splitMemberCriterionName } from '@/lib/admin/members'
+import { memberCountFromSubCriteriaNames } from '@/lib/admin/members'
+import { isMemberRowName, memberIndexFromLabel, memberLabelWord, splitMemberRowName } from '@/lib/member-rows'
 import { normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { AdminEventEditorInput, EventCriterion, EventScorer } from '@/lib/types'
 
@@ -27,36 +28,59 @@ export interface SharedSubCriterionDraft {
 	maxScore: number
 }
 
-export function hasMemberScopedSubCriteria(subCriteria: Array<{ name: string }>): boolean {
-	return subCriteria.some((subCriterion) => {
-		const { memberLabel } = splitMemberCriterionName(subCriterion.name)
-		return memberIndexFromLabel(memberLabel) !== null
+// D40 (owner 2026-11-26): a criterion's rows are a member grid when every row is a member row by the shared rule
+// (lib/member-rows.ts), with one label word, members 1..N, and the same wordings and maximums, in the same order, for
+// every member. Only a grid is shown once in the editor and re-expanded on save, keeping its label word ("Day 2 -
+// Talk" stays "Day"); any other layout passes through unchanged, with its ids.
+export function memberGridOf(subCriteria: Array<{ id?: string; name: string; maxScore: number }>): { labelWord: string; memberCount: number; shared: SharedSubCriterionDraft[] } | null {
+	if (!Array.isArray(subCriteria) || subCriteria.length === 0 || !subCriteria.every((subCriterion) => isMemberRowName(subCriterion.name))) {
+		return null
+	}
+
+	const parsed = subCriteria.map((subCriterion) => {
+		const { memberLabel, displayName } = splitMemberRowName(subCriterion.name)
+		return { id: subCriterion.id, labelWord: memberLabelWord(memberLabel), index: memberIndexFromLabel(memberLabel) ?? 0, wording: displayName, maxScore: Number(subCriterion.maxScore) }
 	})
+	const labelWord = parsed[0].labelWord
+	if (parsed.some((row) => row.labelWord !== labelWord)) {
+		return null
+	}
+
+	const memberCount = Math.max(...parsed.map((row) => row.index))
+	const rowsOf = (index: number) => parsed.filter((row) => row.index === index)
+	const first = rowsOf(1)
+	if (first.length === 0) {
+		return null
+	}
+	for (let index = 2; index <= memberCount; index += 1) {
+		const rows = rowsOf(index)
+		if (rows.length !== first.length || rows.some((row, position) => row.wording.toLowerCase() !== first[position].wording.toLowerCase() || row.maxScore !== first[position].maxScore)) {
+			return null
+		}
+	}
+
+	return {
+		labelWord,
+		memberCount,
+		shared: first.map((row) => ({ id: row.id, name: row.wording, maxScore: Number.isFinite(row.maxScore) ? row.maxScore : 0 })),
+	}
+}
+
+export function hasMemberScopedSubCriteria(subCriteria: Array<{ name: string; maxScore?: number; id?: string }>): boolean {
+	return memberGridOf(subCriteria.map((subCriterion) => ({ id: subCriterion.id, name: subCriterion.name, maxScore: Number(subCriterion.maxScore ?? 0) }))) !== null
 }
 
 export function collapseMemberScopedSubCriteria(subCriteria: Array<{ id?: string; name: string; maxScore: number }>): SharedSubCriterionDraft[] {
-	const collapsed: SharedSubCriterionDraft[] = []
-	const seenDisplayNames = new Set<string>()
-
-	for (const subCriterion of subCriteria) {
-		const { memberLabel, displayName } = splitMemberCriterionName(subCriterion.name)
-		const memberIndex = memberIndexFromLabel(memberLabel)
-		const normalizedName = (memberIndex ? displayName : subCriterion.name).trim()
-		const key = normalizedName.toLowerCase()
-
-		if (!normalizedName || seenDisplayNames.has(key)) {
-			continue
-		}
-
-		seenDisplayNames.add(key)
-		collapsed.push({
-			id: subCriterion.id,
-			name: normalizedName,
-			maxScore: Number.isFinite(Number(subCriterion.maxScore)) ? Number(subCriterion.maxScore) : 0,
-		})
+	const grid = memberGridOf(subCriteria)
+	if (grid) {
+		return grid.shared
 	}
 
-	return collapsed
+	return subCriteria.map((subCriterion) => ({
+		id: subCriterion.id,
+		name: subCriterion.name.trim(),
+		maxScore: Number.isFinite(Number(subCriterion.maxScore)) ? Number(subCriterion.maxScore) : 0,
+	}))
 }
 
 export function expectedMemberCountForEditorContestant(contestant: AdminEventEditorInput['contestants'][number]): number {
@@ -88,15 +112,13 @@ export function criterionSubCriteriaTotalScore(subCriteria: Array<{ maxScore: nu
 }
 
 export function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorInput['criteria'][number], existingCriterion?: EventCriterion): boolean {
-	if (criterion.name.trim().toLowerCase() === 'individual presentation') {
-		return true
+	// D40: an existing criterion is re-expanded only when it was a member grid; a new one also when it is named
+	// "Individual Presentation" (today's create rule) or typed as a grid.
+	if (existingCriterion) {
+		return hasMemberScopedSubCriteria(existingCriterion.subCriteria) || hasMemberScopedSubCriteria(criterion.subCriteria)
 	}
 
-	if (existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria)) {
-		return true
-	}
-
-	return hasMemberScopedSubCriteria(criterion.subCriteria)
+	return criterion.name.trim().toLowerCase() === 'individual presentation' || hasMemberScopedSubCriteria(criterion.subCriteria)
 }
 
 export function resolveSharedCriterionMemberCount(criterion: AdminEventEditorInput['criteria'][number], existingCriterion: EventCriterion | undefined, editorMemberCount: number): number {
@@ -110,10 +132,10 @@ export function criterionTotalScoreForEditor(criterion: AdminEventEditorInput['c
 	return criterionSubCriteriaTotalScore(criterion.subCriteria)
 }
 
-export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: string; name: string; maxScore: number }>, memberCount: number): AdminEventEditorInput['criteria'][number]['subCriteria'] {
+export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: string; name: string; maxScore: number }>, memberCount: number, labelWord = 'Student', keepPrefixForOne = false): AdminEventEditorInput['criteria'][number]['subCriteria'] {
 	const sharedSubCriteria = collapseMemberScopedSubCriteria(subCriteria)
 
-	if (memberCount <= 1 || sharedSubCriteria.length === 0) {
+	if ((memberCount <= 1 && !keepPrefixForOne) || sharedSubCriteria.length === 0) {
 		return sharedSubCriteria.map((subCriterion) => ({
 			id: subCriterion.id,
 			name: subCriterion.name,
@@ -123,11 +145,12 @@ export function expandSharedSubCriteriaForMembers(subCriteria: Array<{ id?: stri
 
 	const expanded: AdminEventEditorInput['criteria'][number]['subCriteria'] = []
 
-	for (let memberIndex = 1; memberIndex <= memberCount; memberIndex += 1) {
-		const memberLabel = `Student ${memberIndex}`
+	for (let memberIndex = 1; memberIndex <= Math.max(1, memberCount); memberIndex += 1) {
+		const memberLabel = labelWord ? `${labelWord} ${memberIndex}` : String(memberIndex)
 
 		for (const sharedSubCriterion of sharedSubCriteria) {
 			expanded.push({
+				// Members 2..N go without ids: the server keeps their existing ids by name (D39).
 				id: memberIndex === 1 ? sharedSubCriterion.id : undefined,
 				name: `${memberLabel} - ${sharedSubCriterion.name}`,
 				maxScore: sharedSubCriterion.maxScore,
@@ -148,6 +171,7 @@ export function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput,
 		criteria: synchronizedDraft.criteria.map((criterion) => {
 			const existingCriterion = criterion.id ? existingCriteriaById.get(criterion.id) : undefined
 			const shouldExpandForMembers = criterionUsesSharedMemberExpansion(criterion, existingCriterion)
+			const existingGrid = existingCriterion ? memberGridOf(existingCriterion.subCriteria) : null
 
 			if (!shouldExpandForMembers) {
 				return criterion
@@ -155,7 +179,12 @@ export function prepareEventEditorPayloadForSubmit(draft: AdminEventEditorInput,
 
 			return {
 				...criterion,
-				subCriteria: expandSharedSubCriteriaForMembers(criterion.subCriteria, resolveSharedCriterionMemberCount(criterion, existingCriterion, editorMemberCount)),
+				subCriteria: expandSharedSubCriteriaForMembers(
+					criterion.subCriteria,
+					resolveSharedCriterionMemberCount(criterion, existingCriterion, editorMemberCount),
+					existingGrid?.labelWord ?? memberGridOf(criterion.subCriteria)?.labelWord ?? 'Student',
+					existingGrid !== null,
+				),
 			}
 		}),
 	}
