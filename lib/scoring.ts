@@ -381,6 +381,27 @@ function withRanks(sortedResults: CompiledContestantResult[], getScore: (result:
 	})
 }
 
+/**
+ * D42 (owner 2026-11-26, "Master NOAT always counts"): on a direct-rating event the applicant's master NOAT, set on
+ * the rating sheet, is the NOAT that counts for every judge. This returns the judge's submission with the NOAT cell of
+ * every applicant who has a master NOAT (a finite number, 0 included) replaced by it; applicants without one keep the
+ * judge's own NOAT (older events). Nothing stored changes: compile reads the copy.
+ */
+export function applyMasterNoat(submission: JudgeSubmission, event: EventScorer, noatSubCriterionId: string): JudgeSubmission {
+	let scores = submission.scores
+	for (const contestant of event.contestants) {
+		const master = contestant.noatScore
+		if (typeof master !== 'number' || !Number.isFinite(master)) {
+			continue
+		}
+		if (scores === submission.scores) {
+			scores = { ...submission.scores }
+		}
+		scores[contestant.id] = { ...(submission.scores[contestant.id] ?? {}), [noatSubCriterionId]: master }
+	}
+	return scores === submission.scores ? submission : { ...submission, scores }
+}
+
 export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const submittedByJudge = new Map(event.submissions.map((submission) => [submission.judgeId, submission]))
 	const normalizeLabel = (value: string) => value.trim().toLowerCase()
@@ -453,8 +474,11 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 
 	const judgeBreakdown: JudgeBreakdown[] = []
 
+	const noatSubCriterionId = directScoreFields.find((field) => field.key === 'noat')?.subCriterionId
 	for (const judge of event.judges) {
-		const submission = submittedByJudge.get(judge.id)
+		const storedSubmission = submittedByJudge.get(judge.id)
+		// D42: the master NOAT counts, for every judge, in every figure below (final rating, NOAT detail, totals).
+		const submission = storedSubmission && isDirectRatingEvent && noatSubCriterionId ? applyMasterNoat(storedSubmission, event, noatSubCriterionId) : storedSubmission
 
 		if (!submission) {
 			judgeBreakdown.push({
