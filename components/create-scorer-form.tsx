@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from 'react'
 
 import UnlockDialog from '@/components/unlock-dialog'
 
+import { legendTopScore, withLegendMaxes } from '@/lib/create/legend-max'
 import { buildFinalOralDefenseCriteria, FINAL_ORAL_DEFENSE_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CONTESTANT_SAMPLES, PAPER_PRESENTATION_CRITERIA } from '@/lib/default-rubric'
 import { DEFAULT_RUBRIC_LEGEND, formatLegendScore, formatRubricLegend, normalizeRubricLegend } from '@/lib/rubric-legend'
 import type { ContestantEntryType, CreateEventResponse, CriterionInput, EventProgramTag, EventScoringType, RubricLegendItem } from '@/lib/types'
@@ -224,14 +225,6 @@ export function CreateScorerForm() {
 	const [isUnlockOpen, setIsUnlockOpen] = useState(false)
 	const pendingPublishRef = useRef<unknown>(null)
 
-	const totalEventMaxScore = useMemo(() => {
-		return criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)
-	}, [criteria])
-
-	const totalSubCriteria = useMemo(() => {
-		return criteria.reduce((sum, criterion) => sum + criterion.subCriteria.length, 0)
-	}, [criteria])
-
 	const normalizedRubricLegend = useMemo(() => {
 		const legendItems = rubricLegend.map((legendItem) => ({
 			score: toNumber(legendItem.score),
@@ -240,6 +233,19 @@ export function CreateScorerForm() {
 
 		return normalizeRubricLegend(legendItems)
 	}, [rubricLegend])
+
+	// Design 2026-11-26-create-rubric-legend (owner: "Lock to legend"): while the legend is on, every subcriterion's
+	// max is its top score. Each row keeps its own max in `criteria`; what is shown and sent is `lockedCriteria`.
+	const legendLock = useMemo(() => ({ on: showRubricLegend, top: legendTopScore(normalizedRubricLegend) }), [showRubricLegend, normalizedRubricLegend])
+	const lockedCriteria = useMemo(() => withLegendMaxes(criteria, legendLock), [criteria, legendLock])
+
+	const totalEventMaxScore = useMemo(() => {
+		return lockedCriteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0)
+	}, [lockedCriteria])
+
+	const totalSubCriteria = useMemo(() => {
+		return criteria.reduce((sum, criterion) => sum + criterion.subCriteria.length, 0)
+	}, [criteria])
 
 	const rubricLegendText = useMemo(() => formatRubricLegend(normalizedRubricLegend), [normalizedRubricLegend])
 
@@ -532,6 +538,13 @@ export function CreateScorerForm() {
 		event.preventDefault()
 		setError(null)
 		setCreated(null)
+
+		// The locked max scores come from the legend, so its top score must be a usable maximum.
+		if (legendLock.on && legendLock.top <= 0) {
+			setError("The Rubric Legend's top score must be above 0.")
+			return
+		}
+
 		setIsSaving(true)
 
 		const payload = {
@@ -559,7 +572,7 @@ export function CreateScorerForm() {
 				name: judge.name,
 				email: judge.email,
 			})),
-			criteria: criteria.map((criterion) => ({
+			criteria: lockedCriteria.map((criterion) => ({
 				name: criterion.name,
 				subCriteria: criterion.appliesTo === 'individual' ? expandSubCriteriaForIndividualCriteria(criterion.subCriteria, contestants) : normalizeSubCriteriaForPayload(criterion.subCriteria),
 			})),
@@ -861,9 +874,14 @@ export function CreateScorerForm() {
 							</div>
 						</div>
 						<p className={cx(HELP, 'mb-4')}>Choose each criterion scope: Per Contestant (Individual) for member-based questions, or Group Criteria Only for one team-level set of questions.</p>
+						{legendLock.on ? (
+							<p className={cx(NOTE_BOX, 'mb-4')}>
+								Max scores follow the Rubric Legend (top score {formatLegendScore(legendLock.top)}). Turn the legend off to set them yourself.
+							</p>
+						) : null}
 
 						<div className='space-y-5'>
-							{criteria.map((criterion, criterionIndex) => {
+							{lockedCriteria.map((criterion, criterionIndex) => {
 								const parentMaxScore = criterionMaxScore(criterion)
 
 								return (
@@ -923,19 +941,23 @@ export function CreateScorerForm() {
 														placeholder={`Subcriterion ${subCriterionIndex + 1}`}
 														className={cx(FIELD, 'px-3 py-2')}
 													/>
-													<input
-														value={subCriterion.maxScore}
-														onChange={(event) =>
-															updateSubCriterion(criterion.id, subCriterion.id, {
-																maxScore: event.target.value,
-															})
-														}
-														type='number'
-														min={0}
-														step='0.01'
-														placeholder='Subcriterion max score'
-														className={cx(FIELD, 'px-3 py-2')}
-													/>
+													<div className='flex flex-col gap-1'>
+														<input
+															value={subCriterion.maxScore}
+															onChange={(event) =>
+																updateSubCriterion(criterion.id, subCriterion.id, {
+																	maxScore: event.target.value,
+																})
+															}
+															readOnly={legendLock.on}
+															type='number'
+															min={0}
+															step='0.01'
+															placeholder='Subcriterion max score'
+															className={cx(FIELD, 'px-3 py-2', legendLock.on && 'bg-slate-100')}
+														/>
+														{legendLock.on ? <span className={HELP}>from legend</span> : null}
+													</div>
 													{criterion.subCriteria.length > 1 ? (
 														<button type='button' onClick={() => removeSubCriterion(criterion.id, subCriterion.id)} className={buttonClassName('admin-remove', 'sm')}>
 															Remove
@@ -1213,7 +1235,7 @@ export function CreateScorerForm() {
 											<span>Subcriteria</span>
 										</div>
 										<div className={TABLE_DIVIDE}>
-											{criteria.map((criterion, criterionIndex) => (
+											{lockedCriteria.map((criterion, criterionIndex) => (
 												<div key={criterion.id} className={cx(TABLE_ROW, 'grid gap-2 sm:grid-cols-[56px_minmax(170px,0.8fr)_120px_96px_minmax(230px,1.3fr)] sm:items-start')}>
 													<p>
 														<span className={cx(CELL_LABEL, 'sm:hidden')}># </span>
