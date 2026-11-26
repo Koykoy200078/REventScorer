@@ -16,7 +16,7 @@ export const TABLE_SUBMISSION_SCORES = 'es_submission_scores'
 export const TABLE_SUBMISSION_CONTESTANT_DETAILS = 'es_submission_contestant_details'
 
 // Raised whenever the schema below changes, so a running server applies it again.
-export const EVENTSCORER_SCHEMA_VERSION = 7
+export const EVENTSCORER_SCHEMA_VERSION = 8
 
 const CREATE_TABLES = [
 		`CREATE TABLE IF NOT EXISTS ${TABLE_EVENTS} (
@@ -27,6 +27,7 @@ const CREATE_TABLES = [
 			event_scoring_type VARCHAR(32) NOT NULL DEFAULT 'standard',
 			rubric_legend_json LONGTEXT NULL,
 			show_rubric_legend TINYINT(1) NOT NULL DEFAULT 0,
+			rubric_legend_shown TINYINT(1) NOT NULL DEFAULT 1,
 			direct_rating_config_json LONGTEXT NULL,
 			created_at DATETIME(3) NOT NULL,
 			PRIMARY KEY (id),
@@ -159,6 +160,10 @@ const ADDED_COLUMNS: ReadonlyArray<{ table: string; column: string; add: string 
 	// Schema 7 (B13, Stage 1 Task 5): the office database and the migration SQL have it, so a HeidiSQL dump's
 	// INSERT names it; without it the load stops at es_events. The app does not read or write it yet.
 	{ table: TABLE_EVENTS, column: 'show_rubric_legend', add: `ALTER TABLE ${TABLE_EVENTS} ADD COLUMN show_rubric_legend TINYINT(1) NOT NULL DEFAULT 0 AFTER rubric_legend_json` },
+	// Schema 8 (design 2026-11-26-create-rubric-legend): the "Enable Rubric Legend" switch. Its default is on, so every
+	// event a database already holds when the column is added keeps showing judges the legend, as before (owner: "keep
+	// old events"). show_rubric_legend above stays a legacy column: never read, and 0 on every office event.
+	{ table: TABLE_EVENTS, column: 'rubric_legend_shown', add: `ALTER TABLE ${TABLE_EVENTS} ADD COLUMN rubric_legend_shown TINYINT(1) NOT NULL DEFAULT 1 AFTER show_rubric_legend` },
 	{ table: TABLE_EVENTS, column: 'direct_rating_config_json', add: `ALTER TABLE ${TABLE_EVENTS} ADD COLUMN direct_rating_config_json LONGTEXT NULL AFTER rubric_legend_json` },
 	{ table: TABLE_CONTESTANTS, column: 'noat_score', add: `ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN noat_score DECIMAL(10,3) NULL AFTER program_tag` },
 	{ table: TABLE_CONTESTANTS, column: 'section', add: `ALTER TABLE ${TABLE_CONTESTANTS} ADD COLUMN section VARCHAR(64) NULL AFTER program_tag` },

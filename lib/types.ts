@@ -124,6 +124,8 @@ export interface AdminEventEditorInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	/** The Rubric Legend switch; a payload without it keeps the event's own (a page opened before it existed). */
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	contestants: AdminContestantEditorInput[]
 	judges: AdminJudgeEditorInput[]
@@ -137,6 +139,8 @@ export interface CreateEventInput {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	/** "Enable Rubric Legend"; absent means on, as every event was before the switch was saved. */
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	contestants: Array<string | ContestantInput>
 	judges: JudgeInput[]
@@ -198,6 +202,8 @@ export interface EventScorer {
 	createdBy?: string
 	eventScoringType?: EventScoringType
 	rubricLegend?: RubricLegendItem[]
+	/** Whether judges see the Rubric Legend line (es_events.rubric_legend_shown, default on). */
+	showRubricLegend: boolean
 	directRatingConfig?: DirectRatingConfig
 	createdAt: string
 	contestants: EventContestant[]
@@ -231,7 +237,7 @@ export interface JudgeProfile {
 }
 
 export interface JudgeSessionData {
-	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
+	event: Pick<EventScorer, 'id' | 'title' | 'description' | 'eventScoringType' | 'rubricLegend' | 'showRubricLegend' | 'directRatingConfig' | 'contestants' | 'criteria' | 'presentationSlots'>
 	judge: JudgeProfile
 	submission?: JudgeSubmission
 }

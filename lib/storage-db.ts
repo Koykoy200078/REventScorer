@@ -56,6 +56,7 @@ interface EventRow extends RowDataPacket {
 	created_by: string | null
 	event_scoring_type: string | null
 	rubric_legend_json: string | null
+	rubric_legend_shown: number | null
 	direct_rating_config_json: string | null
 	created_at: string
 }
@@ -661,6 +662,8 @@ function buildEvent(input: CreateEventInput): EventScorer {
 	const createdBy = input.createdBy ? compactWhitespace(input.createdBy) : undefined
 	const eventScoringType = normalizeEventScoringType(input.eventScoringType)
 	const rubricLegend = normalizeRubricLegendInput(input.rubricLegend)
+	// The Rubric Legend switch: absent means on, as every event was before it was saved.
+	const showRubricLegend = input.showRubricLegend !== false
 
 	const normalizedContestants = normalizeContestants(input.contestants ?? [])
 	const normalizedJudges = normalizeJudges(input.judges ?? [])
@@ -676,6 +679,7 @@ function buildEvent(input: CreateEventInput): EventScorer {
 		createdBy,
 		eventScoringType,
 		rubricLegend,
+		showRubricLegend,
 		directRatingConfig,
 		createdAt: new Date().toISOString(),
 		contestants: normalizedContestants,
@@ -1017,6 +1021,9 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 	const createdBy = typeof source.createdBy === 'string' ? compactWhitespace(source.createdBy) : ''
 	const eventScoringType = normalizeEventScoringType(source.eventScoringType)
 	const rubricLegend = normalizeRubricLegendInput(source.rubricLegend)
+	// The Rubric Legend switch: a payload without it (a page opened before it existed, the rating sheet's older
+	// copy) keeps the event's own.
+	const showRubricLegend = typeof source.showRubricLegend === 'boolean' ? source.showRubricLegend : previousEvent.showRubricLegend !== false
 	// Over-long ids the page made for new contestants and judges, and the UUIDs that replace them (B46).
 	const replacedIds = new Map<string, string>()
 	const contestants = normalizeContestantsForAdminEditor(source.contestants ?? [], replacedIds)
@@ -1038,6 +1045,7 @@ function normalizeEventEditorInput(previousEvent: EventScorer, rawInput: unknown
 		createdBy: createdBy.length > 0 ? createdBy : undefined,
 		eventScoringType,
 		rubricLegend,
+		showRubricLegend,
 		directRatingConfig,
 		contestants,
 		judges,
@@ -1490,6 +1498,15 @@ async function ensureSchemaVersion(pool: Pool): Promise<void> {
 	await schemaPromise
 }
 
+// Design 2026-11-26-create-rubric-legend: an SQL import (Import DB) may replace the tables with an older layout, for
+// example a backup made before rubric_legend_shown existed, while this process has already applied the schema. Run
+// it again at once, so the missing columns are added (with their defaults) before the next read names them.
+export async function reapplySchema(): Promise<void> {
+	const pool = await getPool()
+	await ensureSchema(pool)
+	eventScorerGlobalState.__eventScorerSchemaVersion = EVENTSCORER_SCHEMA_VERSION
+}
+
 async function initializePool(): Promise<Pool> {
 	const config = buildDatabaseConfig()
 	let serverMaxConnections: number | null = null
@@ -1882,6 +1899,8 @@ function normalizeLegacyEventForImport(rawEvent: unknown): EventScorer | null {
 		createdBy,
 		eventScoringType,
 		rubricLegend,
+		// Events from the old JSON store show the legend, as they always did (owner: "keep old events").
+		showRubricLegend: true,
 		directRatingConfig,
 		createdAt,
 		contestants,
@@ -2123,9 +2142,9 @@ async function upsertSubmissionWithScores(connection: PoolConnection, event: Eve
 
 async function insertEventGraph(connection: PoolConnection, event: EventScorer): Promise<void> {
 	await connection.execute(
-		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), event.directRatingConfig ? JSON.stringify(normalizeDirectRatingConfig(event.directRatingConfig)) : null, toMySqlDateTime(event.createdAt)],
+		`INSERT INTO ${TABLE_EVENTS} (id, title, description, created_by, event_scoring_type, rubric_legend_json, rubric_legend_shown, direct_rating_config_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[event.id, event.title, event.description ?? null, event.createdBy ?? null, normalizeEventScoringType(event.eventScoringType), JSON.stringify(normalizeRubricLegendInput(event.rubricLegend)), event.showRubricLegend === false ? 0 : 1, event.directRatingConfig ? JSON.stringify(normalizeDirectRatingConfig(event.directRatingConfig)) : null, toMySqlDateTime(event.createdAt)],
 	)
 
 	for (let contestantIndex = 0; contestantIndex < event.contestants.length; contestantIndex += 1) {
@@ -2304,7 +2323,7 @@ async function replacePresentationSlotsForEvent(connection: PoolConnection, even
 async function loadEventById(executor: SqlExecutor, eventId: string): Promise<EventScorer | undefined> {
 	const eventRows = await selectRows<EventRow>(
 		executor,
-		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, direct_rating_config_json, created_at
+		`SELECT id, title, description, created_by, event_scoring_type, rubric_legend_json, rubric_legend_shown, direct_rating_config_json, created_at
 		 FROM ${TABLE_EVENTS}
 		 WHERE id = ?
 		 LIMIT 1`,
@@ -2555,6 +2574,7 @@ async function loadEventById(executor: SqlExecutor, eventId: string): Promise<Ev
 		createdBy: eventRow.created_by ?? undefined,
 		eventScoringType,
 		rubricLegend,
+		showRubricLegend: Number(eventRow.rubric_legend_shown ?? 1) !== 0,
 		directRatingConfig,
 		createdAt: fromMySqlDateTime(eventRow.created_at),
 		contestants,
@@ -2951,6 +2971,7 @@ export async function getJudgeSessionByToken(token: string): Promise<JudgeSessio
 			description: event.description,
 			eventScoringType: event.eventScoringType,
 			rubricLegend: event.rubricLegend,
+			showRubricLegend: event.showRubricLegend,
 			directRatingConfig: event.directRatingConfig,
 			contestants: orderedContestants,
 			criteria: event.criteria,

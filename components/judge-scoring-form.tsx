@@ -57,6 +57,8 @@ interface JudgeScoringFormProps {
 	criteria: EventCriterion[]
 	judge: JudgeProfile
 	rubricLegend?: RubricLegendItem[]
+	/** The event's Rubric Legend switch; the legend line is shown only when it is not false. */
+	showRubricLegend?: boolean
 	directRatingConfig?: DirectRatingConfig
 	presentationSlots?: EventPresentationSlot[]
 	existingScores?: ScoreMatrix
@@ -78,7 +80,7 @@ const BODY_INNER = {
 	direct: 'w-full max-w-5xl mx-auto py-space-lg flex flex-col gap-space-lg',
 } as const
 
-export function JudgeScoringForm({ token, eventTitle, eventDescription, eventScoringType, initialView, contestants, criteria: rawCriteria, judge, rubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
+export function JudgeScoringForm({ token, eventTitle, eventDescription, eventScoringType, initialView, contestants, criteria: rawCriteria, judge, rubricLegend, showRubricLegend, directRatingConfig, presentationSlots, existingScores: rawExistingScores, existingSavedContestantIds, existingContestantDetails, submittedAt, initialContestantId, adminEditMode = false }: JudgeScoringFormProps) {
 	const topRef = useRef<HTMLDivElement>(null)
 	const autoSyncInProgressRef = useRef(false)
 	const { criteria, scores: existingScores } = useMemo(() => migrateLegacyDirectRating(rawCriteria, rawExistingScores, directRatingConfig), [rawCriteria, rawExistingScores, directRatingConfig])
@@ -913,7 +915,7 @@ export function JudgeScoringForm({ token, eventTitle, eventDescription, eventSco
 	const sectionVariant = view === 'unified' ? 'unified' : view === 'group' ? 'group' : 'individual'
 	// D30's draft state, once per page in the dock's summary (spec §7.1, R15).
 	const draftIndicator = <DraftIndicator status={draftStatus} />
-	const meta = <JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} legendText={view !== 'direct' && !directRatingConfig ? rubricLegendText : null} />
+	const meta = <JudgeMeta judgeName={judge.name} adminEditMode={adminEditMode} lastSubmittedAt={lastSubmittedAt} legendText={view !== 'direct' && !directRatingConfig && showRubricLegend !== false ? rubricLegendText : null} />
 	const toggle = layout === 'unified' ? <ViewSwitcher variant='toggle' value={view === 'direct' ? 'unified' : view} onChange={setView} weighted={weighted} /> : null
 	// The examinee tabs and the selected member-group share one <Tabs>; with one examinee there is
 	// neither (spec §2.5 ExamineeRoster).

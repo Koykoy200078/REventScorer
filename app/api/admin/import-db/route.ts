@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { refuseUnlessOwnOrigin } from '@/lib/origin-guard'
+import { reapplySchema } from '@/lib/storage-db'
 
 const execAsync = promisify(exec)
 
@@ -69,6 +70,8 @@ export async function POST(request: Request) {
 			const { stdout, stderr } = await execAsync(command, {
 				env: { ...process.env, MYSQL_PWD: config.password }
 			})
+			// A backup made by an older version may lack columns this one reads (rubric_legend_shown): add them now.
+			await reapplySchema()
 			return NextResponse.json({ success: true, stdout, stderr })
 		} catch (execError: any) {
 			console.error('Database import failed:', execError)

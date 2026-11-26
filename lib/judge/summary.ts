@@ -75,6 +75,7 @@ export function previewScore(event: PreviewEvent, judgeId: string, input: Previe
 	const copy: EventScorer = {
 		id: 'judge-preview',
 		title: '',
+		showRubricLegend: true,
 		createdAt: at,
 		criteria: event.criteria,
 		contestants: event.contestants,
