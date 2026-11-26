@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
 import { scoresDroppedByEditorSave } from '@/lib/admin/judges'
-import { applyRangeText, assignmentFromSlots, assignNewEntry, NO_APPLICANT, newOverlaps, rangeTextFor, slotsFromAssignment, type Assignment } from '@/lib/rating-sheet/assignments'
+import { assignmentFromSlots, planUpdate, rangeTextFor, withNewEntries, withTypedRanges, type Assignment } from '@/lib/rating-sheet/assignments'
 import type { AdminEventEditorInput, ContestantInput, CreateEventResponse, DirectRatingConfig, EventScorer, JudgeBreakdown, JudgeInput, EventProgramTag } from '@/lib/types'
 import { buttonClassName } from '@/components/ui/button'
 import Dialog from '@/components/ui/dialog'
@@ -128,63 +128,6 @@ function entriesFromNewLines(value: string): string[] {
 		.split(/\r?\n/)
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0)
-}
-
-// D47 (owner 2026-11-26): a judge whose typed range differs from what the assignment says gets the typed range,
-// read with the row numbers on screen.
-function withTypedRanges(assignment: Assignment, entries: RatingEntry[], judges: JudgeDraft[]): Assignment {
-	const entryIds = entries.map((entry) => entry.id)
-	let next = assignment
-	for (const judge of judges) {
-		const typed = (judge.assignedRange ?? '').trim()
-		if (typed !== rangeTextFor(judge.id, entryIds, next)) {
-			next = applyRangeText(judge.id, typed, entryIds, next)
-		}
-	}
-	return next
-}
-
-// D47: applicants added or imported since the sheet loaded, and not given a judge by a typed range, follow the
-// owner's rule: judges whose range is empty (every applicant) get them, else every judge not set to "none".
-function withNewEntries(assignment: Assignment, entries: RatingEntry[], judges: JudgeDraft[], knownEntryIds: Set<string>): Assignment {
-	const texts = Object.fromEntries(judges.map((judge) => [judge.id, judge.assignedRange ?? '']))
-	const judgeIds = judges.map((judge) => judge.id)
-	let next = assignment
-	for (const entry of entries) {
-		if (!knownEntryIds.has(entry.id) && (next[entry.id] ?? []).length === 0) {
-			next = assignNewEntry(entry.id, judgeIds, texts, next)
-		}
-	}
-	return next
-}
-
-// D47: the slots an Update sends, by applicant id, and the typed ranges that now overlap (refused). An applicant left
-// with no judge goes to every judge not set to "none", as before.
-function updateSlotsFor(
-	assignment: Assignment,
-	loaded: Assignment,
-	entries: RatingEntry[],
-	judges: JudgeDraft[],
-	contestantIds: Set<string>,
-	judgeIds: Set<string>,
-): { slots: Array<{ label: string; contestantId: string; judgeIds: string[] }>; overlaps: Array<{ position: number; judgeIds: string[] }> } {
-	let next = withNewEntries(withTypedRanges(assignment, entries, judges), entries, judges, new Set(Object.keys(assignment)))
-	const everyone = judges.filter((judge) => (judge.assignedRange ?? '').trim().toLowerCase() !== NO_APPLICANT && judgeIds.has(judge.id)).map((judge) => judge.id)
-	const keptIds = entries.map((entry) => entry.id).filter((entryId) => contestantIds.has(entryId))
-	for (const entryId of keptIds) {
-		const assigned = (next[entryId] ?? []).filter((judgeId) => judgeIds.has(judgeId))
-		next = { ...next, [entryId]: assigned.length > 0 ? assigned : everyone }
-	}
-	const typedJudgeIds = judges
-		.filter((judge) => {
-			const typed = (judge.assignedRange ?? '').trim().toLowerCase()
-			return typed !== '' && typed !== NO_APPLICANT
-		})
-		.map((judge) => judge.id)
-	return {
-		slots: slotsFromAssignment(keptIds, next).map((slot, index) => ({ label: `Slot ${index + 1}`, ...slot })),
-		overlaps: newOverlaps(loaded, next, entries.map((entry) => entry.id), typedJudgeIds),
-	}
 }
 
 function buildContestantsPayload(entries: RatingEntry[]): (ContestantInput & { id?: string })[] {
@@ -650,7 +593,7 @@ export function RatingSheet() {
 		// ranges to row numbers as before.
 		let updateSlots: Array<{ label: string; contestantId: string; judgeIds: string[] }> | null = null
 		if (editEventId && assignment) {
-			const { slots, overlaps } = updateSlotsFor(assignment, loadedAssignment, entries, judges, new Set(contestants.map((contestant) => String(contestant.id))), new Set(normalizedJudges.map((judge) => String(judge.id))))
+			const { slots, overlaps } = planUpdate(assignment, loadedAssignment, entries, judges, new Set(contestants.map((contestant) => String(contestant.id))), new Set(normalizedJudges.map((judge) => String(judge.id))))
 			if (overlaps.length > 0) {
 				const names = overlaps[0].judgeIds.map((judgeId) => judges.find((judge) => judge.id === judgeId)?.name || 'Unnamed Judge')
 				setIsSaving(false)

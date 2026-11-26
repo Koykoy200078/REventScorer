@@ -96,15 +96,24 @@ export function assignNewEntry(entryId: string, judgeIds: string[], rangeTexts: 
 }
 
 /**
- * Applicants that two or more of the typed-range judges now share although they did not share them when the sheet
- * was loaded: typed ranges that overlap by mistake. Sharing made by Edit Judge (there at load) does not count, and
- * judges whose range is empty (every applicant) are not checked (owner 2026-11-26).
+ * Applicants that two or more typed ranges cover (typed ranges that overlap by mistake), unless those judges already
+ * shared the applicant when the sheet was loaded (sharing made by Edit Judge, owner 2026-11-26). Only typed ranges
+ * count: an empty range (every applicant) and "none" are not checked, and neither is an applicant that goes to every
+ * judge by the fallback (review F2). `checkedEntryIds`, when given, skips other rows (blank rows are not sent).
  */
-export function newOverlaps(loaded: Assignment, current: Assignment, entryIds: string[], typedJudgeIds: string[]): Array<{ position: number; judgeIds: string[] }> {
-	const typed = new Set(typedJudgeIds)
+export function newOverlaps(loaded: Assignment, entryIds: string[], typedRanges: Record<string, string>, checkedEntryIds?: Set<string>): Array<{ position: number; judgeIds: string[] }> {
+	const coverage = Object.entries(typedRanges)
+		.filter(([, text]) => {
+			const typed = text.trim().toLowerCase()
+			return typed !== '' && typed !== NO_APPLICANT
+		})
+		.map(([judgeId, text]) => ({ judgeId, positions: new Set(positionsOfRangeText(text, entryIds.length)) }))
 	const overlaps: Array<{ position: number; judgeIds: string[] }> = []
 	entryIds.forEach((entryId, index) => {
-		const judges = (current[entryId] ?? []).filter((judgeId) => typed.has(judgeId))
+		if (checkedEntryIds && !checkedEntryIds.has(entryId)) {
+			return
+		}
+		const judges = coverage.filter((range) => range.positions.has(index + 1)).map((range) => range.judgeId)
 		if (judges.length < 2) {
 			return
 		}
@@ -120,4 +129,55 @@ export function newOverlaps(loaded: Assignment, current: Assignment, entryIds: s
 /** The slots an Update sends, by applicant id, in row order. */
 export function slotsFromAssignment(entryIds: string[], assignment: Assignment): Array<{ contestantId: string; judgeIds: string[] }> {
 	return entryIds.map((entryId) => ({ contestantId: entryId, judgeIds: [...(assignment[entryId] ?? [])] }))
+}
+
+// D47 (owner 2026-11-26): a judge whose typed range differs from what the assignment says gets the typed range,
+// read with the row numbers on screen.
+export function withTypedRanges(assignment: Assignment, entries: Array<{ id: string }>, judges: Array<{ id: string; assignedRange?: string }>): Assignment {
+	const entryIds = entries.map((entry) => entry.id)
+	let next = assignment
+	for (const judge of judges) {
+		const typed = (judge.assignedRange ?? '').trim()
+		if (typed !== rangeTextFor(judge.id, entryIds, next)) {
+			next = applyRangeText(judge.id, typed, entryIds, next)
+		}
+	}
+	return next
+}
+
+// D47: applicants added or imported since the sheet loaded, and not given a judge by a typed range, follow the
+// owner's rule: judges whose range is empty (every applicant) get them, else every judge not set to "none".
+export function withNewEntries(assignment: Assignment, entries: Array<{ id: string }>, judges: Array<{ id: string; assignedRange?: string }>, knownEntryIds: Set<string>): Assignment {
+	const texts = Object.fromEntries(judges.map((judge) => [judge.id, judge.assignedRange ?? '']))
+	const judgeIds = judges.map((judge) => judge.id)
+	let next = assignment
+	for (const entry of entries) {
+		if (!knownEntryIds.has(entry.id) && (next[entry.id] ?? []).length === 0) {
+			next = assignNewEntry(entry.id, judgeIds, texts, next)
+		}
+	}
+	return next
+}
+
+// D47: the slots an Update sends, by applicant id, and the typed ranges that now overlap (refused). An applicant left
+// with no judge goes to every judge not set to "none", as before.
+export function planUpdate(
+	assignment: Assignment,
+	loaded: Assignment,
+	entries: Array<{ id: string }>,
+	judges: Array<{ id: string; assignedRange?: string }>,
+	contestantIds: Set<string>,
+	judgeIds: Set<string>,
+): { slots: Array<{ label: string; contestantId: string; judgeIds: string[] }>; overlaps: Array<{ position: number; judgeIds: string[] }> } {
+	let next = withNewEntries(withTypedRanges(assignment, entries, judges), entries, judges, new Set(Object.keys(assignment)))
+	const everyone = judges.filter((judge) => (judge.assignedRange ?? '').trim().toLowerCase() !== NO_APPLICANT && judgeIds.has(judge.id)).map((judge) => judge.id)
+	const keptIds = entries.map((entry) => entry.id).filter((entryId) => contestantIds.has(entryId))
+	for (const entryId of keptIds) {
+		const assigned = (next[entryId] ?? []).filter((judgeId) => judgeIds.has(judgeId))
+		next = { ...next, [entryId]: assigned.length > 0 ? assigned : everyone }
+	}
+	return {
+		slots: slotsFromAssignment(keptIds, next).map((slot, index) => ({ label: `Slot ${index + 1}`, ...slot })),
+		overlaps: newOverlaps(loaded, entries.map((entry) => entry.id), Object.fromEntries(judges.map((judge) => [judge.id, judge.assignedRange ?? ''])), new Set(keptIds)),
+	}
 }
