@@ -112,13 +112,18 @@ export function criterionSubCriteriaTotalScore(subCriteria: Array<{ maxScore: nu
 }
 
 export function criterionUsesSharedMemberExpansion(criterion: AdminEventEditorInput['criteria'][number], existingCriterion?: EventCriterion): boolean {
-	// D40: an existing criterion is re-expanded only when it was a member grid; a new one also when it is named
-	// "Individual Presentation" (today's create rule) or typed as a grid.
-	if (existingCriterion) {
-		return hasMemberScopedSubCriteria(existingCriterion.subCriteria) || hasMemberScopedSubCriteria(criterion.subCriteria)
+	// D40: a member grid (existing or typed) is re-expanded. An "Individual Presentation" criterion whose rows hold no
+	// member rows yet (plain rows: created before teams had participants, or a plain criterion renamed to it) is expanded
+	// per member as before, member 1 keeping the plain rows' ids (review F1). Rows that already hold member rows but are
+	// not a full grid pass through unchanged.
+	if (hasMemberScopedSubCriteria(criterion.subCriteria) || (existingCriterion && hasMemberScopedSubCriteria(existingCriterion.subCriteria))) {
+		return true
 	}
-
-	return criterion.name.trim().toLowerCase() === 'individual presentation' || hasMemberScopedSubCriteria(criterion.subCriteria)
+	if (criterion.name.trim().toLowerCase() !== 'individual presentation') {
+		return false
+	}
+	const holdsMemberRows = (rows: Array<{ name: string }>) => rows.some((row) => isMemberRowName(row.name))
+	return !holdsMemberRows(criterion.subCriteria) && !(existingCriterion && holdsMemberRows(existingCriterion.subCriteria))
 }
 
 export function resolveSharedCriterionMemberCount(criterion: AdminEventEditorInput['criteria'][number], existingCriterion: EventCriterion | undefined, editorMemberCount: number): number {

@@ -841,8 +841,12 @@ function reuseSubCriterionIds(subCriteria: Array<{ id?: string; name: string }>,
 			return byName
 		}
 		const { memberLabel, displayName } = splitMemberCriterionName(sub.name)
-		const oldWording = memberIndexFromLabel(memberLabel) !== null ? renamedWordings.get(displayName.toLowerCase()) : undefined
-		return oldWording ? take(`${memberLabel} - ${oldWording}`) : undefined
+		const memberIndex = memberIndexFromLabel(memberLabel)
+		const oldWording = memberIndex !== null ? renamedWordings.get(displayName.toLowerCase()) : undefined
+		const renamed = oldWording ? take(`${memberLabel} - ${oldWording}`) : undefined
+		// Review F1: rows expanded per member from plain rows ("Delivery" -> "Student 1 - Delivery") give member 1 the
+		// plain row's id, so its scores and an open judge page's cells follow it.
+		return renamed ?? (memberIndex === 1 ? take(displayName) : undefined)
 	})
 }
 
