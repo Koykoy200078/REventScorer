@@ -825,8 +825,11 @@ function reuseSubCriterionIds(subCriteria: Array<{ id?: string; name: string }>,
 			renamedWordings.set(displayName.toLowerCase(), oldWording)
 		}
 	})
+	// Exact name first, then the same name in other letter case (review F4: a case-only rename keeps the ids).
 	const take = (name: string): string | undefined => {
-		const match = previous.find((candidate) => !claimed.has(candidate.id) && candidate.name === name)
+		const match =
+			previous.find((candidate) => !claimed.has(candidate.id) && candidate.name === name) ??
+			previous.find((candidate) => !claimed.has(candidate.id) && candidate.name.toLowerCase() === name.toLowerCase())
 		if (match) {
 			claimed.add(match.id)
 		}
@@ -907,7 +910,9 @@ function normalizeCriteriaForAdminEditor(rawCriteria: AdminEventEditorInput['cri
 		const rawCriterionId = typeof rawCriterion.id === 'string' ? rawCriterion.id : undefined
 		let previousCriterion = rawCriterionId ? previousCriteriaById.get(rawCriterionId) : undefined
 		if (!previousCriterion) {
-			previousCriterion = previousCriteria.find((candidate) => !claimedCriterionIds.has(candidate.id) && candidate.name === criterionName)
+			previousCriterion =
+				previousCriteria.find((candidate) => !claimedCriterionIds.has(candidate.id) && candidate.name === criterionName) ??
+				previousCriteria.find((candidate) => !claimedCriterionIds.has(candidate.id) && candidate.name.toLowerCase() === criterionName.toLowerCase())
 			if (previousCriterion) {
 				claimedCriterionIds.add(previousCriterion.id)
 			}
