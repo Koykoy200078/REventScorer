@@ -97,7 +97,9 @@ export function assignNewEntry(entryId: string, judgeIds: string[], rangeTexts: 
 
 /**
  * Applicants that two or more typed ranges cover (typed ranges that overlap by mistake), unless those judges already
- * shared the applicant when the sheet was loaded (sharing made by Edit Judge, owner 2026-11-26). Only typed ranges
+ * shared the applicant when the sheet was loaded as typed ranges (sharing made by Edit Judge, owner 2026-11-26). A
+ * judge on every applicant at load (a sheet created with empty ranges) shows an empty range, so an overlap typed over
+ * that is refused (review round 2 G8). Only typed ranges
  * count: an empty range (every applicant) and "none" are not checked, and neither is an applicant that goes to every
  * judge by the fallback (review F2). `checkedEntryIds`, when given, skips other rows (blank rows are not sent).
  */
@@ -108,6 +110,8 @@ export function newOverlaps(loaded: Assignment, entryIds: string[], typedRanges:
 			return typed !== '' && typed !== NO_APPLICANT
 		})
 		.map(([judgeId, text]) => ({ judgeId, positions: new Set(positionsOfRangeText(text, entryIds.length)) }))
+	const loadedIds = Object.keys(loaded)
+	const onEveryLoaded = (judgeId: string) => loadedIds.length > 0 && loadedIds.every((entryId) => (loaded[entryId] ?? []).includes(judgeId))
 	const overlaps: Array<{ position: number; judgeIds: string[] }> = []
 	entryIds.forEach((entryId, index) => {
 		if (checkedEntryIds && !checkedEntryIds.has(entryId)) {
@@ -118,7 +122,7 @@ export function newOverlaps(loaded: Assignment, entryIds: string[], typedRanges:
 			return
 		}
 		const before = new Set(loaded[entryId] ?? [])
-		if (judges.every((judgeId) => before.has(judgeId))) {
+		if (judges.every((judgeId) => before.has(judgeId) && !onEveryLoaded(judgeId))) {
 			return
 		}
 		overlaps.push({ position: index + 1, judgeIds: judges })
