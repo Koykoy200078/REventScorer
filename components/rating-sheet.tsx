@@ -5,7 +5,9 @@ import { useSearchParams } from 'next/navigation'
 
 import { buildDirectRatingCriteriaFromConfig, DIRECT_RATING_TRACK_STRAND_OPTION_GROUPS, normalizeDirectRatingConfig } from '@/lib/direct-rating-config'
 import { DEFAULT_RUBRIC_LEGEND } from '@/lib/rubric-legend'
-import type { ContestantInput, CreateEventResponse, DirectRatingConfig, JudgeInput, EventProgramTag } from '@/lib/types'
+import { scoresDroppedByEditorSave } from '@/lib/admin/judges'
+import { applyRangeText, assignmentFromSlots, assignNewEntry, NO_APPLICANT, newOverlaps, rangeTextFor, slotsFromAssignment, type Assignment } from '@/lib/rating-sheet/assignments'
+import type { AdminEventEditorInput, ContestantInput, CreateEventResponse, DirectRatingConfig, EventScorer, JudgeBreakdown, JudgeInput, EventProgramTag } from '@/lib/types'
 import { buttonClassName } from '@/components/ui/button'
 import Dialog from '@/components/ui/dialog'
 import LeaveGuard, { useFormChanges } from '@/components/leave-guard'
@@ -37,27 +39,6 @@ function isNumberInRange(num: number, rangeStr: string): boolean {
 		}
 	}
 	return false
-}
-
-function formatIndicesToRanges(indices: number[], totalCount: number): string {
-	if (!indices || indices.length === 0) return ''
-	if (indices.length === totalCount) return '' // Empty means all
-	const sorted = [...new Set(indices)].sort((a, b) => a - b)
-	const ranges: string[] = []
-	let start = sorted[0]
-	let prev = sorted[0]
-
-	for (let i = 1; i < sorted.length; i++) {
-		if (sorted[i] === prev + 1) {
-			prev = sorted[i]
-		} else {
-			ranges.push(start === prev ? `${start + 1}` : `${start + 1}-${prev + 1}`)
-			start = sorted[i]
-			prev = sorted[i]
-		}
-	}
-	ranges.push(start === prev ? `${start + 1}` : `${start + 1}-${prev + 1}`)
-	return ranges.join(', ')
 }
 
 type RatingEntry = {
@@ -147,6 +128,63 @@ function entriesFromNewLines(value: string): string[] {
 		.split(/\r?\n/)
 		.map((entry) => entry.trim())
 		.filter((entry) => entry.length > 0)
+}
+
+// D47 (owner 2026-11-26): a judge whose typed range differs from what the assignment says gets the typed range,
+// read with the row numbers on screen.
+function withTypedRanges(assignment: Assignment, entries: RatingEntry[], judges: JudgeDraft[]): Assignment {
+	const entryIds = entries.map((entry) => entry.id)
+	let next = assignment
+	for (const judge of judges) {
+		const typed = (judge.assignedRange ?? '').trim()
+		if (typed !== rangeTextFor(judge.id, entryIds, next)) {
+			next = applyRangeText(judge.id, typed, entryIds, next)
+		}
+	}
+	return next
+}
+
+// D47: applicants added or imported since the sheet loaded, and not given a judge by a typed range, follow the
+// owner's rule: judges whose range is empty (every applicant) get them, else every judge not set to "none".
+function withNewEntries(assignment: Assignment, entries: RatingEntry[], judges: JudgeDraft[], knownEntryIds: Set<string>): Assignment {
+	const texts = Object.fromEntries(judges.map((judge) => [judge.id, judge.assignedRange ?? '']))
+	const judgeIds = judges.map((judge) => judge.id)
+	let next = assignment
+	for (const entry of entries) {
+		if (!knownEntryIds.has(entry.id) && (next[entry.id] ?? []).length === 0) {
+			next = assignNewEntry(entry.id, judgeIds, texts, next)
+		}
+	}
+	return next
+}
+
+// D47: the slots an Update sends, by applicant id, and the typed ranges that now overlap (refused). An applicant left
+// with no judge goes to every judge not set to "none", as before.
+function updateSlotsFor(
+	assignment: Assignment,
+	loaded: Assignment,
+	entries: RatingEntry[],
+	judges: JudgeDraft[],
+	contestantIds: Set<string>,
+	judgeIds: Set<string>,
+): { slots: Array<{ label: string; contestantId: string; judgeIds: string[] }>; overlaps: Array<{ position: number; judgeIds: string[] }> } {
+	let next = withNewEntries(withTypedRanges(assignment, entries, judges), entries, judges, new Set(Object.keys(assignment)))
+	const everyone = judges.filter((judge) => (judge.assignedRange ?? '').trim().toLowerCase() !== NO_APPLICANT && judgeIds.has(judge.id)).map((judge) => judge.id)
+	const keptIds = entries.map((entry) => entry.id).filter((entryId) => contestantIds.has(entryId))
+	for (const entryId of keptIds) {
+		const assigned = (next[entryId] ?? []).filter((judgeId) => judgeIds.has(judgeId))
+		next = { ...next, [entryId]: assigned.length > 0 ? assigned : everyone }
+	}
+	const typedJudgeIds = judges
+		.filter((judge) => {
+			const typed = (judge.assignedRange ?? '').trim().toLowerCase()
+			return typed !== '' && typed !== NO_APPLICANT
+		})
+		.map((judge) => judge.id)
+	return {
+		slots: slotsFromAssignment(keptIds, next).map((slot, index) => ({ label: `Slot ${index + 1}`, ...slot })),
+		overlaps: newOverlaps(loaded, next, entries.map((entry) => entry.id), typedJudgeIds),
+	}
 }
 
 function buildContestantsPayload(entries: RatingEntry[]): (ContestantInput & { id?: string })[] {
@@ -253,6 +291,13 @@ export function RatingSheet() {
 	// True while an edited event was read locked and the form was not filled: publishing then would
 	// overwrite the event with an empty form, so it asks to load the event first.
 	const [loadedLocked, setLoadedLocked] = useState(false)
+	// D47 (owner 2026-11-26): on Update Rating Sheet, the judges of each applicant (null on a new sheet: nothing is
+	// scored yet, so typed ranges by row number are fine), the assignment as loaded, and the loaded event for the B56
+	// question before an Update takes a judge off an applicant they scored.
+	const [assignment, setAssignment] = useState<Assignment | null>(null)
+	const [loadedAssignment, setLoadedAssignment] = useState<Assignment>({})
+	const [loadedEvent, setLoadedEvent] = useState<{ event: EventScorer; judgeBreakdown: JudgeBreakdown[] } | null>(null)
+	const [ratingRemovals, setRatingRemovals] = useState<Array<{ judgeName: string; contestantName: string }> | null>(null)
 
 	useEffect(() => {
 		if (!editEventId) return
@@ -278,35 +323,27 @@ export function RatingSheet() {
 					if (ev.directRatingConfig) {
 						setDirectRatingConfig(normalizeDirectRatingConfig(ev.directRatingConfig))
 					}
+					const loadedEntryIds: string[] = (ev.contestants ?? []).map((c: any) => String(c.id))
+					const loadedJudgeIds: string[] = (ev.judges ?? []).map((j: any) => String(j.id))
+					const loadedAssignmentValue = assignmentFromSlots(loadedEntryIds, loadedJudgeIds, ev.presentationSlots ?? [])
+					setAssignment(loadedAssignmentValue)
+					setLoadedAssignment(loadedAssignmentValue)
+					setLoadedEvent({ event: ev, judgeBreakdown: data.compiled?.judgeBreakdown ?? [] })
 					if (ev.judges && ev.judges.length > 0) {
-						setJudges(ev.judges.map((j: any) => {
-							let assignedRange = ''
-							if (ev.presentationSlots && ev.presentationSlots.length > 0 && ev.contestants) {
-								const indices: number[] = []
-								ev.presentationSlots.forEach((slot: any) => {
-									if (slot.judgeIds && slot.judgeIds.includes(j.id)) {
-										const contestantIndex = ev.contestants.findIndex((c: any) => c.id === slot.contestantId)
-										if (contestantIndex !== -1) {
-											indices.push(contestantIndex)
-										}
-									}
-								})
-								assignedRange = formatIndicesToRanges(indices, ev.contestants.length)
-							}
-							return { id: j.id, name: j.name, email: j.email || '', assignedRange }
-						}))
+						setJudges(ev.judges.map((j: any) => ({ id: j.id, name: j.name, email: j.email || '', assignedRange: rangeTextFor(j.id, loadedEntryIds, loadedAssignmentValue) })))
 					}
 					if (ev.contestants && ev.contestants.length > 0) {
 						setEntries(ev.contestants.map((c: any) => {
 							const compiledData = data.compiled?.rankings?.find((r: any) => r.contestantId === c.id)
-							const fallbackNoat = compiledData?.directDetails?.noat > 0 ? String(compiledData.directDetails.noat) : ''
 							const fallbackStrand = compiledData?.directDetails?.strand || ''
 							const fallbackRemark = compiledData?.directDetails?.remark || ''
 
 							return {
 								id: c.id || localId(),
 								name: c.name,
-								noatScore: (c.noatScore !== null && c.noatScore !== undefined && String(c.noatScore) !== '0') ? String(c.noatScore) : fallbackNoat,
+								// D42 (owner 2026-11-26): the master NOAT counts for every judge, so a blank master stays blank here
+								// (it was filled with the judges' average, which an unchanged Update then saved as the master); 0 is a master.
+								noatScore: typeof c.noatScore === 'number' && Number.isFinite(c.noatScore) ? String(c.noatScore) : '',
 								academicTrack: c.academicTrack || fallbackStrand,
 								laptopAvailable: c.laptopAvailable || fallbackRemark,
 								programTag: c.programTag || null,
@@ -463,11 +500,31 @@ export function RatingSheet() {
 	}
 
 	const removeEntry = (id: string) => {
-		setEntries((previous) => (previous.length > 1 ? previous.filter((entry) => entry.id !== id) : previous))
+		if (entries.length <= 1) {
+			return
+		}
+		const remaining = entries.filter((entry) => entry.id !== id)
+		setEntries(remaining)
+		if (!assignment) {
+			return
+		}
+		// D47: typed ranges are applied with the numbering they were typed in, then the applicant goes and the other
+		// judges' ranges are renumbered, so every remaining applicant keeps its judges.
+		const next = { ...withNewEntries(withTypedRanges(assignment, entries, judges), entries, judges, new Set(Object.keys(assignment))) }
+		delete next[id]
+		const remainingIds = remaining.map((entry) => entry.id)
+		setAssignment(next)
+		setJudges((previous) => previous.map((judge) => ({ ...judge, assignedRange: rangeTextFor(judge.id, remainingIds, next) })))
 	}
 
 	const removeJudge = (id: string) => {
-		setJudges((previous) => (previous.length > 1 ? previous.filter((judge) => judge.id !== id) : previous))
+		if (judges.length <= 1) {
+			return
+		}
+		setJudges((previous) => previous.filter((judge) => judge.id !== id))
+		if (assignment) {
+			setAssignment(Object.fromEntries(Object.entries(assignment).map(([entryId, judgeIds]) => [entryId, judgeIds.filter((judgeId) => judgeId !== id)])))
+		}
 	}
 
 	function handleImportPaste(text: string) {
@@ -563,7 +620,7 @@ export function RatingSheet() {
 		}
 	}
 
-	async function publishRatingSheet() {
+	async function publishRatingSheet({ confirmedRemovals = false }: { confirmedRemovals?: boolean } = {}) {
 		setError(null)
 		if (editEventId && loadedLocked) {
 			setPasswordPurpose('load')
@@ -589,24 +646,39 @@ export function RatingSheet() {
 			return
 		}
 
-		const explicitAssignments: Record<number, string[]> = {}
-		for (const judge of judges) {
-			if (judge.assignedRange && judge.assignedRange.trim()) {
-				for (let i = 1; i <= entries.length; i++) {
-					if (isNumberInRange(i, judge.assignedRange)) {
-						if (!explicitAssignments[i]) explicitAssignments[i] = []
-						explicitAssignments[i].push(judge.name || 'Unnamed Judge')
+		// D47: an Update keeps each applicant's judges (typed ranges become per-applicant judges); a new sheet maps typed
+		// ranges to row numbers as before.
+		let updateSlots: Array<{ label: string; contestantId: string; judgeIds: string[] }> | null = null
+		if (editEventId && assignment) {
+			const { slots, overlaps } = updateSlotsFor(assignment, loadedAssignment, entries, judges, new Set(contestants.map((contestant) => String(contestant.id))), new Set(normalizedJudges.map((judge) => String(judge.id))))
+			if (overlaps.length > 0) {
+				const names = overlaps[0].judgeIds.map((judgeId) => judges.find((judge) => judge.id === judgeId)?.name || 'Unnamed Judge')
+				setIsSaving(false)
+				setError(`Overlap detected: Entry ${overlaps[0].position} is assigned to multiple judges (${names.join(', ')}). Ranges should not overlap.`)
+				setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+				return
+			}
+			updateSlots = slots
+		} else {
+			const explicitAssignments: Record<number, string[]> = {}
+			for (const judge of judges) {
+				if (judge.assignedRange && judge.assignedRange.trim()) {
+					for (let i = 1; i <= entries.length; i++) {
+						if (isNumberInRange(i, judge.assignedRange)) {
+							if (!explicitAssignments[i]) explicitAssignments[i] = []
+							explicitAssignments[i].push(judge.name || 'Unnamed Judge')
+						}
 					}
 				}
 			}
-		}
 
-		for (const [entryStr, judgeNames] of Object.entries(explicitAssignments)) {
-			if (judgeNames.length > 1) {
-				setIsSaving(false)
-				setError(`Overlap detected: Entry ${entryStr} is assigned to multiple judges (${judgeNames.join(', ')}). Ranges should not overlap.`)
-				setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-				return
+			for (const [entryStr, judgeNames] of Object.entries(explicitAssignments)) {
+				if (judgeNames.length > 1) {
+					setIsSaving(false)
+					setError(`Overlap detected: Entry ${entryStr} is assigned to multiple judges (${judgeNames.join(', ')}). Ranges should not overlap.`)
+					setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+					return
+				}
 			}
 		}
 
@@ -621,7 +693,7 @@ export function RatingSheet() {
 			contestants: contestants,
 			judges: normalizedJudges,
 			criteria: buildDirectRatingCriteriaFromConfig(normalizeDirectRatingConfig(directRatingConfig)),
-			presentationSlots: entries.map((entry, index) => {
+			presentationSlots: updateSlots ?? entries.map((entry, index) => {
 				const entryNumber = index + 1
 				let assignedJudges = judges.filter(j => {
 					if (!j.assignedRange || !j.assignedRange.trim()) return true
@@ -652,6 +724,15 @@ export function RatingSheet() {
 			const method = editEventId ? 'PATCH' : 'POST'
 			const url = editEventId ? `/api/eventscorer/admin/events/${editEventId}` : '/api/eventscorer/events'
 			
+			// D47: before an Update takes a judge off an applicant they scored, ask, as the admin editor does (B56).
+			if (editEventId && loadedEvent && !confirmedRemovals) {
+				const removals = scoresDroppedByEditorSave(loadedEvent.event, loadedEvent.judgeBreakdown, payload as unknown as AdminEventEditorInput)
+				if (removals.length > 0) {
+					setRatingRemovals(removals)
+					return
+				}
+			}
+
 			const requestBody = editEventId ? { eventEditor: payload } : payload
 
 			const response = await fetch(url, {
@@ -1152,6 +1233,40 @@ export function RatingSheet() {
 						</p>
 					) : null}
 				</form>
+			</Dialog>
+			<Dialog
+				open={ratingRemovals !== null}
+				onClose={() => setRatingRemovals(null)}
+				data-testid='rating-removal-confirm'
+				eyebrow='Scores will be dropped'
+				title='Update and drop these scores?'
+				className='max-w-md'
+				actions={
+					<>
+						<button type='button' data-testid='rating-removal-cancel' onClick={() => setRatingRemovals(null)} className={buttonClassName('admin-tonal')}>
+							Go back
+						</button>
+						<button
+							type='button'
+							data-testid='rating-removal-accept'
+							onClick={() => {
+								setRatingRemovals(null)
+								void publishRatingSheet({ confirmedRemovals: true })
+							}}
+							className={buttonClassName('admin-confirm')}
+						>
+							Update and drop these scores
+						</button>
+					</>
+				}
+			>
+				<ul className={cx(DIALOG_TEXT, 'flex flex-col gap-space-xs')}>
+					{(ratingRemovals ?? []).map((removal, index) => (
+						<li key={index}>
+							{removal.judgeName} has already scored {removal.contestantName}; removing them drops that score from the results.
+						</li>
+					))}
+				</ul>
 			</Dialog>
 			<LeaveGuard changed={formChanges.changed} />
 		</section>
