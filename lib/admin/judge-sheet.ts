@@ -5,7 +5,7 @@
 import { criterionMaxScore } from '@/lib/admin/analytics'
 import { isMemberRowName } from '@/lib/member-rows'
 import { directRatingFieldsForEvent } from '@/lib/scoring'
-import type { EventCompiledResults, EventScorer, JudgeBreakdown } from '@/lib/types'
+import type { DirectRatingConfig, EventCompiledResults, EventScorer, JudgeBreakdown } from '@/lib/types'
 
 export type JudgeSheetColumn = { key: string; label: string; max: number | null }
 export type JudgeSheetRow = { contestantId: string; contestantName: string; cells: number[]; total: number }
@@ -13,7 +13,7 @@ export type JudgeSheet = { judgeId: string; judgeName: string; columns: JudgeShe
 
 type RatingPart = keyof NonNullable<JudgeBreakdown['directPartsByContestant']>[string]
 
-const RATING_PARTS: Array<{ key: RatingPart; label: string }> = [
+const RATING_PARTS: Array<{ key: Exclude<RatingPart, 'bonus'>; label: string }> = [
 	{ key: 'aveGpa', label: 'AVE / GPA' },
 	{ key: 'noat', label: 'NOAT' },
 	{ key: 'interview', label: 'Interview' },
@@ -34,10 +34,11 @@ function criterionColumns(event: EventScorer): JudgeSheetColumn[] {
 // The rating sheet's parts with the maxima compile counts them against. The interview counts each row once, as its
 // part does: on an older rating sheet the five interview fields share one row.
 function ratingColumns(event: EventScorer): JudgeSheetColumn[] {
-	const maxima: Record<RatingPart, number> = { aveGpa: 0, noat: 0, interview: 0 }
+	const { config, fields } = directRatingFieldsForEvent(event)
+	const maxima: Record<Exclude<RatingPart, 'bonus'>, number> = { aveGpa: 0, noat: 0, interview: 0 }
 	const interviewRowsSeen = new Set<string>()
 
-	for (const field of directRatingFieldsForEvent(event).fields) {
+	for (const field of fields) {
 		const max = Number(field.maxScore)
 		if (!Number.isFinite(max) || max <= 0) {
 			continue
@@ -50,7 +51,19 @@ function ratingColumns(event: EventScorer): JudgeSheetColumn[] {
 		}
 	}
 
-	return RATING_PARTS.map((part) => ({ key: part.key, label: part.label, max: round(maxima[part.key]) }))
+	const columns: JudgeSheetColumn[] = RATING_PARTS.map((part) => ({ key: part.key, label: part.label, max: round(maxima[part.key]) }))
+	// Owner 2026-11-27 ("Add bonus column"): the bonus the Final Rating adds to the interview, so the printed parts give
+	// the Final Rating back. Only on an event that gives one, as the formula line says.
+	if (givesStrandBonus(config)) {
+		columns.push({ key: 'bonus', label: 'Strand Bonus', max: null })
+	}
+	return columns
+}
+
+// A bonus applies only to the strands on its list, and only with points (lib/admin/formula.ts says the same).
+function givesStrandBonus(config: DirectRatingConfig): boolean {
+	const { strandBonus } = config
+	return (strandBonus.singleAlignedStrands.length > 0 && strandBonus.singleAlignedBonusPoints > 0) || (strandBonus.multiAlignedStrands.length > 0 && strandBonus.multiAlignedBonusPoints > 0)
 }
 
 /** A judge's sheet: the entries that judge's scores count for, in entry order; null when there is none. */

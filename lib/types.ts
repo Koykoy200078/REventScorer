@@ -303,8 +303,11 @@ export interface JudgeBreakdown {
 	 * (they add up to the total). Empty for a rating-sheet event, whose figures are directPartsByContestant.
 	 */
 	criterionTotalsByContestant: Record<string, Record<string, number>>
-	/** Rating-sheet events: the judge's counted parts per entry (NOAT with the master applied; interview once). */
-	directPartsByContestant?: Record<string, { aveGpa: number; noat: number; interview: number }>
+	/**
+	 * Rating-sheet events: the judge's counted parts per entry (NOAT with the master applied; interview once) and the
+	 * aligned-strand bonus the final rating adds to the interview, in the interview's units (owner 2026-11-27).
+	 */
+	directPartsByContestant?: Record<string, { aveGpa: number; noat: number; interview: number; bonus: number }>
 }
 
 export interface EventCompiledResults {

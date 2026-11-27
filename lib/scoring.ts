@@ -255,13 +255,13 @@ function directFinalRatingComponentsFromSubmission(
 	directScoreFields: DirectScoreField[],
 	interviewBonusPoints: number,
 	weights: DirectRatingScoreWeights,
-): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number; parts: { aveGpa: number; noat: number; interview: number } } {
+): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number; parts: { aveGpa: number; noat: number; interview: number; bonus: number } } {
 	if (directScoreFields.length === 0) {
 		return {
 			baseFinalRating: 0,
 			finalRating: 0,
 			appliedInterviewBonus: 0,
-			parts: { aveGpa: 0, noat: 0, interview: 0 },
+			parts: { aveGpa: 0, noat: 0, interview: 0, bonus: 0 },
 		}
 	}
 
@@ -277,6 +277,7 @@ function directFinalRatingComponentsFromSubmission(
 	// Design 2026-11-27-judge-score-sheets: the interview as a judge entered it; on older rating sheets the five
 	// interview fields share one row, which is counted once here.
 	let interviewOnce = 0
+	let interviewOnceMax = 0
 	const interviewRowsSeen = new Set<string>()
 
 	for (const field of directScoreFields) {
@@ -302,6 +303,7 @@ function directFinalRatingComponentsFromSubmission(
 			if (!interviewRowsSeen.has(field.subCriterionId)) {
 				interviewRowsSeen.add(field.subCriterionId)
 				interviewOnce += clampedScore
+				interviewOnceMax += validMaxScore
 			}
 		}
 	}
@@ -342,7 +344,9 @@ function directFinalRatingComponentsFromSubmission(
 		baseFinalRating: round(baseTotalWeighted * factor),
 		finalRating: round(finalTotalWeighted * factor),
 		appliedInterviewBonus,
-		parts: { aveGpa: round(aveScore), noat: round(noatScore), interview: round(interviewOnce) },
+		// Owner 2026-11-27 ("Add bonus column"): the bonus the final rating adds, in the units of the interview as printed
+		// (an older sheet counts its one shared row once, so the bonus is scaled to that row).
+		parts: { aveGpa: round(aveScore), noat: round(noatScore), interview: round(interviewOnce), bonus: interviewMax > 0 ? round(((interviewAdjustedScore - interviewBaseScore) * interviewOnceMax) / interviewMax) : 0 },
 	}
 }
 
@@ -534,7 +538,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			continue
 		}
 
-		const directComponentsByContestant = new Map<string, { baseFinalRating: number; bonusPoints: number; finalRating: number; parts: { aveGpa: number; noat: number; interview: number } }>()
+		const directComponentsByContestant = new Map<string, { baseFinalRating: number; bonusPoints: number; finalRating: number; parts: { aveGpa: number; noat: number; interview: number; bonus: number } }>()
 		if (isDirectRatingEvent) {
 			for (const contestant of event.contestants) {
 				if (!savedContestantIds.has(contestant.id)) {
