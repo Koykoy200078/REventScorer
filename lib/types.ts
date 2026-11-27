@@ -298,6 +298,13 @@ export interface JudgeBreakdown {
 	submitted: boolean
 	submittedAt?: string
 	totalsByContestant: Record<string, number>
+	/**
+	 * Design 2026-11-27-judge-score-sheets: per entry in totalsByContestant, the judge's subtotal per parent criterion
+	 * (they add up to the total). Empty for a rating-sheet event, whose figures are directPartsByContestant.
+	 */
+	criterionTotalsByContestant: Record<string, Record<string, number>>
+	/** Rating-sheet events: the judge's counted parts per entry (NOAT with the master applied; interview once). */
+	directPartsByContestant?: Record<string, { aveGpa: number; noat: number; interview: number }>
 }
 
 export interface EventCompiledResults {

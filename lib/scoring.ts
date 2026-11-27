@@ -193,10 +193,13 @@ function scoreJudgeSubmission(
 	totals: Record<string, number>
 	groupTotals: Record<string, number>
 	individualTotals: Record<string, number>
+	criterionTotals: Record<string, Record<string, number>>
 } {
 	const totals = Object.fromEntries(event.contestants.map((contestant) => [contestant.id, 0]))
 	const groupTotals = Object.fromEntries(event.contestants.map((contestant) => [contestant.id, 0]))
 	const individualTotals = Object.fromEntries(event.contestants.map((contestant) => [contestant.id, 0]))
+	// Design 2026-11-27-judge-score-sheets: the same scores per parent criterion, so a judge's sheet adds up to the total.
+	const criterionTotals: Record<string, Record<string, number>> = Object.fromEntries(event.contestants.map((contestant) => [contestant.id, Object.fromEntries(event.criteria.map((criterion) => [criterion.id, 0]))]))
 
 	for (const parentCriterion of event.criteria) {
 		const isGroupCriterion = groupCriterionIds.has(parentCriterion.id)
@@ -217,6 +220,7 @@ function scoreJudgeSubmission(
 				const rawScore = submission.scores[contestant.id]?.[subCriterion.id] ?? 0
 				const clampedScore = Math.max(0, Math.min(rawScore, validMaxScore))
 				totals[contestant.id] += clampedScore
+				criterionTotals[contestant.id][parentCriterion.id] += clampedScore
 				if (isGroupCriterion) groupTotals[contestant.id] += clampedScore
 				if (isIndividualCriterion) individualTotals[contestant.id] += clampedScore
 			}
@@ -227,9 +231,12 @@ function scoreJudgeSubmission(
 		totals[contestantId] = round(totals[contestantId])
 		groupTotals[contestantId] = round(groupTotals[contestantId])
 		individualTotals[contestantId] = round(individualTotals[contestantId])
+		for (const criterionId of Object.keys(criterionTotals[contestantId])) {
+			criterionTotals[contestantId][criterionId] = round(criterionTotals[contestantId][criterionId])
+		}
 	}
 
-	return { totals, groupTotals, individualTotals }
+	return { totals, groupTotals, individualTotals, criterionTotals }
 }
 
 function directFinalRatingComponentsFromSubmission(
@@ -238,12 +245,13 @@ function directFinalRatingComponentsFromSubmission(
 	directScoreFields: DirectScoreField[],
 	interviewBonusPoints: number,
 	weights: DirectRatingScoreWeights,
-): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number } {
+): { baseFinalRating: number; finalRating: number; appliedInterviewBonus: number; parts: { aveGpa: number; noat: number; interview: number } } {
 	if (directScoreFields.length === 0) {
 		return {
 			baseFinalRating: 0,
 			finalRating: 0,
 			appliedInterviewBonus: 0,
+			parts: { aveGpa: 0, noat: 0, interview: 0 },
 		}
 	}
 
@@ -256,6 +264,10 @@ function directFinalRatingComponentsFromSubmission(
 	let noatMax = 0
 	let interviewBaseScore = 0
 	let interviewMax = 0
+	// Design 2026-11-27-judge-score-sheets: the interview as a judge entered it; on older rating sheets the five
+	// interview fields share one row, which is counted once here.
+	let interviewOnce = 0
+	const interviewRowsSeen = new Set<string>()
 
 	for (const field of directScoreFields) {
 		const rawScore = Number(submission.scores[contestantId]?.[field.subCriterionId] ?? 0)
@@ -277,6 +289,10 @@ function directFinalRatingComponentsFromSubmission(
 		} else if (field.key === 'interviewContent' || field.key === 'interviewComm' || field.key === 'interviewPers' || field.key === 'interviewInterest' || field.key === 'interviewSpecial') {
 			interviewBaseScore += clampedScore
 			interviewMax += validMaxScore
+			if (!interviewRowsSeen.has(field.subCriterionId)) {
+				interviewRowsSeen.add(field.subCriterionId)
+				interviewOnce += clampedScore
+			}
 		}
 	}
 
@@ -316,6 +332,7 @@ function directFinalRatingComponentsFromSubmission(
 		baseFinalRating: round(baseTotalWeighted * factor),
 		finalRating: round(finalTotalWeighted * factor),
 		appliedInterviewBonus,
+		parts: { aveGpa: round(aveScore), noat: round(noatScore), interview: round(interviewOnce) },
 	}
 }
 
@@ -490,6 +507,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				judgeName: judge.name,
 				submitted: false,
 				totalsByContestant: {},
+				criterionTotalsByContestant: {},
 			})
 			continue
 		}
@@ -503,11 +521,12 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 				judgeName: judge.name,
 				submitted: false,
 				totalsByContestant: {},
+				criterionTotalsByContestant: {},
 			})
 			continue
 		}
 
-		const directComponentsByContestant = new Map<string, { baseFinalRating: number; bonusPoints: number; finalRating: number }>()
+		const directComponentsByContestant = new Map<string, { baseFinalRating: number; bonusPoints: number; finalRating: number; parts: { aveGpa: number; noat: number; interview: number } }>()
 		if (isDirectRatingEvent) {
 			for (const contestant of event.contestants) {
 				if (!savedContestantIds.has(contestant.id)) {
@@ -522,6 +541,7 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 					baseFinalRating: directRatingComponents.baseFinalRating,
 					bonusPoints: directRatingComponents.appliedInterviewBonus,
 					finalRating: directRatingComponents.finalRating,
+					parts: directRatingComponents.parts,
 				})
 			}
 		}
@@ -600,12 +620,15 @@ export function compileEventResults(event: EventScorer): EventCompiledResults {
 			}
 		}
 
+		const countedIds = Object.keys(totalsByContestant)
 		judgeBreakdown.push({
 			judgeId: judge.id,
 			judgeName: judge.name,
 			submitted: true,
 			submittedAt: submission.submittedAt,
 			totalsByContestant,
+			criterionTotalsByContestant: isDirectRatingEvent ? {} : Object.fromEntries(countedIds.map((contestantId) => [contestantId, judgeTotals.criterionTotals[contestantId] ?? {}])),
+			directPartsByContestant: isDirectRatingEvent ? Object.fromEntries(Array.from(directComponentsByContestant.entries()).map(([contestantId, components]) => [contestantId, components.parts])) : undefined,
 		})
 	}
 
