@@ -6,6 +6,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import { AdminHeader, ADMIN_TAB_LABELS } from '@/components/admin/admin-header'
 import { BreakdownDialog } from '@/components/admin/breakdown-dialog'
+import { JudgeScoreSheet } from '@/components/admin/judge-score-sheet'
 import { DashboardTab } from '@/components/admin/dashboard-tab'
 import { INITIAL_MATRIX_VIEW, type MatrixFilterPatch, type MatrixRow, MatrixTab, type MatrixView } from '@/components/admin/matrix-tab'
 import { RankingsTab } from '@/components/admin/rankings-tab'
@@ -26,6 +27,7 @@ import { buildAdminEventEditorSnapshot, criterionTotalScoreForEditor, prepareEve
 import { formatDate, formatScore } from '@/lib/admin/format'
 import { adminFormulaSentence, scoringKind } from '@/lib/admin/formula'
 import { adminKpis, programCohorts } from '@/lib/admin/kpis'
+import { type JudgeSheet, judgeSheet, judgesWithSheets } from '@/lib/admin/judge-sheet'
 import { assignedJudgeIdsForContestant, scoresDroppedByEditorSave } from '@/lib/admin/judges'
 import { observationsLog, remarkItems } from '@/lib/admin/observations-log'
 import { podiumPlaces } from '@/lib/admin/podium'
@@ -73,6 +75,10 @@ type UnlockRetry =
 	| { kind: 'editor' }
 	| { kind: 'open-editor' }
 	| { kind: 'queue' }
+
+// Print Tabulation's choices (design 2026-11-27-judge-score-sheets): the Tabulation Sheet, one judge's score sheet,
+// or every judge's, one sheet each.
+type PrintMode = { kind: 'all' } | { kind: 'judge'; judgeId: string } | { kind: 'each' }
 
 export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, initialOpenEditor = false, allowEventEditor = false, wsAuthToken, initialJudgeLinksLocked = false, openEditor = false, initialTab = 'dashboard' }: AdminLiveDashboardProps) {
 	const [event, setEvent] = useState(initialEvent)
@@ -146,6 +152,32 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	const useWeightedScores = Boolean(compiled.hasWeightedScores)
 	const isDirectRatingEvent = Boolean(event.directRatingConfig)
 	const useDirectFinalRating = useMemo(() => compiled.rankings.some((result) => typeof result.finalRating === 'number' && Number.isFinite(result.finalRating)), [compiled.rankings])
+	// Design 2026-11-27-judge-score-sheets (owner: "each judge signs their own sheet with only their scores"): Print
+	// Tabulation asks what to print. Once the print dialog closes the Tabulation Sheet is back, so the browser's own
+	// Print command prints it, as before.
+	const [printPickerOpen, setPrintPickerOpen] = useState(false)
+	const [printMode, setPrintMode] = useState<PrintMode>({ kind: 'all' })
+	const [printRequest, setPrintRequest] = useState(0)
+	const judgeSheetIds = useMemo(() => new Set(judgesWithSheets(event, compiled)), [event, compiled])
+	const printedJudgeSheets = useMemo(() => {
+		if (printMode.kind === 'all') return []
+		const judgeIds = printMode.kind === 'judge' ? [printMode.judgeId] : event.judges.map((judge) => judge.id)
+		return judgeIds.map((judgeId) => judgeSheet(event, compiled, judgeId)).filter((sheet): sheet is JudgeSheet => sheet !== null)
+	}, [printMode, event, compiled])
+	const choosePrint = (mode: PrintMode) => {
+		setPrintPickerOpen(false)
+		setPrintMode(mode)
+		setPrintRequest((count) => count + 1)
+	}
+	// After the render that holds the chosen sheets, so the print shows them.
+	useEffect(() => {
+		if (printRequest > 0) window.print()
+	}, [printRequest])
+	useEffect(() => {
+		const backToTabulationSheet = () => setPrintMode({ kind: 'all' })
+		window.addEventListener('afterprint', backToTabulationSheet)
+		return () => window.removeEventListener('afterprint', backToTabulationSheet)
+	}, [])
 	const normalizedRubricLegend = useMemo(() => normalizeRubricLegend(event.rubricLegend), [event.rubricLegend])
 	const contestantsById = useMemo(() => new Map(event.contestants.map((contestant) => [contestant.id, contestant])), [event.contestants])
 	// The most one judge can give an entry: its own member rows, as the judge page counts them (B65).
@@ -1149,7 +1181,7 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 	return (
 		<div className='theme-admin min-h-screen bg-slate-50 font-body-md text-body-md text-slate-900 antialiased'>
 			<Tabs variant='admin' value={editorView ? 'editor' : activeTab} onChange={requestTab}>
-				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => window.print()} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} onLeavePage={guardLeavePage} />
+				<AdminHeader title={event.title} connectionState={connectionState} onPrint={() => setPrintPickerOpen(true)} onExportExcel={() => exportAsExcel(event, compiled)} onExportCsv={exportCsv} onLeavePage={guardLeavePage} />
 				{/* SCREEN VIEW */}
 				{/* pb-24: the end of the page (the matrix pager) stays clear of the round scroll button (B73). */}
 				<main className='w-full pt-28 pb-24 print:hidden'>
@@ -2001,56 +2033,96 @@ export function AdminLiveDashboard({ initialEvent, initialCompiled, baseUrl, ini
 					}
 				}
 			`}</style>
-			<div data-testid='print-sheet' className='hidden w-full bg-white p-12 text-black print:block min-h-screen'>
-				<div className='text-center font-serif leading-tight'>
-					<h1 className='text-xl font-bold uppercase'>{event.title}</h1>
-					<p>Date: {formatDate(event.createdAt)}</p>
-					<br />
-					<h2 className='text-2xl font-bold uppercase tracking-widest'>Tabulation Sheet</h2>
-					<div className='mx-auto mb-6 mt-2 w-1/2 border-b-2 border-black'></div>
-				</div>
+			{printMode.kind === 'all' ? (
+				<div data-testid='print-sheet' className='hidden w-full bg-white p-12 text-black print:block min-h-screen'>
+					<div className='text-center font-serif leading-tight'>
+						<h1 className='text-xl font-bold uppercase'>{event.title}</h1>
+						<p>Date: {formatDate(event.createdAt)}</p>
+						<br />
+						<h2 className='text-2xl font-bold uppercase tracking-widest'>Tabulation Sheet</h2>
+						<div className='mx-auto mb-6 mt-2 w-1/2 border-b-2 border-black'></div>
+					</div>
 
-				<table className='mt-8 w-full border-collapse border border-black text-center text-sm'>
-					<thead>
-						<tr>
-							<th className='border border-black p-2 font-bold uppercase'>Contestant No. / Name</th>
-							{event.judges.map((j) => (
-								<th key={j.id} className='whitespace-nowrap border border-black p-2 font-bold uppercase'>
-									{j.name}
-								</th>
-							))}
-							<th className='border border-black p-2 font-bold uppercase'>{useDirectFinalRating ? 'Final Rating' : 'Final Score'}</th>
-							<th className='border border-black p-2 font-bold uppercase'>Rank</th>
-						</tr>
-					</thead>
-					<tbody>
-						{compiled.rankings.map((result) => (
-							<tr key={result.contestantId} data-testid='print-row' data-contestant-id={result.contestantId}>
-								<td data-col='name' className='border border-black p-2 text-left font-semibold uppercase'>{result.contestantName}</td>
+					<table className='mt-8 w-full border-collapse border border-black text-center text-sm'>
+						<thead>
+							<tr>
+								<th className='border border-black p-2 font-bold uppercase'>Contestant No. / Name</th>
 								{event.judges.map((j) => (
-									<td key={j.id} data-col='judge' data-judge-id={j.id} className='border border-black p-2'>
-										{result.perJudgeTotals[j.id] !== undefined ? formatScore(result.perJudgeTotals[j.id]) : ''}
-									</td>
+									<th key={j.id} className='whitespace-nowrap border border-black p-2 font-bold uppercase'>
+										{j.name}
+									</th>
 								))}
-								<td data-col='final' className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
-								<td data-col='rank' className='border border-black p-2 font-bold'>{result.rank}</td>
+								<th className='border border-black p-2 font-bold uppercase'>{useDirectFinalRating ? 'Final Rating' : 'Final Score'}</th>
+								<th className='border border-black p-2 font-bold uppercase'>Rank</th>
 							</tr>
-						))}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							{compiled.rankings.map((result) => (
+								<tr key={result.contestantId} data-testid='print-row' data-contestant-id={result.contestantId}>
+									<td data-col='name' className='border border-black p-2 text-left font-semibold uppercase'>{result.contestantName}</td>
+									{event.judges.map((j) => (
+										<td key={j.id} data-col='judge' data-judge-id={j.id} className='border border-black p-2'>
+											{result.perJudgeTotals[j.id] !== undefined ? formatScore(result.perJudgeTotals[j.id]) : ''}
+										</td>
+									))}
+									<td data-col='final' className='border border-black p-2 font-bold'>{formatScore(useWeightedScores ? (result.weightedScore ?? result.averageScore) : useDirectFinalRating ? (result.finalRating ?? result.averageScore) : result.averageScore)}</td>
+									<td data-col='rank' className='border border-black p-2 font-bold'>{result.rank}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
 
-				<div className='mt-24 flex flex-wrap justify-around gap-y-16'>
-					{event.judges.map((j) => (
-						<div key={j.id} className='text-center'>
-							<div className='mb-1 w-48 border-b border-black'></div>
-							<p className='font-bold uppercase'>{j.name}</p>
-							<p className='text-sm'>Judge</p>
-						</div>
+					<div className='mt-24 flex flex-wrap justify-around gap-y-16'>
+						{event.judges.map((j) => (
+							<div key={j.id} className='text-center'>
+								<div className='mb-1 w-48 border-b border-black'></div>
+								<p className='font-bold uppercase'>{j.name}</p>
+								<p className='text-sm'>Judge</p>
+							</div>
+						))}
+					</div>
+				</div>
+			) : (
+				<div data-testid='judge-sheets' className='hidden print:block'>
+					{printedJudgeSheets.map((sheet, index) => (
+						<JudgeScoreSheet key={sheet.judgeId} eventTitle={event.title} date={formatDate(event.createdAt)} sheet={sheet} className={index < printedJudgeSheets.length - 1 ? 'print:break-after-page' : undefined} />
 					))}
 				</div>
-			</div>
+			)}
 
 			<div className='print:hidden'>
+				<Dialog
+					open={printPickerOpen}
+					onClose={() => setPrintPickerOpen(false)}
+					data-testid='print-picker'
+					eyebrow='Print'
+					title='Print Tabulation'
+					className='max-w-md'
+				>
+					<div className='flex flex-col gap-space-sm'>
+						<Button variant='admin-block' data-testid='print-all' onClick={() => choosePrint({ kind: 'all' })}>
+							All judges
+						</Button>
+						<p className='font-body-sm text-body-sm text-slate-600'>The Tabulation Sheet: every judge, the final score and the rank.</p>
+						<p className='mt-space-sm font-label-md text-label-md font-semibold text-slate-700'>One judge&apos;s score sheet, with only their scores</p>
+						<ul className='flex flex-col gap-space-xs'>
+							{event.judges.map((judge) => {
+								const hasSheet = judgeSheetIds.has(judge.id)
+								return (
+									<li key={judge.id}>
+										<Button variant='admin-outline' data-testid='print-judge' data-judge-id={judge.id} disabled={!hasSheet} className='w-full justify-between' onClick={() => choosePrint({ kind: 'judge', judgeId: judge.id })}>
+											<span>{judge.name}</span>
+											{hasSheet ? null : <span className='font-body-sm text-body-sm text-slate-500'>no scores yet</span>}
+										</Button>
+									</li>
+								)
+							})}
+						</ul>
+						<Button variant='admin-block' data-testid='print-each' disabled={judgeSheetIds.size === 0} className='mt-space-sm' onClick={() => choosePrint({ kind: 'each' })}>
+							Every judge, one sheet each
+						</Button>
+					</div>
+				</Dialog>
 				<Dialog
 					open={pendingLeave !== null}
 					onClose={() => setPendingLeave(null)}
