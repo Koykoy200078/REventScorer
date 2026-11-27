@@ -2,7 +2,7 @@ import { isMemberRowName, memberIndexFromLabel, splitMemberRowName as splitMembe
 import { DEFAULT_DIRECT_RATING_CONFIG, deriveDirectRatingConfigFromCriteria, detectDirectRatingScoreFields, directScoreWeightsFromConfig, normalizeDirectRatingConfig, resolveStrandAlignmentBonus } from '@/lib/direct-rating-config'
 import type { DirectRatingScoreField } from '@/lib/direct-rating-config'
 import { assignedJudgeIdsForContestant } from '@/lib/admin/judges'
-import type { CompiledContestantResult, EventCompiledResults, EventContestant, EventCriterion, EventScorer, JudgeContestantDetails, JudgeContestantDetailsMap, JudgeBreakdown, JudgeSubmission, ScoreMatrix, DirectRatingScoreWeights } from '@/lib/types'
+import type { CompiledContestantResult, DirectRatingConfig, EventCompiledResults, EventContestant, EventCriterion, EventScorer, JudgeContestantDetails, JudgeContestantDetailsMap, JudgeBreakdown, JudgeSubmission, ScoreMatrix, DirectRatingScoreWeights } from '@/lib/types'
 
 function round(value: number): number {
 	return Math.round(value * 1000) / 1000
@@ -84,6 +84,16 @@ type IndividualContestantConfig = {
 }
 
 type DirectScoreField = ReturnType<typeof detectDirectRatingScoreFields>[number]
+
+/**
+ * A rating sheet's fields as compile counts them, with the config they were read with; no fields means the event is
+ * not a rating sheet. Design 2026-11-27-judge-score-sheets: a judge's sheet takes its maxima from here too.
+ */
+export function directRatingFieldsForEvent(event: Pick<EventScorer, 'criteria' | 'directRatingConfig'>): { config: DirectRatingConfig; fields: DirectScoreField[] } {
+	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(event.criteria)
+	const config = normalizeDirectRatingConfig(event.directRatingConfig, derivedDirectRatingConfig ?? undefined)
+	return { config, fields: detectDirectRatingScoreFields(event.criteria, config) }
+}
 
 type IndividualParticipantConfig = {
 	memberKey: string
@@ -425,9 +435,7 @@ export function applyMasterNoat(submission: JudgeSubmission, event: EventScorer,
 export function compileEventResults(event: EventScorer): EventCompiledResults {
 	const submittedByJudge = new Map(event.submissions.map((submission) => [submission.judgeId, submission]))
 	const normalizeLabel = (value: string) => value.trim().toLowerCase()
-	const derivedDirectRatingConfig = deriveDirectRatingConfigFromCriteria(event.criteria)
-	const directRatingConfig = normalizeDirectRatingConfig(event.directRatingConfig, derivedDirectRatingConfig ?? undefined)
-	const directScoreFields = detectDirectRatingScoreFields(event.criteria, directRatingConfig)
+	const { config: directRatingConfig, fields: directScoreFields } = directRatingFieldsForEvent(event)
 	const isDirectRatingEvent = directScoreFields.length > 0
 	const maxPossibleScore = isDirectRatingEvent ? 100 : round(event.criteria.reduce((sum, criterion) => sum + criterionMaxScore(criterion), 0))
 	const directRatingWeights = isDirectRatingEvent ? directScoreWeightsFromConfig(event.directRatingConfig || DEFAULT_DIRECT_RATING_CONFIG) : ({} as DirectRatingScoreWeights)
